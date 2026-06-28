@@ -1,0 +1,267 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-black text-slate-100 select-none overflow-hidden antialiased;
+    font-family: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    margin: 0;
+  }
+
+  /* Custom Webkit scrollbar for premium aesthetic */
+  ::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  ::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.2);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(244, 63, 94, 0.25);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(244, 63, 94, 0.5);
+  }
+}
+
+/* Glassmorphism Design System */
+.glass-panel {
+  background: rgba(8, 10, 22, 0.6);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.glass-card {
+  background: rgba(15, 23, 42, 0.35);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.glass-card-hover {
+  transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.glass-card-hover:hover {
+  background: rgba(20, 27, 55, 0.6);
+  border-color: rgba(244, 63, 94, 0.25);
+  box-shadow: 0 25px 50px -12px rgba(244, 63, 94, 0.12);
+  transform: translateY(-4px) scale(1.02);
+}
+
+/* Floating Deck Player */
+.floating-deck {
+  background: rgba(6, 8, 20, 0.72);
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 30px 60px -15px rgba(0, 0, 0, 0.8), 
+              0 0 50px -10px rgba(244, 63, 94, 0.15);
+}
+
+/* Glowing Neon Utilities */
+.glow-rose {
+  box-shadow: 0 0 25px -5px rgba(244, 63, 94, 0.3);
+}
+
+.glow-emerald {
+  box-shadow: 0 0 25px -5px rgba(16, 185, 129, 0.3);
+}
+
+.glow-rose-strong {
+  box-shadow: 0 0 35px -5px rgba(244, 63, 94, 0.45);
+}
+
+.text-glow-rose {
+  text-shadow: 0 0 15px rgba(244, 63, 94, 0.5);
+}
+
+.text-glow-emerald {
+  text-shadow: 0 0 15px rgba(16, 185, 129, 0.5);
+}
+
+/* Gradients */
+.bg-gradient-premium {
+  background: linear-gradient(135deg, #020617 0%, #0b0f19 50%, #1c0a18 100%);
+}
+
+.bg-gradient-accent {
+  background: linear-gradient(135deg, #f43f5e 0%, #ec4899 50%, #db2777 100%);
+}
+
+/* Shimmering Text Gradients */
+@keyframes textShine {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.text-gradient-premium {
+  background: linear-gradient(
+    to right,
+    #ffffff 20%,
+    #cbd5e1 40%,
+    #94a3b8 60%,
+    #cbd5e1 80%,
+    #ffffff 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: textShine 8s linear infinite;
+}
+
+.text-gradient-accent {
+  background: linear-gradient(
+    to right,
+    #f43f5e 0%,
+    #ec4899 35%,
+    #db2777 65%,
+    #f43f5e 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: textShine 6s linear infinite;
+}
+
+/* Animated Page Transitions */
+@keyframes slide-up-fade {
+  from {
+    opacity: 0;
+    transform: scale(0.985) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.animate-page-entry {
+  animation: slide-up-fade 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* Floating Blob Animations */
+@keyframes float-slow {
+  0%, 100% {
+    transform: translate(0px, 0px) scale(1);
+  }
+  33% {
+    transform: translate(40px, -60px) scale(1.1);
+  }
+  66% {
+    transform: translate(-30px, 30px) scale(0.9);
+  }
+}
+
+.animate-blob-1 {
+  animation: float-slow 25s infinite ease-in-out;
+}
+
+.animate-blob-2 {
+  animation: float-slow 30s infinite ease-in-out 3s;
+}
+
+.animate-blob-3 {
+  animation: float-slow 22s infinite ease-in-out 6s;
+}
+
+/* Soundwave Equalizer Animations */
+@keyframes wave-bounce {
+  0%, 100% {
+    height: 4px;
+  }
+  50% {
+    height: 24px;
+  }
+}
+
+.wave-bar {
+  animation: wave-bounce 0.8s ease-in-out infinite;
+}
+.wave-bar:nth-child(2) { animation-delay: 0.12s; }
+.wave-bar:nth-child(3) { animation-delay: 0.24s; }
+.wave-bar:nth-child(4) { animation-delay: 0.06s; }
+.wave-bar:nth-child(5) { animation-delay: 0.18s; }
+.wave-bar:nth-child(6) { animation-delay: 0.3s; }
+.wave-bar:nth-child(7) { animation-delay: 0.08s; }
+.wave-bar:nth-child(8) { animation-delay: 0.2s; }
+
+/* Custom shimmers for skeleton loading states */
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+  background-color: rgba(30, 41, 59, 0.3);
+}
+
+.skeleton-shimmer::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  transform: translateX(-100%);
+  background-image: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.04) 20%,
+    rgba(255, 255, 255, 0.08) 60%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  animation: shimmer 2s infinite;
+  content: '';
+}
+
+.audio-knob::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffffff;
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+
+.audio-knob:hover::-webkit-slider-thumb {
+  transform: scale(1.5);
+  background: #f43f5e;
+  box-shadow: 0 0 10px rgba(244, 63, 94, 0.8);
+}
+
+/* Mini soundwave visualizer keyframe and delay loops */
+@keyframes mini-wave {
+  0%, 100% {
+    height: 4px;
+  }
+  50% {
+    height: 16px;
+  }
+}
+.mini-wave-bar {
+  animation: mini-wave 0.8s ease-in-out infinite;
+}
+.mini-wave-bar:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.mini-wave-bar:nth-child(3) {
+  animation-delay: 0.3s;
+}

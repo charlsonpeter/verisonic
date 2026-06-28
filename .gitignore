@@ -1,0 +1,85 @@
+# Python Virtual Environments
+env/
+venv/
+.venv/
+ENV/
+bin/
+include/
+lib/
+share/
+pyvenv.cfg
+pip-selfcheck.json
+
+# Python Caches and Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller & Compilation Output
+*.spec
+dist/
+build/
+broadcaster/assets/icon.png
+broadcaster/assets/icon.ico
+broadcaster/assets/icon.icns
+
+# Node & Frontend Dependencies & Build Outputs
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/package-lock.json
+frontend/yarn.lock
+frontend/pnpm-lock.yaml
+frontend/.svelte-kit/
+frontend/.next/
+frontend/out/
+
+# Docker volumes and files
+.docker/
+postgres_data/
+minio_data/
+
+# IDE / Operating System Files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Secrets & Environment variables
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+*.key
