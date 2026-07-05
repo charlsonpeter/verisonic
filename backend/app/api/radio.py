@@ -10,8 +10,8 @@ from typing import List, Dict, Set
 
 from app.db.session import get_db
 from app.models import RadioStation, RadioSchedule, Track, Artist
-from app.schemas import RadioStationCreate, RadioStationResponse, RadioScheduleCreate, RadioScheduleResponse
-from app.api.auth import get_current_admin, get_current_user, get_current_radio_admin
+from app.schemas import RadioStationCreate, RadioStationUpdate, RadioStationResponse, RadioScheduleCreate, RadioScheduleResponse
+from app.api.auth import get_current_admin, get_current_user, get_current_radio_admin, get_optional_current_user
 from app.api.music import serialize_track
 from app.services.storage import generate_presigned_url
 
@@ -141,6 +141,8 @@ def serialize_station(station: RadioStation, db: Session) -> dict:
         db.commit()
         db.refresh(station)
 
+    listeners_count = len(live_stream_manager.listeners.get(station.id, set()))
+
     # If broadcaster is active, stream live from WebSocket broker
     if live_stream_manager.is_live(station.id):
         return {
@@ -154,10 +156,15 @@ def serialize_station(station: RadioStation, db: Session) -> dict:
             "stream_key": station.stream_key,
             "current_track_id": None,
             "current_track_started_at": None,
-            "current_track_title": "Live Broadcast",
-            "current_track_artist": station.name,
+            "current_track_title": station.current_program_title or "Live Broadcast",
+            "current_track_artist": station.rj_name or station.name,
             "current_track_duration": None,
-            "current_offset": 0.0
+            "current_offset": 0.0,
+            "current_program_title": station.current_program_title,
+            "rj_name": station.rj_name,
+            "rj_details": station.rj_details,
+            "listeners_count": listeners_count,
+            "is_online": True
         }
 
     if station.stream_url:
@@ -172,23 +179,18 @@ def serialize_station(station: RadioStation, db: Session) -> dict:
             "stream_key": station.stream_key,
             "current_track_id": None,
             "current_track_started_at": None,
-            "current_track_title": "Live Broadcast",
-            "current_track_artist": station.name,
+            "current_track_title": station.current_program_title or "Live Broadcast",
+            "current_track_artist": station.rj_name or station.name,
             "current_track_duration": None,
-            "current_offset": 0.0
+            "current_offset": 0.0,
+            "current_program_title": station.current_program_title,
+            "rj_name": station.rj_name,
+            "rj_details": station.rj_details,
+            "listeners_count": listeners_count,
+            "is_online": True
         }
 
-    # Auto-DJ calculation
-    current_track = advance_station_if_needed(station, db)
-    
-    offset = 0.0
-    if current_track and station.current_track_started_at:
-        offset = (datetime.datetime.utcnow() - station.current_track_started_at).total_seconds()
-        
-    track_title = current_track.title if current_track else "Offline"
-    track_artist = current_track.artist.stage_name if current_track and current_track.artist else "Unknown Artist"
-    track_duration = current_track.duration if current_track else None
-
+    # Otherwise, the station is offline (no live broadcaster, no stream url)
     return {
         "id": station.id,
         "name": station.name,
@@ -198,12 +200,17 @@ def serialize_station(station: RadioStation, db: Session) -> dict:
         "stream_url": None,
         "owner_id": station.owner_id,
         "stream_key": station.stream_key,
-        "current_track_id": station.current_track_id,
-        "current_track_started_at": station.current_track_started_at,
-        "current_track_title": track_title,
-        "current_track_artist": track_artist,
-        "current_track_duration": track_duration,
-        "current_offset": offset
+        "current_track_id": None,
+        "current_track_started_at": None,
+        "current_track_title": "Offline",
+        "current_track_artist": "No active broadcast",
+        "current_track_duration": None,
+        "current_offset": 0.0,
+        "current_program_title": station.current_program_title,
+        "rj_name": station.rj_name,
+        "rj_details": station.rj_details,
+        "listeners_count": 0,
+        "is_online": False
     }
 
 @router.post("", response_model=RadioStationResponse)
@@ -212,6 +219,11 @@ def create_radio_station(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_radio_admin)
 ):
+    if current_user.role == "radio_admin":
+        existing_station = db.query(RadioStation).filter(RadioStation.owner_id == current_user.id).first()
+        if existing_station:
+            raise HTTPException(status_code=400, detail="Radio admin can only register one radio station")
+
     resolved_owner_id = current_user.id
     if current_user.role == "admin" and station_in.owner_id is not None:
         resolved_owner_id = station_in.owner_id
@@ -229,11 +241,46 @@ def create_radio_station(
     db.refresh(station)
     return serialize_station(station, db)
 
+@router.put("/{id}", response_model=RadioStationResponse)
+def update_radio_station(
+    id: int,
+    station_in: RadioStationUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_radio_admin)
+):
+    station = db.query(RadioStation).filter(RadioStation.id == id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail="Radio station not found")
+        
+    if current_user.role != "admin" and station.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to modify this station")
+        
+    if station_in.name is not None:
+        station.name = station_in.name
+    if station_in.description is not None:
+        station.description = station_in.description
+    if station_in.stream_url is not None:
+        station.stream_url = station_in.stream_url
+    if station_in.current_program_title is not None:
+        station.current_program_title = station_in.current_program_title
+    if station_in.rj_name is not None:
+        station.rj_name = station_in.rj_name
+    if station_in.rj_details is not None:
+        station.rj_details = station_in.rj_details
+        
+    db.commit()
+    db.refresh(station)
+    return serialize_station(station, db)
+
 @router.get("", response_model=List[RadioStationResponse])
 def list_radio_stations(
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_optional_current_user)
 ):
-    stations = db.query(RadioStation).filter(RadioStation.is_active == True).all()
+    if current_user and current_user.role == "radio_admin":
+        stations = db.query(RadioStation).filter(RadioStation.owner_id == current_user.id, RadioStation.is_active == True).all()
+    else:
+        stations = db.query(RadioStation).filter(RadioStation.is_active == True).all()
     return [serialize_station(s, db) for s in stations]
 
 @router.post("/{id}/schedule", response_model=RadioScheduleResponse)
@@ -283,7 +330,8 @@ def add_track_to_schedule(
 @router.get("/{id}/stream")
 def get_station_stream_sync(
     id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_optional_current_user)
 ):
     """
     Returns current sync info for client playback:
@@ -294,6 +342,9 @@ def get_station_stream_sync(
     if not station:
         raise HTTPException(status_code=404, detail="Radio station not found")
         
+    if current_user and current_user.role == "radio_admin" and station.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Radio admins can only access their own radio station")
+
     if live_stream_manager.is_live(station.id):
         return {
             "station_id": station.id,
@@ -318,32 +369,7 @@ def get_station_stream_sync(
             "offset": 0.0
         }
 
-    current_track = advance_station_if_needed(station, db)
-    if not current_track:
-        raise HTTPException(status_code=404, detail="Station is offline (no tracks available)")
-        
-    # Calculate offset
-    offset = 0.0
-    if station.current_track_started_at:
-        offset = (datetime.datetime.utcnow() - station.current_track_started_at).total_seconds()
-        
-    # Get pre-signed streaming URL (HLS is preferred, fallback to MP3)
-    stream_url = None
-    if current_track.hls_playlist_path:
-        stream_url = generate_presigned_url(current_track.hls_playlist_path)
-    elif current_track.mp3_320_path:
-        stream_url = generate_presigned_url(current_track.mp3_320_path)
-        
-    return {
-        "station_id": station.id,
-        "station_name": station.name,
-        "track_id": current_track.id,
-        "title": current_track.title,
-        "artist": current_track.artist.stage_name if current_track.artist else "Unknown Artist",
-        "duration": current_track.duration,
-        "stream_url": stream_url,
-        "offset": offset
-    }
+    raise HTTPException(status_code=404, detail="Station is offline (no live broadcast available)")
 
 # New routes for WebSockets live streaming ingestion and HTTP listener streaming
 @router.websocket("/stream/ws")
@@ -392,11 +418,15 @@ async def websocket_stream_endpoint(
 @router.get("/{id}/live")
 async def get_live_audio_stream(
     id: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_optional_current_user)
 ):
     station = db.query(RadioStation).filter(RadioStation.id == id).first()
     if not station:
         raise HTTPException(status_code=404, detail="Radio station not found")
+
+    if current_user and current_user.role == "radio_admin" and station.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Radio admins can only access their own radio station")
 
     async def audio_generator():
         queue = live_stream_manager.register_listener(id)

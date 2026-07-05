@@ -1,18 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi import APIRouter, Depends, HTTPException, status, Header
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from jose import jwt, JWTError
-from typing import List
+from typing import List, Optional
 
 from app.db.session import get_db
 from app.models import User, Artist
-from app.schemas import UserCreate, UserLogin, Token, UserResponse, TokenPayload, ArtistCreate, ArtistResponse
+from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, Token, UserResponse, TokenPayload, ArtistCreate, ArtistResponse
 from app.core.security import verify_password, get_password_hash, create_access_token, ALGORITHM
 from app.core.config import settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login-form")
+security = HTTPBearer(auto_error=False)
 
 # Supporting form-based login for Swagger UI / external clients
 @router.post("/login-form", response_model=Token)
@@ -31,7 +32,11 @@ def login_oauth2(
         "token_type": "bearer"
     }
 
-def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    x_user_mode: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -49,7 +54,35 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     user = db.query(User).filter(User.id == token_data.sub).first()
     if user is None:
         raise credentials_exception
+
+    # Store original database role before override
+    user._real_role = user.role
+    if x_user_mode == "listener" and user.role in ["admin", "radio_admin", "studio_admin"]:
+        user.__dict__["role"] = "listener"
+
     return user
+
+def get_optional_current_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    x_user_mode: Optional[str] = Header(None),
+    db: Session = Depends(get_db)
+) -> Optional[User]:
+    if not credentials:
+        return None
+    token = credentials.credentials
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            return None
+        user = db.query(User).filter(User.id == int(user_id)).first()
+        if user:
+            user._real_role = user.role
+            if x_user_mode == "listener" and user.role in ["admin", "radio_admin", "studio_admin"]:
+                user.__dict__["role"] = "listener"
+        return user
+    except Exception:
+        return None
 
 def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
     if current_user.role != "admin":
@@ -258,3 +291,36 @@ def delete_user_admin(
     db.delete(user)
     db.commit()
     return {"detail": "User deleted successfully"}
+
+@router.put("/profile", response_model=UserResponse)
+def update_profile(
+    user_in: UserUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if user_in.full_name is not None:
+        current_user.full_name = user_in.full_name
+    if user_in.email is not None:
+        email = user_in.email.strip().lower()
+        if email != current_user.email:
+            db_user = db.query(User).filter(User.email == email).first()
+            if db_user:
+                raise HTTPException(status_code=400, detail="Email already registered by another user")
+            current_user.email = email
+            
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+@router.put("/change-password")
+def change_password(
+    pw_in: ChangePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if not verify_password(pw_in.old_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Incorrect old password")
+        
+    current_user.hashed_password = get_password_hash(pw_in.new_password)
+    db.commit()
+    return {"detail": "Password updated successfully"}

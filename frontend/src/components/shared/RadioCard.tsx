@@ -1,6 +1,7 @@
 import React from 'react';
 import { Radio, Heart, Users, Play, Pause } from 'lucide-react';
 import { useAudio, RadioStation } from '../../context/AudioContext';
+import { showError } from '../../utils/swal';
 
 interface RadioCardProps {
   station: RadioStation;
@@ -14,6 +15,10 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
 
   const handlePlayClick = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (station.is_online === false) {
+      showError("Station Offline", "This radio station is currently offline.");
+      return;
+    }
     if (isCurrent) {
       togglePlay();
     } else {
@@ -23,11 +28,19 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
 
   return (
     <div 
-      onClick={() => playRadioStation(station)}
+      onClick={() => {
+        if (station.is_online === false) {
+          showError("Station Offline", "This radio station is currently offline.");
+          return;
+        }
+        playRadioStation(station);
+      }}
       className={`glass-card rounded-3xl p-5 border transition duration-300 relative overflow-hidden group cursor-pointer ${
-        isCurrent 
-          ? 'border-rose-500/30 bg-slate-900/30 shadow-lg shadow-rose-500/5' 
-          : 'border-white/5 bg-slate-900/10 hover:border-slate-800 hover:bg-slate-900/30'
+        station.is_online === false
+          ? 'opacity-60 hover:opacity-85 border-white/5 bg-slate-900/5'
+          : isCurrent 
+            ? 'border-rose-500/30 bg-slate-900/30 shadow-lg shadow-rose-500/5' 
+            : 'border-white/5 bg-slate-900/10 hover:border-slate-800 hover:bg-slate-900/30'
       }`}
     >
       {/* Background ambient pulse */}
@@ -59,7 +72,12 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
             <h3 className="text-base font-bold text-white mb-1 truncate group-hover:text-rose-400 transition">
               {station.name}
             </h3>
-            {station.stream_url?.includes('/live') ? (
+            {station.is_online === false ? (
+              <span className="flex items-center gap-1 py-0.5 px-2 bg-slate-500/10 border border-slate-500/20 rounded-full text-[8px] text-slate-400 font-extrabold uppercase">
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+                Offline
+              </span>
+            ) : station.stream_url?.includes('/live') ? (
               <span className="flex items-center gap-1 py-0.5 px-2 bg-emerald-500/10 border border-emerald-500/20 rounded-full text-[8px] text-emerald-400 font-extrabold uppercase animate-pulse">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                 Live Broadcast
@@ -82,10 +100,10 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
               On Air Now:
             </div>
             <div className="text-xs font-bold text-slate-200 truncate">
-              {station.current_track_title || 'Live Program'}
+              {station.is_online === false ? 'Offline' : (station.current_track_title || 'Live Program')}
             </div>
             <div className="text-[10px] text-slate-400 truncate">
-              By {station.current_track_artist || 'Broadcaster'}
+              {station.is_online === false ? 'No active broadcast' : `By ${station.current_track_artist || 'Broadcaster'}`}
             </div>
           </div>
         </div>
@@ -95,7 +113,7 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
       <div className="mt-4 pt-3.5 border-t border-white/3 flex items-center justify-between text-[10px] text-slate-500 font-bold">
         <div className="flex items-center gap-1">
           <Users className="w-3.5 h-3.5 text-slate-400" />
-          <span>{station.listeners_count?.toLocaleString() || '1.2K'} tuning in</span>
+          <span>{station.is_online === false ? '0' : (station.listeners_count?.toLocaleString() || '1.2K')} tuning in</span>
         </div>
         <span className="bg-slate-900 border border-white/3 text-slate-400 font-bold px-2 py-0.5 rounded-md text-[8px] uppercase">
           {station.category || 'Pop'}

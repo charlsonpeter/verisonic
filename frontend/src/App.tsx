@@ -72,6 +72,15 @@ function DashboardContent() {
     }
   }, [token, activeTab]);
 
+  // Route protection redirect for Radio Admins
+  useEffect(() => {
+    if (currentUser && currentUser.role === 'radio_admin') {
+      if (activeTab !== 'radio' && activeTab !== 'contact' && activeTab !== 'settings' && activeTab !== 'profile') {
+        setActiveTab('radio');
+      }
+    }
+  }, [currentUser, activeTab]);
+
   // Scroll main view container to top on tab change
   const mainRef = useRef<HTMLElement>(null);
   useEffect(() => {

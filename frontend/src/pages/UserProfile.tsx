@@ -10,10 +10,30 @@ interface UserProfileProps {
 }
 
 export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDetails }) => {
-  const { currentUser, isPremium } = useAuth();
+  const { currentUser, isPremium, fetchCurrentUser } = useAuth();
   const { favorites } = useAudio();
 
   const [favoriteTracks, setFavoriteTracks] = React.useState<Track[]>([]);
+
+  // Profile details update states
+  const [fullName, setFullName] = React.useState(currentUser?.full_name || '');
+  const [email, setEmail] = React.useState(currentUser?.email || '');
+  const [profileMessage, setProfileMessage] = React.useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const [isSavingProfile, setIsSavingProfile] = React.useState(false);
+
+  // Password update states
+  const [oldPassword, setOldPassword] = React.useState('');
+  const [newPassword, setNewPassword] = React.useState('');
+  const [confirmPassword, setConfirmPassword] = React.useState('');
+  const [passwordMessage, setPasswordMessage] = React.useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const [isSavingPassword, setIsSavingPassword] = React.useState(false);
+
+  React.useEffect(() => {
+    if (currentUser) {
+      setFullName(currentUser.full_name || '');
+      setEmail(currentUser.email || '');
+    }
+  }, [currentUser]);
 
   React.useEffect(() => {
     const loadFavoriteTracks = async () => {
@@ -30,6 +50,82 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
     };
     loadFavoriteTracks();
   }, [favorites]);
+
+  const handleUpdateProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!fullName.trim() || !email.trim()) {
+      setProfileMessage({ type: 'error', text: 'Display Name and Email are required.' });
+      return;
+    }
+    setIsSavingProfile(true);
+    setProfileMessage(null);
+    try {
+      const res = await fetch('/api/auth/profile', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({
+          full_name: fullName,
+          email: email
+        })
+      });
+      if (res.ok) {
+        setProfileMessage({ type: 'success', text: 'Profile details updated successfully!' });
+        await fetchCurrentUser();
+      } else {
+        const data = await res.json();
+        setProfileMessage({ type: 'error', text: data.detail || 'Failed to update profile.' });
+      }
+    } catch (err) {
+      console.error(err);
+      setProfileMessage({ type: 'error', text: 'Network connection failed.' });
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  const handleChangePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!oldPassword || !newPassword || !confirmPassword) {
+      setPasswordMessage({ type: 'error', text: 'All password fields are required.' });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordMessage({ type: 'error', text: 'New passwords do not match.' });
+      return;
+    }
+    setIsSavingPassword(true);
+    setPasswordMessage(null);
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({
+          old_password: oldPassword,
+          new_password: newPassword
+        })
+      });
+      if (res.ok) {
+        setPasswordMessage({ type: 'success', text: 'Password updated successfully!' });
+        setOldPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+      } else {
+        const data = await res.json();
+        setPasswordMessage({ type: 'error', text: data.detail || 'Failed to change password.' });
+      }
+    } catch (err) {
+      console.error(err);
+      setPasswordMessage({ type: 'error', text: 'Network connection failed.' });
+    } finally {
+      setIsSavingPassword(false);
+    }
+  };
 
   // Dynamic listening metrics
   const userStats = {
@@ -81,6 +177,117 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
               <span className="text-[9px] text-slate-400 font-bold block mt-1.5">{stat.desc}</span>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* 2.5. ACCOUNT CONFIGURATIONS */}
+      <section className="grid grid-cols-1 md:grid-cols-2 gap-8 font-sans">
+        {/* Profile Details Edit Card */}
+        <div className="glass-card p-6 rounded-3xl border border-white/5 space-y-4">
+          <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5 font-sans">
+            Update Profile Details
+          </h3>
+          
+          {profileMessage && (
+            <div className={`p-3 rounded-xl text-xs font-semibold ${
+              profileMessage.type === 'success' 
+                ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-450' 
+                : 'bg-rose-500/10 border border-rose-500/20 text-rose-400'
+            }`}>
+              {profileMessage.text}
+            </div>
+          )}
+
+          <form onSubmit={handleUpdateProfile} className="space-y-4 text-xs">
+            <div className="space-y-1.5">
+              <label className="font-bold text-slate-400 uppercase tracking-wider block">Display Name</label>
+              <input
+                type="text"
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
+              />
+            </div>
+            
+            <div className="space-y-1.5">
+              <label className="font-bold text-slate-400 uppercase tracking-wider block">Email Address</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
+              />
+            </div>
+
+            <button 
+              type="submit"
+              disabled={isSavingProfile}
+              className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md transition uppercase tracking-wider cursor-pointer"
+            >
+              {isSavingProfile ? 'Saving...' : 'Save Details'}
+            </button>
+          </form>
+        </div>
+
+        {/* Change Password Card */}
+        <div className="glass-card p-6 rounded-3xl border border-white/5 space-y-4">
+          <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5 font-sans">
+            Change Password
+          </h3>
+          
+          {passwordMessage && (
+            <div className={`p-3 rounded-xl text-xs font-semibold ${
+              passwordMessage.type === 'success' 
+                ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-450' 
+                : 'bg-rose-500/10 border border-rose-500/20 text-rose-400'
+            }`}>
+              {passwordMessage.text}
+            </div>
+          )}
+
+          <form onSubmit={handleChangePassword} className="space-y-3.5 text-xs">
+            <div className="space-y-1.5">
+              <label className="font-bold text-slate-400 uppercase tracking-wider block">Current Password</label>
+              <input
+                type="password"
+                placeholder="••••••••"
+                value={oldPassword}
+                onChange={(e) => setOldPassword(e.target.value)}
+                className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
+              />
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-400 uppercase tracking-wider block">New Password</label>
+                <input
+                  type="password"
+                  placeholder="••••••••"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-400 uppercase tracking-wider block">Confirm New Password</label>
+                <input
+                  type="password"
+                  placeholder="••••••••"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
+                />
+              </div>
+            </div>
+
+            <button 
+              type="submit"
+              disabled={isSavingPassword}
+              className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md transition uppercase tracking-wider cursor-pointer"
+            >
+              {isSavingPassword ? 'Updating...' : 'Update Password'}
+            </button>
+          </form>
         </div>
       </section>
 

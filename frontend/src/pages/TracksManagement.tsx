@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Music, Trash2, CheckCircle2, XCircle, RefreshCw, Star, Play, Ban, Check, Edit3, X, UploadCloud, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
+import { showError, showConfirm } from '../utils/swal';
 
 interface UploadQueueItem {
   id: string;
@@ -341,9 +342,12 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
   }, [token]);
 
   const handleDelete = async (trackId: number) => {
-    if (!window.confirm("Are you sure you want to permanently delete this track? This will remove all audio transcode masters.")) {
-      return;
-    }
+    const confirmed = await showConfirm(
+      "Permanently Delete Track?",
+      "Are you sure you want to permanently delete this track? This will remove all audio transcode masters.",
+      "Yes, delete it"
+    );
+    if (!confirmed) return;
     setMessage(null);
     try {
       const res = await fetch(`/api/music/${trackId}`, {
@@ -427,11 +431,11 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
         const data = await response.json();
         setEditLyrics(data.lyrics);
       } else {
-        alert("Failed to transcribe. Make sure the original audio is uploaded and analyzed.");
+        showError("Transcription Failed", "Failed to transcribe. Make sure the original audio is uploaded and analyzed.");
       }
     } catch (err) {
       console.error(err);
-      alert("Error triggering AI transcription.");
+      showError("Transcription Error", "Error triggering AI transcription.");
     } finally {
       setIsTranscribing(false);
     }

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Users, Trash2, Shield, User as UserIcon, Check } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { showConfirm } from '../utils/swal';
 
 export const UsersManagement: React.FC = () => {
   const { token, currentUser } = useAuth();
@@ -51,9 +52,12 @@ export const UsersManagement: React.FC = () => {
   };
 
   const handleDeleteUser = async (userId: number) => {
-    if (!window.confirm("Are you sure you want to delete this user? All their tracks and playlists will be lost.")) {
-      return;
-    }
+    const confirmed = await showConfirm(
+      "Delete User Account?",
+      "Are you sure you want to delete this user? All their tracks and playlists will be lost.",
+      "Yes, delete user"
+    );
+    if (!confirmed) return;
     setMessage(null);
     try {
       const res = await fetch(`/api/auth/admin/users/${userId}`, {

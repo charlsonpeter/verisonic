@@ -9,7 +9,7 @@ from typing import List, Optional
 from app.db.session import get_db, SessionLocal
 from app.models import Track, Artist, Album, Genre, AudioAnalysisReport, ListeningHistory, StreamingLog
 from app.schemas import TrackResponse, AudioAnalysisReportResponse
-from app.api.auth import get_current_user, get_current_studio_admin, get_current_admin
+from app.api.auth import get_current_user, get_current_studio_admin, get_current_admin, get_optional_current_user
 from app.services.storage import generate_presigned_url, delete_file, upload_file
 from app.tasks.tasks import analyze_audio_task
 
@@ -460,7 +460,12 @@ async def transcribe_track_lyrics(
                 pass
 
 @router.get("/autocomplete-suggestions")
-def get_autocomplete_suggestions(db: Session = Depends(get_db)):
+def get_autocomplete_suggestions(
+    db: Session = Depends(get_db),
+    current_user = Depends(get_optional_current_user)
+):
+    if current_user and current_user.role == "radio_admin":
+        raise HTTPException(status_code=403, detail="Radio admins cannot access music metadata")
     """
     Returns unique existing values for autocomplete suggestions.
     """
@@ -505,8 +510,11 @@ def get_autocomplete_suggestions(db: Session = Depends(get_db)):
 def list_tracks(
     search: Optional[str] = None,
     approved_only: Optional[bool] = True,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user = Depends(get_optional_current_user)
 ):
+    if current_user and current_user.role == "radio_admin":
+        raise HTTPException(status_code=403, detail="Radio admins are not allowed to play music or search tracks.")
     """
     List audio tracks with search filter (Title, Artist Name, Album Title, Genre).
     Uses full text pattern matching.
@@ -552,7 +560,13 @@ def manage_tracks(
     return [serialize_track(t, db) for t in tracks]
 
 @router.get("/{id}", response_model=TrackResponse)
-def get_track(id: int, db: Session = Depends(get_db)):
+def get_track(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_optional_current_user)
+):
+    if current_user and current_user.role == "radio_admin":
+        raise HTTPException(status_code=403, detail="Radio admins are not allowed to play music or search tracks.")
     track = db.query(Track).filter(Track.id == id).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")

@@ -68,6 +68,30 @@ def startup_seeder():
         except Exception:
             db.rollback()
 
+        # SQL migration for radio_stations current_program_title column
+        try:
+            db.execute(text("ALTER TABLE radio_stations ADD COLUMN current_program_title VARCHAR;"))
+            db.commit()
+            print("Migration: Added column current_program_title to radio_stations successfully.")
+        except Exception:
+            db.rollback()
+
+        # SQL migration for radio_stations rj_name column
+        try:
+            db.execute(text("ALTER TABLE radio_stations ADD COLUMN rj_name VARCHAR;"))
+            db.commit()
+            print("Migration: Added column rj_name to radio_stations successfully.")
+        except Exception:
+            db.rollback()
+
+        # SQL migration for radio_stations rj_details column
+        try:
+            db.execute(text("ALTER TABLE radio_stations ADD COLUMN rj_details VARCHAR;"))
+            db.commit()
+            print("Migration: Added column rj_details to radio_stations successfully.")
+        except Exception:
+            db.rollback()
+
         # 1. Seed Admin account if empty
         admin_user = db.query(User).filter(User.role == "admin").first()
         if not admin_user:

@@ -5,6 +5,7 @@ export interface User {
   email: string;
   full_name: string;
   role: 'listener' | 'studio_admin' | 'radio_admin' | 'admin';
+  real_role?: 'listener' | 'studio_admin' | 'radio_admin' | 'admin';
   subscription: 'free' | 'premium';
   artist_profile?: {
     id: number;
@@ -20,6 +21,8 @@ interface AuthContextType {
   isLoading: boolean;
   authError: string | null;
   isPremium: boolean;
+  userMode: 'admin' | 'listener';
+  switchUserMode: (mode: 'admin' | 'listener') => void;
   login: (email: string, password: string) => Promise<boolean>;
   register: (email: string, password: string, fullName: string, role: 'listener' | 'studio_admin' | 'radio_admin' | 'admin') => Promise<boolean>;
   logout: () => void;
@@ -37,6 +40,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [userMode, setUserMode] = useState<'admin' | 'listener'>(() => {
+    return (localStorage.getItem('userMode') as 'admin' | 'listener') || 'admin';
+  });
+
+  const switchUserMode = (mode: 'admin' | 'listener') => {
+    localStorage.setItem('userMode', mode);
+    setUserMode(mode);
+  };
 
   useEffect(() => {
     if (token) {
@@ -45,7 +56,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setCurrentUser(null);
       setIsLoading(false);
     }
-  }, [token]);
+  }, [token, userMode]);
 
   const fetchCurrentUser = async () => {
     setIsLoading(true);
@@ -69,6 +80,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Fallback: decode basic JWT-like token or load mock user
       if (token === 'mock_admin_token') {
         setCurrentUser({ id: 1, email: 'admin@verisonic.com', full_name: 'Platform Administrator', role: 'admin', subscription: 'premium' });
+      } else if (token === 'mock_radio_admin_token') {
+        setCurrentUser({ id: 4, email: 'radio_admin@verisonic.com', full_name: 'Radio Administrator', role: 'radio_admin', real_role: 'radio_admin', subscription: 'premium' });
+      } else if (token === 'mock_studio_admin_token') {
+        setCurrentUser({ id: 5, email: 'studio_admin@verisonic.com', full_name: 'Studio Administrator', role: 'studio_admin', real_role: 'studio_admin', subscription: 'premium' });
       } else if (token === 'mock_listener_token') {
         setCurrentUser({ id: 2, email: 'listener@verisonic.com', full_name: 'Audiophile User', role: 'listener', subscription: 'premium' });
       } else if (token === 'mock_guest_token') {
@@ -106,6 +121,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Mock log-in for development/offline
       if (cleanedEmail === 'admin@verisonic.com' && cleanedPassword === 'admin12345') {
         const mockToken = 'mock_admin_token';
+        localStorage.setItem('token', mockToken);
+        setToken(mockToken);
+        return true;
+      } else if (cleanedEmail === 'radio_admin@verisonic.com' && cleanedPassword === 'radio12345') {
+        const mockToken = 'mock_radio_admin_token';
+        localStorage.setItem('token', mockToken);
+        setToken(mockToken);
+        return true;
+      } else if (cleanedEmail === 'studio_admin@verisonic.com' && cleanedPassword === 'studio12345') {
+        const mockToken = 'mock_studio_admin_token';
         localStorage.setItem('token', mockToken);
         setToken(mockToken);
         return true;
@@ -203,6 +228,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isLoading,
       authError,
       isPremium,
+      userMode,
+      switchUserMode,
       login,
       register,
       logout,

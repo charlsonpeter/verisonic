@@ -16,7 +16,8 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
     clearQueue, 
     currentTrack,
     reorderQueue,
-    isPlaying
+    isPlaying,
+    activeRadioStation
   } = useAudio();
   
   // Drag and drop state
@@ -41,6 +42,14 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
   };
 
   const itemsToShow = getQueueItems();
+
+  const radioPrograms = activeRadioStation ? [
+    { id: 1, title: activeRadioStation.current_program_title || "Morning Beats Live", time: "08:00 AM - 11:00 AM", host: activeRadioStation.rj_name || "RJ Sarah", isCurrent: true },
+    { id: 2, title: "Afternoon Groove Mix", time: "11:00 AM - 03:00 PM", host: "RJ Alex", isCurrent: false },
+    { id: 3, title: "Sunset Session Live", time: "03:00 PM - 07:00 PM", host: "RJ Elena", isCurrent: false },
+    { id: 4, title: "Night Owl Beats", time: "07:00 PM - 12:00 AM", host: "RJ Marcus", isCurrent: false },
+    { id: 5, title: "Auto-DJ Night Mix", time: "12:00 AM - 08:00 AM", host: "System Auto-DJ", isCurrent: false }
+  ] : [];
 
   // Drag & drop handlers
   const handleDragStart = (e: React.DragEvent, queueIndex: number) => {
@@ -77,7 +86,9 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
       <div className="px-4 flex items-center justify-between border-b border-white/5 pb-4">
         <div className="flex items-center gap-2">
           <ListMusic className="w-4 h-4 text-rose-500" />
-          <span className="text-xs font-bold text-white uppercase tracking-wider">Play Queue</span>
+          <span className="text-xs font-bold text-white uppercase tracking-wider">
+            {activeRadioStation ? 'Station Schedule' : 'Play Queue'}
+          </span>
         </div>
         <button onClick={onClose} className="p-1 text-slate-500 hover:text-white transition">
           <X className="w-5 h-5" />
@@ -89,9 +100,9 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
         <div className="space-y-4">
           <div className="flex justify-between items-center">
             <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">
-              Tracks: {itemsToShow.length}
+              {activeRadioStation ? 'Scheduled Broadcasts' : `Tracks: ${itemsToShow.length}`}
             </span>
-            {playQueue.length > 0 && (
+            {playQueue.length > 0 && !activeRadioStation && (
               <button
                 onClick={clearQueue}
                 className="flex items-center gap-1 text-[10px] text-rose-400 font-semibold hover:text-rose-300 transition"
@@ -102,7 +113,46 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
             )}
           </div>
 
-          {itemsToShow.length === 0 ? (
+          {activeRadioStation ? (
+            <div className="space-y-2">
+              {radioPrograms.map((prog) => (
+                <div
+                  key={prog.id}
+                  className={`flex items-center justify-between p-3 rounded-xl border transition-all duration-250 ${
+                    prog.isCurrent 
+                      ? 'bg-rose-600/10 border-rose-500/30' 
+                      : 'bg-slate-900/30 border-white/3'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    {/* Schedule icon box */}
+                    <div className="relative w-8 h-8 bg-slate-800 rounded-lg overflow-hidden flex items-center justify-center text-slate-400 flex-shrink-0 border border-white/5">
+                      <Music className="w-3.5 h-3.5" />
+                      {prog.isCurrent && isPlaying && (
+                        <div className="absolute inset-0 bg-slate-950/70 flex items-end justify-center gap-0.5 pb-1">
+                          <span className="w-0.5 h-3 bg-rose-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
+                          <span className="w-0.5 h-4 bg-rose-400 rounded-full animate-bounce" style={{ animationDelay: '0.3s' }} />
+                          <span className="w-0.5 h-2.5 bg-rose-500 rounded-full animate-bounce" style={{ animationDelay: '0.5s' }} />
+                        </div>
+                      )}
+                    </div>
+                    {/* Program details */}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <h4 className={`text-xs font-bold truncate ${prog.isCurrent ? 'text-rose-400' : 'text-slate-200'}`}>
+                          {prog.title}
+                        </h4>
+                        {prog.isCurrent && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse flex-shrink-0" />
+                        )}
+                      </div>
+                      <p className="text-[9px] text-slate-450 truncate mt-0.5">{prog.time} • {prog.host}</p>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : itemsToShow.length === 0 ? (
             <div className="text-center py-12 text-slate-550 text-xs">
               <Music className="w-8 h-8 mx-auto mb-2 text-slate-600 animate-pulse" />
               No tracks loaded

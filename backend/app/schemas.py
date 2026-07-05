@@ -21,6 +21,14 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+class UserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[EmailStr] = None
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
 # --- Artist Schemas ---
 class ArtistCreate(BaseModel):
     stage_name: str
@@ -40,6 +48,7 @@ class UserResponse(BaseModel):
     email: EmailStr
     full_name: Optional[str] = None
     role: str
+    real_role: Optional[str] = None
     is_active: bool
     created_at: datetime
     artist_profile: Optional[ArtistResponse] = None
@@ -146,6 +155,14 @@ class RadioStationCreate(BaseModel):
     stream_url: Optional[str] = None
     owner_id: Optional[int] = None
 
+class RadioStationUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    stream_url: Optional[str] = None
+    current_program_title: Optional[str] = None
+    rj_name: Optional[str] = None
+    rj_details: Optional[str] = None
+
 class RadioStationResponse(BaseModel):
     id: int
     name: str
@@ -161,6 +178,11 @@ class RadioStationResponse(BaseModel):
     current_track_artist: Optional[str] = None
     current_track_duration: Optional[float] = None
     current_offset: Optional[float] = 0.0
+    current_program_title: Optional[str] = None
+    rj_name: Optional[str] = None
+    rj_details: Optional[str] = None
+    listeners_count: Optional[int] = 0
+    is_online: Optional[bool] = True
 
     class Config:
         from_attributes = True

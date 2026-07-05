@@ -208,7 +208,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewReport, onViewDeta
               >
                 <div className="w-12 h-12 bg-slate-800 rounded-xl overflow-hidden relative flex-shrink-0">
                   <img src={track.cover_art_url} alt="Cover" className="w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-slate-955/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
+                  <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
                     <Play className="w-5 h-5 text-white fill-current" />
                   </div>
                 </div>
@@ -242,7 +242,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewReport, onViewDeta
             </button>
           </div>
 
-          <div className="space-y-2 bg-slate-955/40 backdrop-blur-md border border-white/5 p-5 rounded-3xl shadow-inner glow-rose/5">
+          <div className="space-y-2 bg-slate-950/40 backdrop-blur-md border border-white/5 p-5 rounded-3xl shadow-inner glow-rose/5">
             {allTracks.map((track, index) => (
               <TrackRow 
                 key={track.id} 
@@ -261,7 +261,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewReport, onViewDeta
             <Award className="w-5 h-5 text-rose-400" /> Popular Artists
           </h3>
 
-          <div className="space-y-4 bg-slate-955/40 backdrop-blur-md border border-white/5 p-6 rounded-3xl shadow-inner">
+          <div className="space-y-4 bg-slate-950/40 backdrop-blur-md border border-white/5 p-6 rounded-3xl shadow-inner">
             {popularArtists.length === 0 ? (
               <p className="text-xs text-slate-500 text-center py-4">No artists available.</p>
             ) : (

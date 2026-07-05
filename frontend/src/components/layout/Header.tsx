@@ -16,7 +16,7 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({ 
   searchQuery, setSearchQuery, activeTab, setActiveTab 
 }) => {
-  const { currentUser, isPremium, logout, token } = useAuth();
+  const { currentUser, isPremium, logout, token, userMode, switchUserMode } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -31,15 +31,20 @@ export const Header: React.FC<HeaderProps> = ({
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
-  const primaryNavs = [
-    { id: 'home', label: 'Home Feed', icon: Compass },
-    { id: 'discover', label: 'Discover Hub', icon: Music },
-    { id: 'radio', label: 'Live Radio', icon: Radio },
-    { id: 'search', label: 'Search', icon: Search },
-    { id: 'favorites', label: 'Favorites', icon: Heart },
-    { id: 'playlists', label: 'Playlists', icon: FolderHeart },
-    { id: 'contact', label: 'Contact Us', icon: Mail }
-  ];
+  const navItems = (currentUser && currentUser.role === 'radio_admin')
+    ? [
+        { id: 'radio', label: 'Radio Dashboard', icon: Radio },
+        { id: 'contact', label: 'Contact Us', icon: Mail }
+      ]
+    : [
+        { id: 'home', label: 'Home Feed', icon: Compass },
+        { id: 'discover', label: 'Discover Hub', icon: Music },
+        { id: 'radio', label: 'Live Radio', icon: Radio },
+        { id: 'search', label: 'Search', icon: Search },
+        { id: 'favorites', label: 'Favorites', icon: Heart },
+        { id: 'playlists', label: 'Playlists', icon: FolderHeart },
+        { id: 'contact', label: 'Contact Us', icon: Mail }
+      ];
 
   const handleDropdownSelect = (tab: string) => {
     setActiveTab(tab);
@@ -67,7 +72,7 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* 2. Center: Desktop Primary Navigation Link Tabs */}
       <nav className="hidden md:flex items-center gap-4 bg-slate-900/10 px-4 py-2 rounded-2xl border border-white/3">
-        {primaryNavs.map((nav) => {
+        {navItems.map((nav) => {
           const Icon = nav.icon;
           const isActive = activeTab === nav.id;
           return (
@@ -75,7 +80,7 @@ export const Header: React.FC<HeaderProps> = ({
               key={nav.id}
               onClick={() => setActiveTab(nav.id)}
               className={`flex items-center gap-1.5 px-1 py-1.5 text-xs font-extrabold transition-all duration-300 uppercase tracking-widest relative group ${
-                isActive ? 'text-rose-400 font-extrabold' : 'text-slate-450 hover:text-slate-200'
+                isActive ? 'text-rose-400 font-extrabold' : 'text-slate-455 hover:text-slate-200'
               }`}
             >
               <Icon className={`w-4 h-4 transition ${isActive ? 'text-rose-400' : 'text-slate-500 group-hover:text-slate-350'}`} />
@@ -92,7 +97,7 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center gap-4">
         
         {/* Compact Search Trigger */}
-        {activeTab !== 'search' && (
+        {activeTab !== 'search' && userMode !== 'admin' && (
           <div className="hidden lg:flex items-center gap-2 bg-slate-900/40 border border-white/5 rounded-xl px-3 py-1.5 hover:border-slate-800 transition duration-300 w-48">
             <Search className="w-4 h-4 text-slate-500" />
             <input 
@@ -107,33 +112,67 @@ export const Header: React.FC<HeaderProps> = ({
             />
           </div>
         )}
+        {/* VIP badge */}
+        {currentUser && userMode !== 'admin' && (
+          !isPremium ? (
+            <button 
+              onClick={() => setActiveTab('settings')}
+              className="hidden sm:flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-450 hover:to-yellow-500 text-slate-950 text-[10px] font-extrabold rounded-xl transition shadow-md shadow-amber-500/10 uppercase tracking-wide cursor-pointer"
+            >
+              <Crown className="w-3.5 h-3.5 fill-current" />
+              Go VIP
+            </button>
+          ) : (
+            <span className="hidden sm:flex items-center gap-1 px-2.5 py-1 bg-rose-500/10 border border-rose-500/20 rounded-full text-[9px] text-rose-400 font-extrabold uppercase">
+              <Crown className="w-3.5 h-3.5 fill-current text-rose-400" />
+              VIP Master
+            </span>
+          )
+        )}
 
-        {/* Live Network status */}
-        <div className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 bg-emerald-500/5 border border-emerald-500/10 rounded-full text-[9px] text-emerald-400 font-bold uppercase">
-          <Signal className="w-3.5 h-3.5" />
-          Live Node
-        </div>
+        {/* Mode Switcher */}
+        {currentUser && ['admin', 'radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role) && (
+          <div className="hidden sm:flex items-center select-none font-sans">
+            <button
+              onClick={() => {
+                if (userMode === 'admin') {
+                  switchUserMode('listener');
+                  setActiveTab('home');
+                } else {
+                  switchUserMode('admin');
+                  setActiveTab(currentUser.real_role === 'radio_admin' ? 'radio' : 'home');
+                }
+              }}
+              className={`w-20 h-7 rounded-full p-0.5 transition-colors duration-300 outline-none cursor-pointer relative flex items-center ${
+                userMode === 'admin' ? 'bg-rose-600 shadow-md shadow-rose-600/15' : 'bg-slate-800'
+              }`}
+            >
+              {/* Text label inside the track */}
+              {userMode === 'admin' ? (
+                <span className="absolute left-1.5 w-12 text-center text-[8.5px] font-black text-white uppercase tracking-wider transition-opacity duration-300">
+                  Admin
+                </span>
+              ) : (
+                <span className="absolute right-1.5 w-12 text-center text-[8.5px] font-black text-slate-400 uppercase tracking-wider transition-opacity duration-300">
+                  Listen
+                </span>
+              )}
+              {/* Sliding dot */}
+              <div 
+                className="w-6 h-6 bg-white rounded-full shadow absolute transition-all duration-300 ease-out"
+                style={{
+                  left: userMode === 'admin' ? '54px' : '2px',
+                  top: '2px'
+                }}
+              />
+            </button>
+          </div>
+        )}
 
         {/* User Account trigger dropdown */}
         {currentUser ? (
           <div className="flex items-center gap-3 relative" ref={dropdownRef}>
             
-            {/* VIP badge */}
-            {!isPremium ? (
-              <button 
-                onClick={() => setActiveTab('settings')}
-                className="hidden sm:flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-450 hover:to-yellow-500 text-slate-950 text-[10px] font-extrabold rounded-xl transition shadow-md shadow-amber-500/10 uppercase tracking-wide"
-              >
-                <Crown className="w-3.5 h-3.5 fill-current" />
-                Go VIP
-              </button>
-            ) : (
-              <span className="hidden sm:flex items-center gap-1 px-2.5 py-1 bg-rose-500/10 border border-rose-500/20 rounded-full text-[9px] text-rose-400 font-extrabold uppercase">
-                <Crown className="w-3.5 h-3.5 fill-current text-rose-400" />
-                VIP Master
-              </span>
-            )}
-
             {/* Profile Selector */}
             <button 
               onClick={() => setDropdownOpen(!dropdownOpen)}
@@ -154,6 +193,46 @@ export const Header: React.FC<HeaderProps> = ({
                   <p className="text-xs font-bold text-slate-200 truncate">{currentUser.full_name}</p>
                   <p className="text-[10px] text-slate-500 truncate mt-0.5">{currentUser.email}</p>
                 </div>
+
+                {/* Mobile User Mode Switcher inside dropdown */}
+                {currentUser && ['admin', 'radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role) && (
+                  <div className="sm:hidden p-2 border-b border-white/3 mb-1 flex items-center justify-between font-sans select-none">
+                    <span className="text-[8px] text-slate-550 font-bold uppercase tracking-wider block">Active Mode</span>
+                    <button
+                      onClick={() => {
+                        if (userMode === 'admin') {
+                          switchUserMode('listener');
+                          handleDropdownSelect('home');
+                        } else {
+                          switchUserMode('admin');
+                          handleDropdownSelect(currentUser.real_role === 'radio_admin' ? 'radio' : 'home');
+                        }
+                      }}
+                      className={`w-20 h-7 rounded-full p-0.5 transition-colors duration-300 outline-none cursor-pointer relative flex items-center ${
+                        userMode === 'admin' ? 'bg-rose-600 shadow-md shadow-rose-600/15' : 'bg-slate-800'
+                      }`}
+                    >
+                      {/* Text label inside the track */}
+                      {userMode === 'admin' ? (
+                        <span className="absolute left-1.5 w-12 text-center text-[8.5px] font-black text-white uppercase tracking-wider transition-opacity duration-300">
+                          Admin
+                        </span>
+                      ) : (
+                        <span className="absolute right-1.5 w-12 text-center text-[8.5px] font-black text-slate-400 uppercase tracking-wider transition-opacity duration-300">
+                          Listen
+                        </span>
+                      )}
+                      {/* Sliding dot */}
+                      <div 
+                        className="w-6 h-6 bg-white rounded-full shadow absolute transition-all duration-300 ease-out"
+                        style={{
+                          left: userMode === 'admin' ? '54px' : '2px',
+                          top: '2px'
+                        }}
+                      />
+                    </button>
+                  </div>
+                )}
 
                 <button 
                   onClick={() => handleDropdownSelect('profile')}

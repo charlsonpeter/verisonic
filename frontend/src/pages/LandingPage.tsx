@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useAudio, Track, RadioStation } from '../context/AudioContext';
 import { useAuth } from '../context/AuthContext';
+import { showError } from '../utils/swal';
 
 interface LandingPageProps {
   onNavigate: (tab: string) => void;
@@ -334,14 +335,26 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
           {featuredRadio.map((station) => (
             <div 
               key={station.id} 
-              onClick={() => playRadioStation(station)}
-              className="glass-card rounded-2xl p-5 border border-white/5 bg-slate-900/10 hover:border-slate-800 transition duration-300 relative group cursor-pointer flex gap-4"
+              onClick={() => {
+                if (station.is_online === false) {
+                  showError("Station Offline", "This radio station is currently offline.");
+                  return;
+                }
+                playRadioStation(station);
+              }}
+              className={`glass-card rounded-2xl p-5 border transition duration-300 relative group cursor-pointer flex gap-4 ${
+                station.is_online === false
+                  ? 'opacity-60 hover:opacity-85 border-white/5 bg-slate-900/5'
+                  : 'border-white/5 bg-slate-900/10 hover:border-slate-800'
+              }`}
             >
               <div className="w-16 h-16 rounded-xl overflow-hidden shadow-inner flex-shrink-0 relative">
                 <img src={station.cover_art_url} alt="Cover" className="w-full h-full object-cover" />
-                <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
-                  <Play className="w-5 h-5 text-white fill-current" />
-                </div>
+                {station.is_online !== false && (
+                  <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
+                    <Play className="w-5 h-5 text-white fill-current" />
+                  </div>
+                )}
               </div>
               <div className="min-w-0 flex-1 flex flex-col justify-between">
                 <div>
@@ -349,11 +362,18 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
                   <p className="text-[10px] text-slate-400 truncate mt-0.5">{station.description}</p>
                 </div>
                 <div className="flex items-center justify-between text-[9px] font-bold text-slate-500 uppercase mt-2">
-                  <span className="flex items-center gap-1 text-rose-405">
-                    <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
-                    Live
-                  </span>
-                  <span>{station.listeners_count?.toLocaleString()} listeners</span>
+                  {station.is_online === false ? (
+                    <span className="flex items-center gap-1 text-slate-500">
+                      <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
+                      Offline
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1 text-rose-405">
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
+                      Live
+                    </span>
+                  )}
+                  <span>{station.is_online === false ? '0' : station.listeners_count?.toLocaleString()} listeners</span>
                 </div>
               </div>
             </div>

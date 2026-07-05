@@ -291,7 +291,7 @@ class PyQtBroadcasterApp(QMainWindow):
                         break
         except Exception:
             pass
-        
+
 
         # 3. Stream Key Field
         key_lbl = QLabel("STREAM KEY (CONNECTION ID)")

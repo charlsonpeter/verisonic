@@ -91,7 +91,7 @@ export const Discover: React.FC<DiscoverProps> = ({ onNavigate }) => {
             >
               <div className="w-full aspect-square rounded-2xl overflow-hidden relative shadow-md bg-slate-800 border border-white/5 mb-3">
                 <img src={playlist.cover} alt="Cover" className="w-full h-full object-cover group-hover:scale-103 transition duration-500" />
-                <div className="absolute inset-0 bg-slate-955/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
+                <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
                   <span className="p-3 bg-white text-slate-950 rounded-full shadow-lg">
                     <Play className="w-5 h-5 fill-current ml-0.5" />
                   </span>

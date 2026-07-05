@@ -1,23 +1,92 @@
 import React, { useState } from 'react';
 import { 
   Settings as SettingsIcon, ShieldCheck, Volume2, Monitor, Crown, 
-  ToggleLeft, ToggleRight, Laptop, Headphones, Speaker, CheckCircle2
+  ToggleLeft, ToggleRight, Laptop, Headphones, Speaker, CheckCircle2,
+  Copy, Eye, EyeOff
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
+import { showInfo, showConfirm } from '../utils/swal';
 
 export const Settings: React.FC = () => {
-  const { currentUser, isPremium, token, fetchCurrentUser } = useAuth();
+  const { currentUser, isPremium, token, fetchCurrentUser, userMode } = useAuth();
   const { qualityLevelSetting, setQualityLevelSetting } = useAudio();
+
+  // Broadcaster states
+  const [station, setStation] = useState<any>(null);
+  const [showKey, setShowKey] = useState(true);
+  const [isRegeneratingKey, setIsRegeneratingKey] = useState(false);
+  const [copiedKey, setCopiedKey] = useState(false);
+
+  const fetchUserStation = async () => {
+    if (currentUser?.role !== 'radio_admin' && currentUser?.role !== 'admin') return;
+    try {
+      const res = await fetch('/api/radio');
+      if (res.ok) {
+        const data = await res.json();
+        const myStation = data.find((s: any) => s.owner_id === currentUser.id);
+        if (myStation) {
+          setStation(myStation);
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to load user station details for settings. Loading mock station.");
+      if (currentUser) {
+        setStation({
+          id: 1,
+          name: "Mock Broadcaster FM",
+          description: "Studio Master High-Fidelity continuous live node stream.",
+          owner_id: currentUser.id,
+          stream_key: "rs_key_mock_secret_stream_token_1234567890",
+          stream_url: "https://pub1.freefm.lk/1.aac",
+          is_active: true
+        });
+      }
+    }
+  };
+
+  React.useEffect(() => {
+    fetchUserStation();
+  }, [currentUser]);
+
+  const handleRegenerateKey = async () => {
+    if (!station) return;
+    const confirmed = await showConfirm(
+      "Regenerate Stream Key?",
+      "Are you sure you want to regenerate your Stream Key? Your current live broadcaster connection will disconnect!",
+      "Yes, regenerate"
+    );
+    if (!confirmed) return;
+    setIsRegeneratingKey(true);
+    try {
+      const res = await fetch(`/api/radio/${station.id}/regenerate-key`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (res.ok) {
+        fetchUserStation();
+      }
+    } catch (e) {
+      console.error("Failed to regenerate stream key:", e);
+    } finally {
+      setIsRegeneratingKey(false);
+    }
+  };
+
+  const handleCopyKey = () => {
+    if (!station) return;
+    navigator.clipboard.writeText(station.stream_key || '');
+    setCopiedKey(true);
+    setTimeout(() => setCopiedKey(false), 2000);
+  };
 
   // Settings mock toggles
   const [glassmorphism, setGlassmorphism] = useState(true);
   const [notifyEmail, setNotifyEmail] = useState(true);
   const [notifyUploads, setNotifyUploads] = useState(false);
-
-  // Profile Edit fields
-  const [fullName, setFullName] = useState(currentUser?.full_name || 'Free Listener');
-  const [isSaved, setIsSaved] = useState(false);
 
   // Artist Request fields
   const [stageName, setStageName] = useState(currentUser?.artist_profile?.stage_name || '');
@@ -66,246 +135,319 @@ export const Settings: React.FC = () => {
     }
   };
 
-  const handleProfileSave = (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSaved(true);
-    setTimeout(() => setIsSaved(false), 2000);
-  };
-
   const devices = [
     { name: "Schiit Bifrost 2/64 DAC", type: "USB External DAC", status: "Active (24-bit / 96kHz Mode)", icon: Headphones },
     { name: "Sony WH-1000XM4", type: "Bluetooth Receiver", status: "Connected (LDAC 990kbps)", icon: Headphones },
     { name: "Built-in Speakers", type: "Local Core Audio", status: "Standby", icon: Laptop }
   ];
 
+  const isBroadcasterAdmin = currentUser && ['admin', 'radio_admin'].includes(currentUser.real_role || currentUser.role);
+  const showAdminSettings = userMode === 'admin' && isBroadcasterAdmin;
+
   return (
     <div className="space-y-10 w-full max-w-4xl pb-10">
       {/* Title */}
       <div>
         <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
-          <SettingsIcon className="w-8 h-8 text-rose-400" /> Platform Settings
+          <SettingsIcon className="w-8 h-8 text-rose-400" /> {showAdminSettings ? 'Broadcaster control Settings' : 'Platform Settings'}
         </h2>
-        <p className="text-sm text-slate-400 mt-1">Configure audio resolution streams, account subscriptions, and DAC devices.</p>
+        <p className="text-sm text-slate-400 mt-1">
+          {showAdminSettings 
+            ? 'Configure broadcast ingestion credentials, copy stream key tokens, and fetch background plugins.' 
+            : 'Configure audio resolution streams, account subscriptions, and DAC devices.'}
+        </p>
       </div>
 
-      {/* 1. AUDIO QUALITY RESOLUTIONS */}
-      <section className="bg-slate-900/10 border border-white/3 p-6 rounded-3xl space-y-6 shadow-inner">
-        <h3 className="text-sm font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
-          <Volume2 className="w-4.5 h-4.5" /> Audiophile Stream Quality Configuration
-        </h3>
-        
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {[
-            { id: 'lossless', label: "Lossless FLAC", resolution: "24-bit / 96kHz", bitrate: "1,411 - 4,608 kbps", desc: "Studio Quality (Recommended for external DACs)" },
-            { id: 'hires', label: "Hi-Res Master", resolution: "24-bit / 48kHz", bitrate: "920 kbps (ALAC/FLAC)", desc: "CD+ Resolution for high quality headphones" },
-            { id: 'high', label: "High Quality", resolution: "16-bit / 44.1kHz", bitrate: "320 kbps (MP3/AAC)", desc: "Compressed audio with balanced performance" },
-            { id: 'normal', label: "Normal Quality", resolution: "16-bit / 44.1kHz", bitrate: "160 kbps (AAC)", desc: "Optimized bandwidth for cellular networks" }
-          ].map((q) => {
-            const isActive = qualityLevelSetting === q.id;
-            return (
-              <div
-                key={q.id}
-                onClick={() => setQualityLevelSetting(q.id as any)}
-                className={`p-4 rounded-2xl border transition duration-200 cursor-pointer flex flex-col justify-between ${
-                  isActive 
-                    ? 'bg-rose-600/10 border-rose-500/35 shadow-md shadow-rose-500/5' 
-                    : 'bg-slate-950/40 border-white/5 hover:border-slate-800'
-                }`}
-              >
-                <div>
-                  <h4 className={`text-xs font-bold ${isActive ? 'text-rose-400' : 'text-slate-200'}`}>{q.label}</h4>
-                  <span className="text-[10px] text-slate-400 font-extrabold block mt-1 uppercase tracking-wide">{q.resolution}</span>
-                  <span className="text-[9px] text-slate-500 font-semibold block mt-0.5">{q.bitrate}</span>
+      {showAdminSettings ? (
+        /* --- ADMIN BROADCASTER SETTINGS ONLY --- */
+        station ? (
+          <section className="grid grid-cols-1 md:grid-cols-12 gap-8 animate-fade-in bg-slate-900/10 border border-white/3 p-6 rounded-3xl shadow-inner">
+            {/* Broadcaster Connection Settings */}
+            <div className="md:col-span-7 space-y-4">
+              <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest font-sans">
+                Broadcaster Connection Settings
+              </h3>
+              <p className="text-[11px] text-slate-400 font-sans leading-normal">
+                Copy your personal stream key into your PyQt5 desktop broadcaster application or encoder to stream live.
+              </p>
+
+              <div className="space-y-4 text-xs font-sans">
+
+                {/* Stream Key */}
+                <div className="space-y-1">
+                  <label className="text-[9.5px] font-bold text-slate-550 uppercase block">Stream Key</label>
+                  <div className="flex gap-2">
+                    <input
+                      type={showKey ? 'text' : 'password'}
+                      readOnly
+                      value={station.stream_key || ''}
+                      className="w-full bg-slate-950 border border-white/5 text-[10px] p-2.5 rounded-xl text-white font-mono font-semibold outline-none tracking-wider"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowKey(!showKey)}
+                      className="px-3 bg-slate-900 hover:bg-slate-800 border border-white/5 text-slate-450 hover:text-white rounded-xl transition cursor-pointer"
+                    >
+                      {showKey ? 'Hide' : 'Show'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCopyKey}
+                      className="px-3 bg-slate-900 hover:bg-slate-800 border border-white/5 text-slate-405 hover:text-white rounded-xl transition cursor-pointer"
+                    >
+                      {copiedKey ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
                 </div>
-                <p className="text-[9.5px] text-slate-455 mt-4 leading-normal">{q.desc}</p>
+
+                {/* Regenerate Button */}
+                <button
+                  onClick={handleRegenerateKey}
+                  disabled={isRegeneratingKey}
+                  className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-rose-455 font-bold border border-rose-500/10 hover:border-rose-500/30 rounded-xl transition text-[10px] uppercase tracking-wider"
+                >
+                  {isRegeneratingKey ? 'Regenerating...' : 'Regenerate Stream Key'}
+                </button>
               </div>
-            );
-          })}
-        </div>
-      </section>
+            </div>
 
-      {/* 2. PROFILE SETTINGS */}
-      <section className="grid grid-cols-1 md:grid-cols-12 gap-8">
-        
-        {/* Profile Edit */}
-        <div className="md:col-span-7 bg-slate-900/20 border border-white/5 p-6 rounded-3xl space-y-4">
-          <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest">Profile Configurations</h3>
-          
-          <form onSubmit={handleProfileSave} className="space-y-4 text-xs">
-            {isSaved && (
-              <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-450 rounded-xl flex items-center gap-2 font-semibold font-sans">
-                <CheckCircle2 className="w-4.5 h-4.5" /> Profile details saved!
+            {/* Broadcast Link Software Widget */}
+            <div className="md:col-span-5 bg-slate-900/40 border border-white/3 p-6 rounded-3xl space-y-4 shadow-xl relative overflow-hidden">
+              <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5 font-sans">
+                Broadcast Software Link
+              </h3>
+              <p className="text-[10.5px] text-slate-400 leading-relaxed font-semibold">
+                Install the VeriSonic desktop background service to stream system audio or microphone input to your live feed.
+              </p>
+              <div className="bg-slate-950/45 p-4 border border-white/3 rounded-2xl flex flex-col gap-3 font-sans text-xs">
+                {(() => {
+                  const ua = window.navigator.userAgent.toLowerCase();
+                  let detectedOS = 'Windows';
+                  if (ua.includes('android')) detectedOS = 'Android';
+                  else if (ua.includes('linux')) detectedOS = 'Linux';
+                  else if (ua.includes('mac')) detectedOS = 'macOS';
+                  else if (ua.includes('win')) detectedOS = 'Windows';
+
+                  const allPlatforms = ['Windows', 'macOS', 'Linux'];
+                  const alternatives = allPlatforms.filter(p => p !== detectedOS);
+
+                  return (
+                    <>
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className="text-slate-550 font-bold uppercase">Detected Platform:</span>
+                        <span className="font-bold text-rose-455 uppercase">{detectedOS}</span>
+                      </div>
+                      <button
+                        onClick={() => showInfo("Broadcaster Download", `Initiating download: VeriSonic Broadcast Link background service for ${detectedOS}.`)}
+                        className="flex items-center justify-center gap-2 py-2.5 px-4 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow-lg transition duration-300 uppercase tracking-wider cursor-pointer"
+                      >
+                        Download Broadcaster
+                      </button>
+
+                      {/* Alternative Options */}
+                      <div className="border-t border-white/5 pt-3 mt-1.5 space-y-2">
+                        <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider block">Alternative platforms:</span>
+                        <div className="grid grid-cols-2 gap-1.5 text-[9px] font-bold text-center uppercase tracking-wide">
+                          {alternatives.map(p => (
+                            <button 
+                              key={p}
+                              onClick={() => showInfo("Broadcaster Download", `Initiating download: VeriSonic Broadcast Link background service for ${p}.`)}
+                              className="py-1.5 bg-slate-900/60 hover:bg-slate-800 text-slate-350 hover:text-white border border-white/3 rounded-lg transition cursor-pointer font-sans"
+                            >
+                              {p}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
-            )}
-            
-            <div className="space-y-1">
-              <label className="font-bold text-slate-350 block">Display Name</label>
-              <input
-                type="text"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-300 transition"
-              />
             </div>
-            
-            <div className="space-y-1">
-              <label className="font-bold text-slate-350 block">Email Address</label>
-              <input
-                type="email"
-                value={currentUser?.email || 'guest@verisonic.com'}
-                disabled
-                className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs opacity-50 outline-none text-slate-400 cursor-not-allowed"
-              />
-            </div>
-
-            <button 
-              type="submit"
-              className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-md transition"
-            >
-              Save Details
-            </button>
-          </form>
-        </div>
-
-        {/* VIP Subscriptions */}
-        <div className="md:col-span-5 bg-slate-900/40 border border-white/3 p-6 rounded-3xl space-y-6 shadow-xl relative overflow-hidden">
-          {isPremium && (
-            <div className="absolute top-0 right-0 w-24 h-24 bg-rose-500/5 rounded-full blur-2xl animate-pulse pointer-events-none" />
-          )}
-          
-          <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
-            <Crown className="w-4 h-4" /> VIP Account details
-          </h3>
-
-          <div className="space-y-4">
-            <div>
-              <span className="text-[10px] text-slate-500 font-bold block uppercase">Current Plan</span>
-              <span className="text-base font-extrabold text-white mt-1 block">
-                {isPremium ? "Studio Master VIP (Active)" : "Free Preview Tier"}
-              </span>
-            </div>
-
-            <p className="text-[10.5px] text-slate-455 leading-relaxed font-semibold">
-              {isPremium 
-                ? "Your billing cycle renews automatically. Thank you for supporting authentic lossless music and radio artists." 
-                : "You are currently in guest mode. Upgrade to access uncompressed FLAC audio, save playlists, and listen without 30s limits."}
-            </p>
-
-            {!isPremium && (
-              <button className="w-full py-2.5 bg-gradient-to-r from-amber-500 to-yellow-600 text-slate-950 text-xs font-bold rounded-xl shadow-md hover:scale-[1.01] transition duration-300">
-                Activate Studio VIP ($14.99/mo)
-              </button>
-            )}
+          </section>
+        ) : (
+          <div className="glass-card border border-white/5 rounded-3xl p-16 text-center animate-pulse">
+            <SettingsIcon className="w-12 h-12 text-slate-600 mx-auto mb-4" />
+            <p className="text-slate-400 text-xs">No active radio station associated with this broadcaster account.</p>
           </div>
-        </div>
-
-      </section>
-
-      {/* 3. CONNECTED DEVICES */}
-      <section className="bg-slate-900/10 border border-white/3 p-6 rounded-3xl space-y-4 shadow-inner">
-        <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
-          <Monitor className="w-4.5 h-4.5" /> Active SoundStage Output Nodes
-        </h3>
-        
-        <div className="space-y-2.5">
-          {devices.map((dev, idx) => {
-            const Icon = dev.icon;
-            const isActive = dev.status.includes('Active');
-            return (
-              <div 
-                key={idx}
-                className={`flex items-center justify-between p-3.5 rounded-2xl border ${
-                  isActive ? 'bg-rose-600/5 border-rose-500/15' : 'bg-slate-950/40 border-white/3'
-                }`}
-              >
-                <div className="flex items-center gap-3.5">
-                  <div className={`p-2.5 rounded-xl border ${isActive ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' : 'bg-slate-900 border-white/5 text-slate-500'}`}>
-                    <Icon className="w-5 h-5" />
+        )
+      ) : (
+        /* --- LISTENER SETTINGS ONLY --- */
+        <div className="space-y-10">
+          {/* 1. AUDIO QUALITY RESOLUTIONS */}
+          <section className="bg-slate-900/10 border border-white/3 p-6 rounded-3xl space-y-6 shadow-inner">
+            <h3 className="text-sm font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
+              <Volume2 className="w-4.5 h-4.5" /> Audiophile Stream Quality Configuration
+            </h3>
+            
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              {[
+                { id: 'lossless', label: "Lossless FLAC", resolution: "24-bit / 96kHz", bitrate: "1,411 - 4,608 kbps", desc: "Studio Quality (Recommended for external DACs)" },
+                { id: 'hires', label: "Hi-Res Master", resolution: "24-bit / 48kHz", bitrate: "920 kbps (ALAC/FLAC)", desc: "CD+ Resolution for high quality headphones" },
+                { id: 'high', label: "High Quality", resolution: "16-bit / 44.1kHz", bitrate: "320 kbps (MP3/AAC)", desc: "Compressed audio with balanced performance" },
+                { id: 'normal', label: "Normal Quality", resolution: "16-bit / 44.1kHz", bitrate: "160 kbps (AAC)", desc: "Optimized bandwidth for cellular networks" }
+              ].map((q) => {
+                const isActive = qualityLevelSetting === q.id;
+                return (
+                  <div
+                    key={q.id}
+                    onClick={() => setQualityLevelSetting(q.id as any)}
+                    className={`p-4 rounded-2xl border transition duration-200 cursor-pointer flex flex-col justify-between ${
+                      isActive 
+                        ? 'bg-rose-600/10 border-rose-500/35 shadow-md shadow-rose-500/5' 
+                        : 'bg-slate-950/40 border-white/5 hover:border-slate-800'
+                    }`}
+                  >
+                    <div>
+                      <h4 className={`text-xs font-bold ${isActive ? 'text-rose-400' : 'text-slate-200'}`}>{q.label}</h4>
+                      <span className="text-[10px] text-slate-400 font-extrabold block mt-1 uppercase tracking-wide">{q.resolution}</span>
+                      <span className="text-[9px] text-slate-505 font-semibold block mt-0.5">{q.bitrate}</span>
+                    </div>
+                    <p className="text-[9.5px] text-slate-455 mt-4 leading-normal">{q.desc}</p>
                   </div>
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-200">{dev.name}</h4>
-                    <p className="text-[9px] text-slate-505 font-semibold mt-0.5">{dev.type}</p>
-                  </div>
-                </div>
-                <span className={`text-[9.5px] font-extrabold uppercase ${isActive ? 'text-rose-400 animate-pulse font-sans' : 'text-slate-650 font-sans'}`}>
-                  {dev.status}
+                );
+              })}
+            </div>
+          </section>
+
+          {/* 2. VIP ACCOUNT SUBSCRIPTION */}
+          <section className="bg-slate-900/40 border border-white/3 p-6 rounded-3xl space-y-6 shadow-xl relative overflow-hidden font-sans">
+            {isPremium && (
+              <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-3xl pointer-events-none" />
+            )}
+            
+            <h3 className="text-xs font-bold text-rose-455 uppercase tracking-widest flex items-center gap-1.5">
+              <Crown className="w-4 h-4 text-amber-400" /> VIP Subscription Details
+            </h3>
+
+            <div className="space-y-4 max-w-xl">
+              <div>
+                <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Current Account Tier</span>
+                <span className="text-base font-extrabold text-white mt-1 block">
+                  {isPremium ? "Studio Master VIP (Active)" : "Free Preview Tier"}
                 </span>
               </div>
-            );
-          })}
-        </div>
-      </section>
 
-      {/* 4. STUDIO ADMIN REQUEST */}
-      {currentUser?.role === 'listener' && (
-        <section className="bg-slate-900/10 border border-white/3 p-6 rounded-3xl space-y-4 shadow-inner">
-          <div>
-            <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-widest flex items-center gap-1.5">
-              <Headphones className="w-4.5 h-4.5" /> Request Studio Admin Access
+              <p className="text-[11px] text-slate-400 leading-relaxed font-semibold">
+                {isPremium 
+                  ? "Your billing cycle renews automatically. Thank you for supporting authentic lossless music and radio artists." 
+                  : "You are currently in guest mode. Upgrade to access uncompressed FLAC audio, save playlists, and listen without 30s limits."}
+              </p>
+
+              {!isPremium && (
+                <button className="w-full sm:w-auto px-6 py-2.5 bg-gradient-to-r from-amber-500 to-yellow-600 text-slate-955 text-xs font-bold rounded-xl shadow-md hover:scale-[1.01] transition duration-300 uppercase tracking-wider cursor-pointer">
+                  Activate Studio VIP ($14.99/mo)
+                </button>
+              )}
+            </div>
+          </section>
+
+          {/* 3. CONNECTED DEVICES */}
+          <section className="bg-slate-900/10 border border-white/3 p-6 rounded-3xl space-y-4 shadow-inner">
+            <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
+              <Monitor className="w-4.5 h-4.5" /> Active SoundStage Output Nodes
             </h3>
-            <p className="text-xs text-slate-400 mt-1">
-              Submit your stage name and biography to unlock studio upload tools, high-fidelity master inspection, and studio management permissions.
-            </p>
-          </div>
-
-          {currentUser.artist_profile && (
-            <div className="p-4 bg-cyan-500/5 border border-cyan-500/15 text-cyan-300 text-xs rounded-xl flex flex-col gap-1.5">
-              <span className="font-bold flex items-center gap-1.5">
-                <CheckCircle2 className="w-4.5 h-4.5 text-cyan-400" />
-                Studio Admin request is currently pending administrator approval.
-              </span>
-              <p>Stage Name: <strong>{currentUser.artist_profile.stage_name}</strong></p>
-              <p>Biography: <em>{currentUser.artist_profile.bio || "No biography provided."}</em></p>
+            
+            <div className="space-y-2.5">
+              {devices.map((dev, idx) => {
+                const Icon = dev.icon;
+                const isActive = dev.status.includes('Active');
+                return (
+                  <div 
+                    key={idx}
+                    className={`flex items-center justify-between p-3.5 rounded-2xl border ${
+                      isActive ? 'bg-rose-600/5 border-rose-500/15' : 'bg-slate-900/40 border-white/3'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3.5">
+                      <div className={`p-2.5 rounded-xl border ${isActive ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' : 'bg-slate-900 border-white/5 text-slate-500'}`}>
+                        <Icon className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-200">{dev.name}</h4>
+                        <p className="text-[9px] text-slate-505 font-semibold mt-0.5">{dev.type}</p>
+                      </div>
+                    </div>
+                    <span className={`text-[9.5px] font-extrabold uppercase ${isActive ? 'text-rose-455 animate-pulse font-sans' : 'text-slate-650 font-sans'}`}>
+                      {dev.status}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
-          )}
+          </section>
 
-          {artistReqMessage && (
-            <div className={`p-4 rounded-xl text-xs flex items-center gap-2 font-semibold ${
-              artistReqMessage.type === 'success' 
-                ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' 
-                : 'bg-rose-500/10 border border-rose-500/20 text-rose-455'
-            }`}>
-              {artistReqMessage.text}
-            </div>
-          )}
-
-          <form onSubmit={handleArtistRequestSubmit} className="space-y-4 text-xs font-sans">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1">
-                <label className="font-bold text-slate-350 block">Stage Name</label>
-                <input
-                  type="text"
-                  placeholder="e.g. DJ Resonance"
-                  value={stageName}
-                  onChange={(e) => setStageName(e.target.value)}
-                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-cyan-500 text-slate-300 transition"
-                  required
-                />
+          {/* 4. STUDIO ADMIN REQUEST */}
+          {currentUser?.role === 'listener' && (
+            <section className="bg-slate-900/10 border border-white/3 p-6 rounded-3xl space-y-4 shadow-inner">
+              <div>
+                <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-widest flex items-center gap-1.5">
+                  <Headphones className="w-4.5 h-4.5" /> Request Studio Admin Access
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Submit your stage name and biography to unlock studio upload tools, high-fidelity master inspection, and studio management permissions.
+                </p>
               </div>
-            </div>
 
-            <div className="space-y-1">
-              <label className="font-bold text-slate-350 block">Artist Biography</label>
-              <textarea
-                placeholder="Share your musical background, style, and influences..."
-                value={bio}
-                onChange={(e) => setBio(e.target.value)}
-                rows={4}
-                className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-cyan-500 text-slate-300 transition resize-none"
-              />
-            </div>
+              {currentUser.artist_profile && (
+                <div className="p-4 bg-cyan-500/5 border border-cyan-500/15 text-cyan-300 text-xs rounded-xl flex flex-col gap-1.5">
+                  <span className="font-bold flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4.5 h-4.5 text-cyan-400" />
+                    Studio Admin request is currently pending administrator approval.
+                  </span>
+                  <p>Stage Name: <strong>{currentUser.artist_profile.stage_name}</strong></p>
+                  <p>Biography: <em>{currentUser.artist_profile.bio || "No biography provided."}</em></p>
+                </div>
+              )}
 
-            <button
-              type="submit"
-              disabled={isArtistReqLoading}
-              className="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-slate-950 font-bold text-xs rounded-xl shadow-md transition"
-            >
-              {isArtistReqLoading ? "Submitting Request..." : currentUser.artist_profile ? "Update Request Details" : "Submit Studio Admin Request"}
-            </button>
-          </form>
-        </section>
+              {artistReqMessage && (
+                <div className={`p-4 rounded-xl text-xs flex items-center gap-2 font-semibold ${
+                  artistReqMessage.type === 'success' 
+                    ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-450' 
+                    : 'bg-rose-500/10 border border-rose-500/20 text-rose-455'
+                }`}>
+                  {artistReqMessage.text}
+                </div>
+              )}
+
+              <form onSubmit={handleArtistRequestSubmit} className="space-y-4 text-xs font-sans">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="font-bold text-slate-350 block">Stage Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. DJ Resonance"
+                      value={stageName}
+                      onChange={(e) => setStageName(e.target.value)}
+                      className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-cyan-500 text-slate-300 transition"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-350 block">Artist Biography</label>
+                  <textarea
+                    placeholder="Share your musical background, style, and influences..."
+                    value={bio}
+                    onChange={(e) => setBio(e.target.value)}
+                    rows={4}
+                    className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-cyan-500 text-slate-300 transition resize-none"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isArtistReqLoading}
+                  className="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-slate-950 font-bold text-xs rounded-xl shadow-md transition"
+                >
+                  {isArtistReqLoading ? "Submitting Request..." : currentUser.artist_profile ? "Update Request Details" : "Submit Studio Admin Request"}
+                </button>
+              </form>
+            </section>
+          )}
+        </div>
       )}
-
     </div>
   );
 };

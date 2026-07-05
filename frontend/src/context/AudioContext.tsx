@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { useAuth } from './AuthContext';
 import Hls from 'hls.js';
+import { showError } from '../utils/swal';
 
 export interface Track {
   id: number;
@@ -38,6 +39,7 @@ export interface RadioStation {
   category?: string;
   owner_id?: number;
   stream_key?: string;
+  is_online?: boolean;
 }
 
 type RepeatMode = 'none' | 'all' | 'one';
@@ -86,8 +88,13 @@ const AudioContext = createContext<AudioContextType | undefined>(undefined);
 
 const API_URL = '/api';
 
+const resolveStreamUrl = (url?: string): string => {
+  if (!url) return "";
+  return url.replace("http://localhost/storage", `${window.location.protocol}//${window.location.host}/storage`);
+};
+
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { token, isPremium } = useAuth();
+  const { token, isPremium, userMode, currentUser } = useAuth();
   
   // State variables
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
@@ -162,6 +169,78 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setCurrentQueueIndex(-1);
     }
   }, [token]);
+
+  // Stop library music/other stations playback when switching to Admin Mode for Radio Admins
+  // Pre-load station or stop other feeds when switching to Admin Mode
+  useEffect(() => {
+    if (userMode === 'admin' && currentUser && ['admin', 'radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role)) {
+      // Instantly pause and reset any running playback to prevent leakage
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+      }
+      setIsPlaying(false);
+      setCurrentTrack(null);
+      setActiveRadioStation(null);
+      setIsRadioSync(false);
+
+      // If we are a radio_admin, pre-load their own station in a paused state so the player is always visible
+      if ((currentUser.real_role || currentUser.role) === 'radio_admin') {
+        const loadBroadcasterStation = async () => {
+          try {
+            const res = await fetch('/api/radio');
+            if (res.ok) {
+              const data = await res.json();
+              const myStation = data.find((s: any) => s.owner_id === currentUser.id);
+              if (myStation) {
+                setActiveRadioStation(myStation);
+                setIsRadioSync(true);
+                const virtualTrack: Track = {
+                  id: myStation.id * 100,
+                  title: myStation.current_track_title || "Standby Broadcast",
+                  artist_name: myStation.current_track_artist || myStation.name,
+                  duration: 0,
+                  stream_url: myStation.stream_url
+                };
+                setCurrentTrack(virtualTrack);
+                if (audioRef.current && myStation.stream_url) {
+                  audioRef.current.src = resolveStreamUrl(myStation.stream_url);
+                  audioRef.current.pause();
+                }
+                setIsPlaying(false);
+              }
+            }
+          } catch (e) {
+            console.warn("Failed to load radio admin station on admin mode enter. Using mock fallback.");
+            const mockStation = {
+              id: 1,
+              name: "Mock Broadcaster FM",
+              description: "Virtual broadcast stream for offline testing.",
+              owner_id: currentUser.id,
+              stream_url: "https://pub1.freefm.lk/1.aac",
+              is_active: true
+            };
+            setActiveRadioStation(mockStation);
+            setIsRadioSync(true);
+            const virtualTrack: Track = {
+              id: mockStation.id * 100,
+              title: "Standby Broadcast",
+              artist_name: mockStation.name,
+              duration: 0,
+              stream_url: mockStation.stream_url
+            };
+            setCurrentTrack(virtualTrack);
+            if (audioRef.current && mockStation.stream_url) {
+              audioRef.current.src = resolveStreamUrl(mockStation.stream_url);
+              audioRef.current.pause();
+            }
+            setIsPlaying(false);
+          }
+        };
+        loadBroadcasterStation();
+      }
+    }
+  }, [userMode, currentUser]);
 
   // Initialize Audio Object
   useEffect(() => {
@@ -273,6 +352,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const playTrack = async (track: Track, isRadio = false) => {
     if (!audioRef.current) return;
+
+    if (currentUser && currentUser.role === 'radio_admin' && !isRadio) {
+      console.warn("Radio admins cannot play standard library music tracks.");
+      return;
+    }
     
     // Clear live radio station status if playing normal track
     if (!isRadio) {
@@ -291,7 +375,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     // Determine correct audio stream path (checking FLAC/Lossless settings)
-    let streamUrl = trackToPlay.hls_playlist_path || trackToPlay.mp3_320_path || trackToPlay.stream_url;
+    let streamUrl = resolveStreamUrl(trackToPlay.hls_playlist_path || trackToPlay.mp3_320_path || trackToPlay.stream_url);
     
     if (!streamUrl) {
       console.warn("No stream URL available for track:", trackToPlay.id);
@@ -340,6 +424,17 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const playRadioStation = async (station: RadioStation) => {
+    if (currentUser && currentUser.role === 'radio_admin' && station.owner_id !== currentUser.id) {
+      console.warn("Radio admins cannot play other radio stations.");
+      showError("Access Denied", "You are not authorized to tune in to this station.");
+      return;
+    }
+
+    if (station.is_online === false) {
+      showError("Station Offline", "This radio station is currently offline.");
+      return;
+    }
+
     setActiveRadioStation(station);
     setIsRadioSync(true);
     setCurrentTrack(null);
@@ -363,10 +458,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           audioRef.current.currentTime = data.offset;
         }
       } else {
+        if (res.status === 404) {
+          showError("Station Offline", "This radio station is currently offline.");
+          setActiveRadioStation(null);
+          setIsRadioSync(false);
+          return;
+        }
         throw new Error();
       }
     } catch (e) {
-      // Offline mock radio streaming
+      // Offline mock radio streaming fallback
       const fallbackUrl = station.stream_url || 'https://pub1.freefm.lk/1.aac';
       const virtualTrack: Track = {
         id: station.id * 100,

@@ -21,6 +21,12 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+    @property
+    def real_role(self) -> str:
+        if hasattr(self, "_real_role") and self._real_role:
+            return self._real_role
+        return self.role
+
     artist_profile = relationship("Artist", back_populates="user", uselist=False)
     playlists = relationship("Playlist", back_populates="user")
     favorites = relationship("Favorite", back_populates="user")
@@ -135,6 +141,11 @@ class RadioStation(Base):
     # Dynamic playback metadata
     current_track_id = Column(Integer, ForeignKey("tracks.id", ondelete="SET NULL"), nullable=True)
     current_track_started_at = Column(DateTime, nullable=True)
+
+    # Dynamic program and RJ metadata
+    current_program_title = Column(String, nullable=True)
+    rj_name = Column(String, nullable=True)
+    rj_details = Column(String, nullable=True)
     
     schedules = relationship("RadioSchedule", back_populates="station", cascade="all, delete-orphan")
 

@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useAudio } from '../../context/AudioContext';
 import { Equalizer } from './Equalizer';
+import { useAuth } from '../../context/AuthContext';
 
 interface AudioPlayerProps {
   onToggleQueue: () => void;
@@ -28,6 +29,24 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     setRepeatMode, toggleShuffle, toggleFavorite, playNext, playPrevious,
     qualityLevelSetting
   } = useAudio();
+
+  const { userMode, currentUser } = useAuth();
+  const isAdminMode = userMode === 'admin' && currentUser && ['admin', 'radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role);
+  const isOffline = activeRadioStation && activeRadioStation.is_active === false;
+
+  const getRadioDisplayInfo = () => {
+    if (!activeRadioStation) return null;
+    if (activeRadioStation.is_active === false) {
+      return {
+        title: activeRadioStation.name,
+        subtitle: "Offline"
+      };
+    }
+    return {
+      title: activeRadioStation.name,
+      subtitle: activeRadioStation.current_program_title || ""
+    };
+  };
 
   if (!currentTrack && !activeRadioStation) return null;
 
@@ -87,12 +106,12 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
         <div className="min-w-0 flex-1 md:flex-none">
           <div className="flex items-center gap-1.5">
             <h4 className="font-bold text-white text-xs md:text-sm truncate max-w-[120px] md:max-w-[150px]">
-              {currentTrack?.title || activeRadioStation?.name}
+              {activeRadioStation ? getRadioDisplayInfo()?.title : currentTrack?.title}
             </h4>
-            {currentTrack && (
+            {currentTrack && !isAdminMode && (
               <button 
                 onClick={() => toggleFavorite(currentTrack.id)} 
-                className={`flex-shrink-0 transition ${isFav ? 'text-rose-500 scale-110' : 'text-slate-500 hover:text-slate-300'}`}
+                className={`flex-shrink-0 transition ${isFav ? 'text-rose-500 scale-110' : 'text-slate-500 hover:text-slate-350'}`}
                 title={isFav ? "Remove from Favorites" : "Add to Favorites"}
               >
                 <Heart className={`w-3.5 h-3.5 md:w-4 md:h-4 ${isFav ? 'fill-current' : ''}`} />
@@ -100,7 +119,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             )}
           </div>
           <p className="text-[10px] md:text-xs text-slate-400 truncate max-w-[120px] md:max-w-[180px]">
-            {currentTrack?.artist_name || activeRadioStation?.current_track_artist || activeRadioStation?.description}
+            {activeRadioStation ? getRadioDisplayInfo()?.subtitle : currentTrack?.artist_name}
           </p>
           {badge && (
             <span className={`inline-block text-[8px] md:text-[9px] font-extrabold px-1.5 py-0.5 rounded-full border mt-0.5 md:mt-1 uppercase ${badge.style}`}>
@@ -116,7 +135,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           {/* Shuffle button */}
           <button 
             onClick={toggleShuffle} 
-            disabled={isRadioSync}
+            disabled={isRadioSync || isAdminMode}
             className={`transition ${isShuffle ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'} disabled:opacity-30`}
             title="Shuffle Queue"
           >
@@ -126,7 +145,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           {/* Previous song */}
           <button 
             onClick={playPrevious} 
-            disabled={isRadioSync}
+            disabled={isRadioSync || isAdminMode}
             className="text-slate-400 hover:text-white transition disabled:opacity-30"
             title="Previous"
           >
@@ -136,8 +155,9 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           {/* Play/Pause */}
           <button
             onClick={togglePlay}
-            className="w-11 h-11 bg-white hover:bg-rose-50 active:scale-95 rounded-full flex items-center justify-center text-slate-950 font-bold shadow-md hover:shadow-rose-500/10 transition-all duration-300"
-            title={isPlaying ? "Pause" : "Play"}
+            disabled={isOffline}
+            className="w-11 h-11 bg-white hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none active:scale-95 rounded-full flex items-center justify-center text-slate-950 font-bold shadow-md hover:shadow-rose-500/10 transition-all duration-305"
+            title={isOffline ? "Station Offline" : isPlaying ? "Pause" : "Play"}
           >
             {isPlaying ? <Pause className="w-5 h-5 fill-current text-slate-950" /> : <Play className="w-5 h-5 fill-current text-slate-950 ml-0.5" />}
           </button>
@@ -145,7 +165,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           {/* Next song */}
           <button 
             onClick={playNext} 
-            disabled={isRadioSync}
+            disabled={isRadioSync || isAdminMode}
             className="text-slate-400 hover:text-white transition disabled:opacity-30"
             title="Next"
           >
@@ -159,7 +179,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               else if (repeatMode === 'all') setRepeatMode('one');
               else setRepeatMode('none');
             }} 
-            disabled={isRadioSync}
+            disabled={isRadioSync || isAdminMode}
             className={`transition relative ${repeatMode !== 'none' ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'} disabled:opacity-30`}
             title={`Repeat Mode: ${repeatMode}`}
           >
@@ -239,7 +259,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           </button>
 
           {/* Lyrics toggle */}
-          {hasLyrics && (
+          {hasLyrics && !isAdminMode && (
             <button 
               onClick={onToggleLyrics}
               className={`transition ${isLyricsOpen ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-300'}`}
@@ -255,8 +275,9 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       <div className="flex md:hidden items-center gap-3">
         <button
           onClick={togglePlay}
-          className="w-10 h-10 bg-white hover:bg-rose-50 active:scale-95 rounded-full flex items-center justify-center text-slate-950 font-bold shadow-md transition"
-          title={isPlaying ? "Pause" : "Play"}
+          disabled={isOffline}
+          className="w-10 h-10 bg-white hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none active:scale-95 rounded-full flex items-center justify-center text-slate-950 font-bold shadow-md transition"
+          title={isOffline ? "Station Offline" : isPlaying ? "Pause" : "Play"}
         >
           {isPlaying ? <Pause className="w-4 h-4 fill-current text-slate-950" /> : <Play className="w-4 h-4 fill-current text-slate-950 ml-0.5" />}
         </button>
@@ -270,7 +291,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           >
             <ListMusic className="w-[18px] h-[18px]" />
           </button>
-          {hasLyrics && (
+          {hasLyrics && !isAdminMode && (
             <button 
               onClick={onToggleLyrics}
               className={`transition p-1 rounded-lg ${isLyricsOpen ? 'text-rose-400 bg-rose-500/10' : 'text-slate-400'}`}
