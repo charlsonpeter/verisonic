@@ -32,7 +32,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
   const { userMode, currentUser } = useAuth();
   const isAdminMode = userMode === 'admin' && currentUser && ['admin', 'radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role);
-  const isOffline = activeRadioStation && activeRadioStation.is_active === false;
+  const isOffline = activeRadioStation && (activeRadioStation.is_online === false || activeRadioStation.is_active === false);
 
   const getRadioDisplayInfo = () => {
     if (!activeRadioStation) return null;
@@ -96,7 +96,15 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
   // Determine Badge colors based on track stats
   const getQualityBadge = () => {
-    if (activeRadioStation) return { text: "LIVE STREAM", style: "bg-rose-500/10 text-rose-400 border-rose-500/20" };
+    if (activeRadioStation) {
+      if (isOffline) {
+        return { text: "OFFLINE", style: "bg-slate-500/10 text-slate-400 border-slate-500/20" };
+      }
+      if (isPlaying) {
+        return { text: "STREAMING", style: "bg-rose-500/10 text-rose-400 border-rose-500/20" };
+      }
+      return { text: "PAUSED", style: "bg-amber-500/10 text-amber-400 border-amber-500/20" };
+    }
     return null;
   };
 

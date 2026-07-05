@@ -493,7 +493,14 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const togglePlay = () => {
     if (!audioRef.current) return;
     if (isPlaying) {
-      audioRef.current.pause();
+      if (activeRadioStation) {
+        // Unload live audio source to stop buffering/downloading
+        audioRef.current.pause();
+        audioRef.current.src = "";
+        audioRef.current.load();
+      } else {
+        audioRef.current.pause();
+      }
       setIsPlaying(false);
     } else {
       // Trigger checkout modal if already blocked at guest threshold
@@ -506,7 +513,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           return;
         }
       }
-      audioRef.current.play().catch(() => {});
+      
+      if (activeRadioStation && currentTrack) {
+        // Reconnect and load live stream fresh from live edge
+        const streamUrl = resolveStreamUrl(currentTrack.stream_url);
+        audioRef.current.src = streamUrl;
+        audioRef.current.load();
+        audioRef.current.play().catch(e => console.log("Live stream play blocked:", e));
+      } else {
+        audioRef.current.play().catch(() => {});
+      }
       setIsPlaying(true);
     }
   };
