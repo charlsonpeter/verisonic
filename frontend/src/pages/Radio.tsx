@@ -93,12 +93,45 @@ export const Radio: React.FC = () => {
     }
   };
 
+  const fallbackCopyText = (text: string, onSuccess: () => void) => {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.top = "0";
+    textArea.style.left = "0";
+    textArea.style.position = "fixed";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      const successful = document.execCommand('copy');
+      if (!successful) {
+        console.error("Fallback copy failed");
+      }
+    } catch (err) {
+      console.error("Fallback copy threw exception:", err);
+    }
+    document.body.removeChild(textArea);
+    onSuccess();
+  };
+
   const handleCopyKey = (stationId: number, key: string) => {
-    navigator.clipboard.writeText(key);
-    setCopiedKeyMap(prev => ({ ...prev, [stationId]: true }));
-    setTimeout(() => {
-      setCopiedKeyMap(prev => ({ ...prev, [stationId]: false }));
-    }, 2000);
+    const onSuccess = () => {
+      setCopiedKeyMap(prev => ({ ...prev, [stationId]: true }));
+      setTimeout(() => {
+        setCopiedKeyMap(prev => ({ ...prev, [stationId]: false }));
+      }, 2000);
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(key)
+        .then(onSuccess)
+        .catch(err => {
+          console.warn("Clipboard API failed, trying fallback:", err);
+          fallbackCopyText(key, onSuccess);
+        });
+    } else {
+      fallbackCopyText(key, onSuccess);
+    }
   };
 
 

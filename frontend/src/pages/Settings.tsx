@@ -76,11 +76,46 @@ export const Settings: React.FC = () => {
     }
   };
 
+  const fallbackCopyText = (text: string, onSuccess: () => void) => {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.top = "0";
+    textArea.style.left = "0";
+    textArea.style.position = "fixed";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      const successful = document.execCommand('copy');
+      if (successful) {
+        onSuccess();
+      } else {
+        console.error("Fallback copy failed");
+      }
+    } catch (err) {
+      console.error("Fallback copy threw exception:", err);
+    }
+    document.body.removeChild(textArea);
+  };
+
   const handleCopyKey = () => {
     if (!station) return;
-    navigator.clipboard.writeText(station.stream_key || '');
-    setCopiedKey(true);
-    setTimeout(() => setCopiedKey(false), 2000);
+    const textToCopy = station.stream_key || '';
+    const onSuccess = () => {
+      setCopiedKey(true);
+      setTimeout(() => setCopiedKey(false), 2000);
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(textToCopy)
+        .then(onSuccess)
+        .catch(err => {
+          console.warn("Clipboard API failed, trying fallback:", err);
+          fallbackCopyText(textToCopy, onSuccess);
+        });
+    } else {
+      fallbackCopyText(textToCopy, onSuccess);
+    }
   };
 
   // Settings mock toggles
