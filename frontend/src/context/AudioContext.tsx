@@ -254,6 +254,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const onPause = () => setIsPlaying(false);
     const onTimeUpdate = () => {
       setCurrentTime(audio.currentTime);
+      
+      // Eliminate browser buffering latency on live broadcasts by catching up to the live edge
+      if (activeRadioStationRef.current && !audio.paused && audio.buffered.length > 0) {
+        const bufferedEnd = audio.buffered.end(audio.buffered.length - 1);
+        const latency = bufferedEnd - audio.currentTime;
+        if (latency > 1.5) {
+          audio.currentTime = Math.max(0, bufferedEnd - 0.2);
+        }
+      }
+
       // Enforce guest limits here
       if (!isPremiumRef.current) {
         if (activeRadioStationRef.current && audio.currentTime >= 60) {

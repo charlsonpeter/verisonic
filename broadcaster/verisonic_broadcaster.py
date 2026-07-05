@@ -580,25 +580,10 @@ class PyQtBroadcasterApp(QMainWindow):
         ws = None
         audio_stream = None
         encoder = None
-        
-        def keep_alive_receiver(socket):
-            try:
-                while self.is_broadcasting:
-                    # recv() automatically intercepts and replies to server ping/pong frames under the hood
-                    msg = socket.recv()
-                    if msg is None:
-                        break
-            except Exception:
-                pass
-        
         try:
             # 1. Connect WebSocket
             connection_url = f"{server_url}?stream_key={stream_key}"
-            ws = websocket.create_connection(connection_url, timeout=5)
-            
-            # Start background thread to handle ping/pong frames
-            receiver_thread = threading.Thread(target=keep_alive_receiver, args=(ws,), daemon=True)
-            receiver_thread.start()
+            ws = websocket.create_connection(connection_url, timeout=20)
             
             # Connect success - set state
             # Query supported channels for the chosen device
@@ -637,7 +622,28 @@ class PyQtBroadcasterApp(QMainWindow):
             audio_stream.start()
             
             # 2. Main capture loop
+            import select
             while self.is_broadcasting:
+                try:
+                    if ws and ws.sock:
+                        ready_to_read, _, _ = select.select([ws.sock], [], [], 0.0)
+                        if ready_to_read:
+                            frame = ws.recv_frame()
+                            if frame is None:
+                                self.broadcast_error = "Connection closed by server."
+                                break
+                            
+                            # Opcode 9 is Ping (RFC 6455)
+                            if frame.opcode == 9:
+                                ws.pong(frame.data)
+                            # Opcode 8 is Close (RFC 6455)
+                            elif frame.opcode == 8:
+                                self.broadcast_error = "Connection closed by server."
+                                break
+                except Exception as se:
+                    self.broadcast_error = f"Connection error: {se}"
+                    break
+
                 try:
                     data_chunk = self.audio_queue.get(timeout=0.1)
                 except queue.Empty:
@@ -735,6 +741,8 @@ class PyQtBroadcasterApp(QMainWindow):
                 self.device_combo.setEnabled(True)
                 self.key_entry.setEnabled(True)
                 self.show_key_cb.setEnabled(True)
+                if hasattr(self, 'tray_toggle_action'):
+                    self.tray_toggle_action.setText("Start Broadcast")
 
 
 if __name__ == "__main__":
