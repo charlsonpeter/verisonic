@@ -50,21 +50,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
   // For 24h live clock display using client time and timezone
   const [secondsSinceMidnight, setSecondsSinceMidnight] = React.useState(0);
-  const [timezoneAbbr, setTimezoneAbbr] = React.useState('');
 
   React.useEffect(() => {
     if (!isRadioSync) return;
     
-    // Resolve timezone abbreviation dynamically
-    try {
-      const tz = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' })
-        .formatToParts(new Date())
-        .find(part => part.type === 'timeZoneName')?.value || '';
-      setTimezoneAbbr(tz);
-    } catch (e) {
-      console.warn("Failed to resolve timezone abbreviation:", e);
-    }
-
     const updateTime = () => {
       const now = new Date();
       setSecondsSinceMidnight(now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds());
@@ -239,7 +228,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             disabled={isRadioSync}
             className="w-full accent-rose-500 h-1 bg-slate-800 rounded-lg outline-none cursor-pointer audio-knob"
           />
-          <span>{isRadioSync ? `24h Live${timezoneAbbr ? ` (${timezoneAbbr})` : ''}` : formatTime(duration)}</span>
+          <span>{isRadioSync ? "24:00:00" : formatTime(duration)}</span>
         </div>
       </div>
 
