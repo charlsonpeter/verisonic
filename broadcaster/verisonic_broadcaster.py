@@ -41,7 +41,7 @@ except ImportError:
     MISSING_DEPS.append("websocket-client")
 
 # Define fixed server stream URL (with env override)
-DEFAULT_SERVER_URL = os.environ.get("VERISONIC_SERVER_URL", "ws://localhost:8000/api/radio/stream/ws")
+DEFAULT_SERVER_URL = os.environ.get("VERISONIC_SERVER_URL", "ws://54.66.243.141:3000/api/radio/stream/ws")
 
 
 # =====================================================================
@@ -581,10 +581,24 @@ class PyQtBroadcasterApp(QMainWindow):
         audio_stream = None
         encoder = None
         
+        def keep_alive_receiver(socket):
+            try:
+                while self.is_broadcasting:
+                    # recv() automatically intercepts and replies to server ping/pong frames under the hood
+                    msg = socket.recv()
+                    if msg is None:
+                        break
+            except Exception:
+                pass
+        
         try:
             # 1. Connect WebSocket
             connection_url = f"{server_url}?stream_key={stream_key}"
             ws = websocket.create_connection(connection_url, timeout=5)
+            
+            # Start background thread to handle ping/pong frames
+            receiver_thread = threading.Thread(target=keep_alive_receiver, args=(ws,), daemon=True)
+            receiver_thread.start()
             
             # Connect success - set state
             # Query supported channels for the chosen device
