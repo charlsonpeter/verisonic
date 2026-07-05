@@ -48,6 +48,45 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     };
   };
 
+  // For 24h live clock display using client time and timezone
+  const [secondsSinceMidnight, setSecondsSinceMidnight] = React.useState(0);
+  const [timezoneAbbr, setTimezoneAbbr] = React.useState('');
+
+  React.useEffect(() => {
+    if (!isRadioSync) return;
+    
+    // Resolve timezone abbreviation dynamically
+    try {
+      const tz = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' })
+        .formatToParts(new Date())
+        .find(part => part.type === 'timeZoneName')?.value || '';
+      setTimezoneAbbr(tz);
+    } catch (e) {
+      console.warn("Failed to resolve timezone abbreviation:", e);
+    }
+
+    const updateTime = () => {
+      const now = new Date();
+      setSecondsSinceMidnight(now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds());
+    };
+    
+    updateTime();
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
+  }, [isRadioSync]);
+
+  const format24hTime = (totalSeconds: number) => {
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    
+    const hStr = String(hours).padStart(2, '0');
+    const mStr = String(minutes).padStart(2, '0');
+    const sStr = String(seconds).padStart(2, '0');
+    
+    return `${hStr}:${mStr}:${sStr}`;
+  };
+
   if (!currentTrack && !activeRadioStation) return null;
 
   const formatTime = (time: number) => {
@@ -77,14 +116,12 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   return (
     <footer className={`fixed ${activeTab !== 'landing' ? 'bottom-[76px] md:bottom-6' : 'bottom-6'} left-4 right-4 md:left-1/2 md:-translate-x-1/2 md:max-w-6xl h-20 md:h-24 floating-deck rounded-2xl md:rounded-3xl flex items-center justify-between px-4 md:px-6 z-30 transition-all duration-300`}>
       {/* Thin top progress line for mobile */}
-      {!isRadioSync && (
-        <div className="absolute top-0 left-0 right-0 h-[2px] bg-white/5 rounded-t-2xl md:hidden overflow-hidden">
-          <div 
-            className="h-full bg-gradient-to-r from-rose-500 to-pink-500 transition-all duration-100" 
-            style={{ width: `${(currentTime / (duration || 1)) * 100}%` }}
-          />
-        </div>
-      )}
+      <div className="absolute top-0 left-0 right-0 h-[2px] bg-white/5 rounded-t-2xl md:hidden overflow-hidden">
+        <div 
+          className="h-full bg-gradient-to-r from-rose-500 to-pink-500 transition-all duration-100" 
+          style={{ width: isRadioSync ? `${(secondsSinceMidnight / 86400) * 100}%` : `${(currentTime / (duration || 1)) * 100}%` }}
+        />
+      </div>
 
       {/* Background artwork blur effect */}
       {currentTrack?.cover_art_url && (
@@ -192,17 +229,17 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
         {/* Media progress bar */}
         <div className="w-full flex items-center gap-3 text-[10px] text-slate-500 font-bold font-sans">
-          <span>{formatTime(currentTime)}</span>
+          <span>{isRadioSync ? format24hTime(secondsSinceMidnight) : formatTime(currentTime)}</span>
           <input 
             type="range" 
             min="0"
-            max={duration || 100}
-            value={currentTime}
+            max={isRadioSync ? 86400 : (duration || 100)}
+            value={isRadioSync ? secondsSinceMidnight : currentTime}
             onChange={(e) => seek(parseFloat(e.target.value))}
             disabled={isRadioSync}
             className="w-full accent-rose-500 h-1 bg-slate-800 rounded-lg outline-none cursor-pointer audio-knob"
           />
-          <span>{formatTime(duration)}</span>
+          <span>{isRadioSync ? `24h Live${timezoneAbbr ? ` (${timezoneAbbr})` : ''}` : formatTime(duration)}</span>
         </div>
       </div>
 
