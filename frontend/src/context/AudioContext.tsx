@@ -259,8 +259,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (activeRadioStationRef.current && !audio.paused && audio.buffered.length > 0) {
         const bufferedEnd = audio.buffered.end(audio.buffered.length - 1);
         const latency = bufferedEnd - audio.currentTime;
-        if (latency > 1.5) {
-          audio.currentTime = Math.max(0, bufferedEnd - 0.2);
+        if (latency > 3.0) {
+          audio.currentTime = Math.max(0, bufferedEnd - 1.0);
         }
       }
 
