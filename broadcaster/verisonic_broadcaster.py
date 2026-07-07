@@ -372,11 +372,13 @@ class PyQtBroadcasterApp(QMainWindow):
         self.refresh_token = None
         self.last_token_check_time = 0
         self.saved_email = ""
+        self.saved_bitrate = 320  # Default to 320 kbps (Audiophile / Ultra High)
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, "r") as f:
                     config = json.load(f)
                     self.saved_email = config.get("email", "")
+                    self.saved_bitrate = config.get("bitrate", 320)
             except Exception as e:
                 print("Failed to load config:", e)
 
@@ -384,7 +386,8 @@ class PyQtBroadcasterApp(QMainWindow):
         try:
             with open(self.config_path, "w") as f:
                 json.dump({
-                    "email": self.saved_email
+                    "email": self.saved_email,
+                    "bitrate": self.saved_bitrate
                 }, f)
         except Exception as e:
             print("Failed to save config:", e)
@@ -650,6 +653,28 @@ class PyQtBroadcasterApp(QMainWindow):
         self.device_combo.addItems(device_names if device_names else ["No Input Devices Found"])
         card_layout.addWidget(self.device_combo)
         
+        # Stream Quality / Bitrate Selector
+        quality_lbl = QLabel("STREAM QUALITY / BITRATE")
+        quality_lbl.setFont(QFont("Helvetica Neue", 8, QFont.Bold))
+        quality_lbl.setStyleSheet("color: #94a3b8;")
+        card_layout.addWidget(quality_lbl)
+        
+        self.bitrate_combo = QComboBox()
+        self.bitrate_combo.addItems([
+            "320 kbps (Audiophile / Ultra High)",
+            "256 kbps (Very High)",
+            "192 kbps (High)",
+            "128 kbps (Standard)",
+            "96 kbps (Mobile / Low Bandwidth)"
+        ])
+        
+        # Select the saved bitrate
+        bitrate_map = {320: 0, 256: 1, 192: 2, 128: 3, 96: 4}
+        default_index = bitrate_map.get(self.saved_bitrate, 0)
+        self.bitrate_combo.setCurrentIndex(default_index)
+        
+        card_layout.addWidget(self.bitrate_combo)
+        
         # Set default input selection
         try:
             default_input_id = sd.default.device[0]
@@ -854,6 +879,13 @@ class PyQtBroadcasterApp(QMainWindow):
         self.live_device_combo.setCurrentIndex(selected_idx)
         self.live_device_combo.blockSignals(False)
         
+        # Save config with selected bitrate
+        bitrate_index = self.bitrate_combo.currentIndex()
+        bitrate_opts = [320, 256, 192, 128, 96]
+        if bitrate_index >= 0 and bitrate_index < len(bitrate_opts):
+            self.saved_bitrate = bitrate_opts[bitrate_index]
+        self.save_config()
+
         self.is_broadcasting = True
         self.connection_status = "Connecting..."
         self.is_connected = False
@@ -871,7 +903,7 @@ class PyQtBroadcasterApp(QMainWindow):
         # Run live broker
         self.stream_thread = threading.Thread(
             target=self.streaming_worker,
-            args=(device_id, server_url, stream_key),
+            args=(device_id, server_url, stream_key, self.saved_bitrate),
             daemon=True
         )
         self.stream_thread.start()
@@ -889,7 +921,7 @@ class PyQtBroadcasterApp(QMainWindow):
     # =====================================================================
     # STREAMING WORKER THREAD & RECONNECTION
     # =====================================================================
-    def streaming_worker(self, device_id, server_url, stream_key):
+    def streaming_worker(self, device_id, server_url, stream_key, bitrate):
         """Worker thread that encodes captured PCM chunks to MP3 and streams to WebSocket."""
         attempts = 0
         max_attempts = 100
@@ -948,10 +980,10 @@ class PyQtBroadcasterApp(QMainWindow):
                             print("Failed to query device channels:", ce)
                             
                         encoder = lameenc.Encoder()
-                        encoder.set_bit_rate(128)
+                        encoder.set_bit_rate(bitrate)
                         encoder.set_in_sample_rate(44100)
                         encoder.set_channels(channels)
-                        encoder.set_quality(2)
+                        encoder.set_quality(0)
                         
                         self.audio_queue = queue.Queue(maxsize=100)
                         
@@ -1032,7 +1064,8 @@ class PyQtBroadcasterApp(QMainWindow):
                         self.current_volume_db = -60.0
                         self.current_frequency_levels = [0] * 20
                     
-                    pcm_data = (data_chunk * 32767).astype(np.int16).tobytes()
+                    clipped_chunk = np.clip(data_chunk, -1.0, 1.0)
+                    pcm_data = (clipped_chunk * 32767).astype(np.int16).tobytes()
                     mp3_data = encoder.encode(pcm_data)
                     
                     if mp3_data:
@@ -1123,7 +1156,7 @@ class PyQtBroadcasterApp(QMainWindow):
                 minutes, seconds = divmod(remainder, 60)
                 time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
                 mb_sent = self.bytes_sent / (1024 * 1024)
-                self.stats_lbl.setText(f"Status: LIVE  |  Sent: {mb_sent:.2f} MB  |  Time: {time_str}")
+                self.stats_lbl.setText(f"Status: LIVE ({self.saved_bitrate} kbps)  |  Sent: {mb_sent:.2f} MB  |  Time: {time_str}")
             else:
                 color = "#f59e0b" if (int(time.time() * 2) % 2 == 0) else "#78350f"
                 self.live_indicator.setStyleSheet(f"color: {color};")
