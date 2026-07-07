@@ -6,7 +6,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from typing import List, Dict, Set
+from typing import List, Dict, Set, Optional
 
 from app.db.session import get_db
 from app.models import RadioStation, RadioSchedule, Track, Artist
@@ -375,26 +375,51 @@ def get_station_stream_sync(
 @router.websocket("/stream/ws")
 async def websocket_stream_endpoint(
     websocket: WebSocket,
-    stream_key: str,
+    stream_key: Optional[str] = None,
+    token: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    # Verify stream key
-    station = db.query(RadioStation).filter(RadioStation.stream_key == stream_key).first()
-    if not station:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid Stream Key")
+    station = None
+    if token:
+        # Validate JWT token
+        try:
+            from jose import jwt
+            from app.core.config import settings
+            from app.core.security import ALGORITHM
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+            user_id = int(payload.get("sub"))
+            # Find station owned by this user
+            station = db.query(RadioStation).filter(RadioStation.owner_id == user_id).first()
+        except Exception as e:
+            print("WebSocket token validation failed:", e)
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid Token")
+            return
+    elif stream_key:
+        # Verify stream key
+        station = db.query(RadioStation).filter(RadioStation.stream_key == stream_key).first()
+        if not station:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid Stream Key")
+            return
+
+        # Check key expiration (5 minutes validity for connecting)
+        try:
+            parts = stream_key.split("_")
+            if len(parts) >= 4:  # "rs", "key", hex, timestamp
+                timestamp = int(parts[-1])
+                import time
+                if time.time() - timestamp > 300:  # 5 minutes
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Stream Key Expired")
+                    return
+        except Exception as e:
+            print("Error checking stream key expiration:", e)
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid Stream Key Format")
+            return
+    else:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Authentication Required")
         return
 
-    # Check key expiration (5 minutes validity for connecting)
-    try:
-        parts = stream_key.split("_")
-        if len(parts) >= 4:  # "rs", "key", hex, timestamp
-            timestamp = int(parts[-1])
-            if time.time() - timestamp > 300:  # 5 minutes
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Stream Key Expired")
-                return
-    except Exception as e:
-        print("Error checking stream key expiration:", e)
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid Stream Key Format")
+    if not station:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Station Not Found")
         return
 
     await websocket.accept()
