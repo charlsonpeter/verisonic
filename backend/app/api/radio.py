@@ -377,6 +377,7 @@ async def websocket_stream_endpoint(
     websocket: WebSocket,
     stream_key: Optional[str] = None,
     token: Optional[str] = None,
+    station_id: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     station = None
@@ -388,8 +389,26 @@ async def websocket_stream_endpoint(
             from app.core.security import ALGORITHM
             payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
             user_id = int(payload.get("sub"))
-            # Find station owned by this user
-            station = db.query(RadioStation).filter(RadioStation.owner_id == user_id).first()
+            
+            # Fetch user to verify role and permissions
+            from app.models import User
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="User Not Found")
+                return
+                
+            if station_id:
+                station = db.query(RadioStation).filter(RadioStation.id == station_id).first()
+                if not station:
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Station Not Found")
+                    return
+                # Check permissions: must be admin or the station owner
+                if user.role != "admin" and station.owner_id != user.id:
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Not Authorized")
+                    return
+            else:
+                # Find station owned by this user
+                station = db.query(RadioStation).filter(RadioStation.owner_id == user_id).first()
         except Exception as e:
             print("WebSocket token validation failed:", e)
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid Token")

@@ -369,12 +369,13 @@ class PyQtBroadcasterApp(QMainWindow):
     def load_config(self):
         self.config_path = os.path.expanduser("~/.verisonic_broadcaster.json")
         self.auth_token = None
+        self.refresh_token = None
+        self.last_token_check_time = 0
         self.saved_email = ""
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, "r") as f:
                     config = json.load(f)
-                    self.auth_token = config.get("auth_token")
                     self.saved_email = config.get("email", "")
             except Exception as e:
                 print("Failed to load config:", e)
@@ -383,7 +384,6 @@ class PyQtBroadcasterApp(QMainWindow):
         try:
             with open(self.config_path, "w") as f:
                 json.dump({
-                    "auth_token": self.auth_token,
                     "email": self.saved_email
                 }, f)
         except Exception as e:
@@ -391,6 +391,7 @@ class PyQtBroadcasterApp(QMainWindow):
 
     def clear_config(self):
         self.auth_token = None
+        self.refresh_token = None
         self.saved_email = ""
         if os.path.exists(self.config_path):
             try:
@@ -512,6 +513,7 @@ class PyQtBroadcasterApp(QMainWindow):
         try:
             res, _ = api_request("/auth/login", method="POST", data={"email": email, "password": password})
             self.auth_token = res.get("access_token")
+            self.refresh_token = res.get("refresh_token")
             self.saved_email = email
             
             # Verify admin credentials
@@ -684,7 +686,7 @@ class PyQtBroadcasterApp(QMainWindow):
                 self.connect_btn.setEnabled(False)
             else:
                 for st in stations:
-                    self.station_combo.addItem(f"{st.get('name')} (ID: {st.get('id')})")
+                    self.station_combo.addItem(st.get('name', 'Unknown Station'))
                 self.station_combo.setEnabled(True)
                 self.connect_btn.setEnabled(True)
                 self.on_station_selected(0)
@@ -799,6 +801,7 @@ class PyQtBroadcasterApp(QMainWindow):
                 raise ValueError("Format mismatch")
             timestamp = int(parts[-1])
         except Exception:
+            self.key_entry.clear()
             QMessageBox.critical(self, "Invalid Key Format", "The connection key format is invalid. Please copy it directly from your radio station dashboard.")
             return
 
@@ -819,6 +822,7 @@ class PyQtBroadcasterApp(QMainWindow):
                         break
                         
         if not matched:
+            self.key_entry.clear()
             QMessageBox.critical(
                 self, "Invalid Key", 
                 "The connection key does not match the selected radio station. "
@@ -828,6 +832,7 @@ class PyQtBroadcasterApp(QMainWindow):
 
         # Check key expiration (validity is 5 minutes from generation, with 30s clock skew tolerance)
         if time.time() - timestamp > 330:
+            self.key_entry.clear()
             QMessageBox.critical(
                 self, "Connection Key Expired", 
                 "This connection key has expired. Please regenerate a new key in your web dashboard, copy it, and paste it here."
@@ -860,6 +865,9 @@ class PyQtBroadcasterApp(QMainWindow):
         
         self.stacked_widget.setCurrentIndex(2)
         
+        if hasattr(self, 'tray_toggle_action'):
+            self.tray_toggle_action.setText("Stop Broadcast")
+        
         # Run live broker
         self.stream_thread = threading.Thread(
             target=self.streaming_worker,
@@ -873,6 +881,10 @@ class PyQtBroadcasterApp(QMainWindow):
         self.stacked_widget.setCurrentIndex(1)
         self.live_indicator.setStyleSheet("color: #475569;")
         self.custom_vu.set_levels([0] * 20)
+        self.key_entry.clear()
+        
+        if hasattr(self, 'tray_toggle_action'):
+            self.tray_toggle_action.setText("Start Broadcast")
 
     # =====================================================================
     # STREAMING WORKER THREAD & RECONNECTION
@@ -900,6 +912,8 @@ class PyQtBroadcasterApp(QMainWindow):
                         
                 if attempts > 0 and self.auth_token:
                     connection_url = f"{server_url}?token={self.auth_token}"
+                    if self.selected_station_id:
+                        connection_url += f"&station_id={self.selected_station_id}"
                 else:
                     connection_url = f"{server_url}?stream_key={current_stream_key}"
                 self.connection_status = "Connecting to server..."
@@ -1051,6 +1065,15 @@ class PyQtBroadcasterApp(QMainWindow):
                         ws.close()
                     except Exception:
                         pass
+                
+                # If the first connection attempt fails due to an auth/expiration error,
+                # do not retry. Stop and show the error message.
+                err_msg = str(e)
+                is_auth_error = any(kw in err_msg for kw in ["403", "Forbidden", "1008", "Expired"])
+                if attempts == 0 and is_auth_error:
+                    self.broadcast_error = "Invalid or expired connection key. Please verify your key and try again."
+                    self.is_broadcasting = False
+                    break
                         
                 attempts += 1
                 if attempts > max_attempts:
@@ -1072,6 +1095,12 @@ class PyQtBroadcasterApp(QMainWindow):
 
     def update_gui_loop(self):
         """Monitors stats and updates volume visuals on the main thread loop."""
+        # Check and refresh token if needed
+        now = time.time()
+        if hasattr(self, 'last_token_check_time') and (now - self.last_token_check_time > 3600):
+            self.last_token_check_time = now
+            self.check_and_refresh_token()
+
         if hasattr(self, 'broadcast_error') and self.broadcast_error:
             err = self.broadcast_error
             self.broadcast_error = None
@@ -1103,6 +1132,40 @@ class PyQtBroadcasterApp(QMainWindow):
         else:
             self.custom_vu.set_levels([0] * 20)
             self.live_indicator.setStyleSheet("color: #475569;")
+
+    def check_and_refresh_token(self):
+        if not self.auth_token or not self.refresh_token:
+            return
+        try:
+            parts = self.auth_token.split('.')
+            if len(parts) != 3:
+                return
+            payload_b64 = parts[1]
+            payload_b64 += '=' * (-len(payload_b64) % 4)
+            import base64
+            payload = json.loads(base64.b64decode(payload_b64).decode('utf-8'))
+            exp = payload.get('exp', 0)
+            if exp > 0 and (exp - time.time() < 86400):
+                print("Access token is expiring soon, refreshing...")
+                threading.Thread(target=self.perform_token_refresh, daemon=True).start()
+        except Exception as e:
+            print("Failed to check token expiration:", e)
+
+    def perform_token_refresh(self):
+        try:
+            res, _ = api_request(
+                "/auth/refresh", 
+                method="POST", 
+                data={"refresh_token": self.refresh_token}
+            )
+            new_access_token = res.get("access_token")
+            new_refresh_token = res.get("refresh_token")
+            if new_access_token and new_refresh_token:
+                self.auth_token = new_access_token
+                self.refresh_token = new_refresh_token
+                print("Token refreshed successfully.")
+        except Exception as e:
+            print("Token refresh failed:", e)
 
     # =====================================================================
     # COMPONENT HELPERS & UTILITIES
@@ -1161,9 +1224,18 @@ class PyQtBroadcasterApp(QMainWindow):
     def toggle_broadcasting_from_tray(self):
         if self.is_broadcasting:
             self.handle_stop_broadcast()
+            # Reset tray menu text to "Start Broadcast"
+            self.tray_toggle_action.setText("Start Broadcast")
         else:
             if self.stacked_widget.currentIndex() == 1:
+                # Ensure a connection key is provided before attempting to connect
+                if not self.key_entry.text().strip():
+                    QMessageBox.warning(self, "Missing Connection Key", "Please enter a connection key before starting the broadcast.")
+                    self.show_and_activate()
+                    return
                 self.handle_connect()
+                # Change tray menu text to "Stop Broadcast" after starting
+                self.tray_toggle_action.setText("Stop Broadcast")
             else:
                 self.show_and_activate()
 
@@ -1207,6 +1279,7 @@ class PyQtBroadcasterApp(QMainWindow):
         QTimer.singleShot(100, lambda: self.set_mac_dock_icon_visible(True))
 
     def quit_application(self):
+        self.clear_config()
         self.quit_from_tray = True
         QApplication.quit()
 

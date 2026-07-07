@@ -7,7 +7,7 @@ from typing import List, Optional
 from app.db.session import get_db
 from app.models import User, Artist
 from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, Token, UserResponse, TokenPayload, ArtistCreate, ArtistResponse
-from app.core.security import verify_password, get_password_hash, create_access_token, ALGORITHM
+from app.core.security import verify_password, get_password_hash, create_access_token, create_refresh_token, ALGORITHM
 from app.core.config import settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -29,7 +29,8 @@ def login_oauth2(
         )
     return {
         "access_token": create_access_token(subject=user.id),
-        "token_type": "bearer"
+        "token_type": "bearer",
+        "refresh_token": create_refresh_token(subject=user.id)
     }
 
 def get_current_user(
@@ -159,7 +160,8 @@ def login(user_in: UserLogin, db: Session = Depends(get_db)):
         
     return {
         "access_token": create_access_token(subject=user.id),
-        "token_type": "bearer"
+        "token_type": "bearer",
+        "refresh_token": create_refresh_token(subject=user.id)
     }
 
 @router.post("/google", response_model=Token)
@@ -190,7 +192,8 @@ def login_google(body: dict, db: Session = Depends(get_db)):
         
     return {
         "access_token": create_access_token(subject=user.id),
-        "token_type": "bearer"
+        "token_type": "bearer",
+        "refresh_token": create_refresh_token(subject=user.id)
     }
 
 @router.get("/me", response_model=UserResponse)
@@ -324,3 +327,38 @@ def change_password(
     current_user.hashed_password = get_password_hash(pw_in.new_password)
     db.commit()
     return {"detail": "Password updated successfully"}
+
+@router.post("/refresh", response_model=Token)
+def refresh_token(
+    body: dict,
+    db: Session = Depends(get_db)
+):
+    refresh_token = body.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Refresh token is required"
+        )
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(refresh_token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        token_type: str = payload.get("type")
+        if user_id is None or token_type != "refresh":
+            raise credentials_exception
+    except Exception:
+        raise credentials_exception
+        
+    user = db.query(User).filter(User.id == int(user_id)).first()
+    if user is None or not user.is_active:
+        raise credentials_exception
+        
+    return {
+        "access_token": create_access_token(subject=user.id),
+        "token_type": "bearer",
+        "refresh_token": create_refresh_token(subject=user.id)
+    }
