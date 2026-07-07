@@ -20,6 +20,13 @@ try:
 except ImportError:
     pass
 
+# Try importing websockets for async WebSocket ingest
+try:
+    import websockets
+    HAS_WEBSOCKETS = True
+except ImportError:
+    HAS_WEBSOCKETS = False
+
 # Dependency tracking
 MISSING_DEPS = []
 
@@ -57,61 +64,26 @@ except ImportError:
 # Define fixed server stream URL (with env override)
 DEFAULT_SERVER_URL = os.environ.get("VERISONIC_SERVER_URL", "ws://54.66.243.141:3000/api/radio/stream/ws")
 
+# AudioStreamTrack is only needed if we ever do full WebRTC ingest in future
 if USE_WEBRTC:
     class AudioStreamTrack(MediaStreamTrack):
         kind = "audio"
 
-        def __init__(self, app_instance, queue_obj, channels=2, sample_rate=44100):
+        def __init__(self, webrtc_queue, channels=2, sample_rate=44100):
             super().__init__()
-            self.app = app_instance
-            self.queue = queue_obj
+            self.webrtc_queue = webrtc_queue
             self.channels = channels
             self.sample_rate = sample_rate
             self.pts = 0
 
         async def recv(self):
+            # Simply wait for a pre-processed chunk from the VU loop
             while True:
                 try:
-                    data_chunk = self.queue.get_nowait()
+                    pcm_data = self.webrtc_queue.get_nowait()
                     break
                 except queue.Empty:
-                    await asyncio.sleep(0.01)
-
-            if data_chunk.size > 0:
-                if data_chunk.ndim > 1:
-                    mono_chunk = np.mean(data_chunk, axis=1)
-                else:
-                    mono_chunk = data_chunk
-                    
-                fft_data = np.abs(np.fft.rfft(mono_chunk)) / len(mono_chunk)
-                fft_data = fft_data[1:]  # Skip DC offset
-                
-                num_bands = 20
-                max_bin = min(400, len(fft_data))
-                log_indices = np.logspace(0, np.log10(max_bin), num_bands + 1, dtype=int)
-                
-                new_levels = []
-                for i in range(num_bands):
-                    start_idx = log_indices[i]
-                    end_idx = max(start_idx + 1, log_indices[i+1])
-                    amp = np.mean(fft_data[start_idx:end_idx])
-                    boost = 1.0 + (i / num_bands) * 5.0
-                    amp = amp * boost
-                    db_val = 20 * math.log10(amp) if amp > 1e-5 else -80.0
-                    val = int((db_val + 50.0) / 45.0 * 100)
-                    val = max(0, min(100, val))
-                    new_levels.append(val)
-                
-                self.app.current_frequency_levels = new_levels
-                
-                rms = np.sqrt(np.mean(mono_chunk**2))
-                self.app.current_volume_db = 20 * math.log10(rms) if rms > 1e-4 else -60.0
-            else:
-                self.app.current_volume_db = -60.0
-                self.app.current_frequency_levels = [0] * 20
-
-            clipped_chunk = np.clip(data_chunk, -1.0, 1.0)
-            pcm_data = (clipped_chunk * 32767).astype(np.int16)
+                    await asyncio.sleep(0.005)
 
             frame = AudioFrame.from_ndarray(
                 pcm_data.T,
@@ -997,13 +969,16 @@ class PyQtBroadcasterApp(QMainWindow):
             self.tray_toggle_action.setText("Start Broadcast")
 
     # =====================================================================
-    # STREAMING WORKER THREAD & RECONNECTION
+    # STREAMING WORKER THREAD & RECONNECTION  (WebSocket ingest)
     # =====================================================================
     def streaming_worker(self, device_id, server_url, stream_key, bitrate):
+        """Worker thread that encodes captured PCM chunks to MP3 and streams via WebSocket."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            loop.run_until_complete(self.async_streaming_worker(device_id, server_url, stream_key, bitrate))
+            loop.run_until_complete(
+                self._async_ws_worker(device_id, server_url, stream_key, bitrate)
+            )
         except Exception as e:
             self.broadcast_error = str(e)
             self.is_connected = False
@@ -1011,27 +986,83 @@ class PyQtBroadcasterApp(QMainWindow):
         finally:
             loop.close()
 
-    async def async_streaming_worker(self, device_id, server_url, stream_key, bitrate):
-        if not USE_WEBRTC:
-            raise Exception("WebRTC dependencies (aiortc/av) not found. Please install them to stream.")
-
+    async def _async_ws_worker(self, device_id, server_url, stream_key, bitrate):
+        """Async WebSocket ingest worker with concurrent VU meter loop."""
         attempts = 0
-        max_attempts = 10
+        max_attempts = 100
         self.active_device_id = device_id
         current_stream_device_id = None
         audio_stream = None
+        encoder = None
+        vu_task = None
+
+        async def vu_loop():
+            """Continuously reads mic chunks, computes VU bands, encodes MP3,
+            and puts encoded data in self.mp3_queue for the WebSocket sender."""
+            nonlocal encoder
+            while self.is_broadcasting:
+                try:
+                    data_chunk = self.audio_queue.get_nowait()
+                except queue.Empty:
+                    await asyncio.sleep(0.005)
+                    continue
+
+                if data_chunk.size > 0:
+                    mono_chunk = np.mean(data_chunk, axis=1) if data_chunk.ndim > 1 else data_chunk
+
+                    fft_data = np.abs(np.fft.rfft(mono_chunk)) / len(mono_chunk)
+                    fft_data = fft_data[1:]
+
+                    num_bands = 20
+                    max_bin = min(400, len(fft_data))
+                    log_indices = np.logspace(0, np.log10(max_bin), num_bands + 1, dtype=int)
+
+                    new_levels = []
+                    for i in range(num_bands):
+                        start_idx = log_indices[i]
+                        end_idx = max(start_idx + 1, log_indices[i + 1])
+                        amp = np.mean(fft_data[start_idx:end_idx])
+                        boost = 1.0 + (i / num_bands) * 5.0
+                        amp = amp * boost
+                        db_val = 20 * math.log10(amp) if amp > 1e-5 else -80.0
+                        val = int((db_val + 50.0) / 45.0 * 100)
+                        new_levels.append(max(0, min(100, val)))
+
+                    self.current_frequency_levels = new_levels
+                    rms = np.sqrt(np.mean(mono_chunk ** 2))
+                    self.current_volume_db = 20 * math.log10(rms) if rms > 1e-4 else -60.0
+                else:
+                    self.current_volume_db = -60.0
+                    self.current_frequency_levels = [0] * 20
+
+                # Encode to MP3 and queue for WebSocket send
+                if encoder is not None:
+                    clipped = np.clip(data_chunk, -1.0, 1.0)
+                    pcm_bytes = (clipped * 32767).astype(np.int16).tobytes()
+                    mp3_data = encoder.encode(pcm_bytes)
+                    if mp3_data:
+                        try:
+                            self.mp3_queue.put_nowait(mp3_data)
+                        except queue.Full:
+                            pass
 
         while self.is_broadcasting:
-            pc = None
+            ws = None
             try:
                 if attempts > 0:
                     self.connection_status = f"Reconnecting (Attempt {attempts}/{max_attempts})..."
                     self.is_connected = False
                     await asyncio.sleep(min(10, 2 + (attempts - 1) * 2))
 
-                self.connection_status = "Connecting via WebRTC..."
-                
-                # Query input device channel configuration
+                # Build WebSocket URL
+                if self.auth_token and self.selected_station_id:
+                    ws_url = f"{server_url}?token={self.auth_token}&station_id={self.selected_station_id}"
+                else:
+                    ws_url = f"{server_url}?stream_key={stream_key}"
+
+                self.connection_status = "Connecting to server..."
+
+                # Query device channels
                 channels = 2
                 try:
                     device_info = sd.query_devices(self.active_device_id, 'input')
@@ -1040,7 +1071,7 @@ class PyQtBroadcasterApp(QMainWindow):
                 except Exception as ce:
                     print("Failed to query device channels:", ce)
 
-                # Initialize audio input stream if not initialized or swapped
+                # Initialize audio input stream if not already done or device swapped
                 if audio_stream is None or self.active_device_id != current_stream_device_id:
                     if audio_stream:
                         try:
@@ -1048,15 +1079,22 @@ class PyQtBroadcasterApp(QMainWindow):
                             audio_stream.close()
                         except Exception:
                             pass
-                    
+
                     self.audio_queue = queue.Queue(maxsize=100)
-                    
+                    self.mp3_queue = queue.Queue(maxsize=200)
+
+                    encoder = lameenc.Encoder()
+                    encoder.set_bit_rate(bitrate)
+                    encoder.set_in_sample_rate(44100)
+                    encoder.set_channels(channels)
+                    encoder.set_quality(0)
+
                     def audio_callback(indata, frames, time_info, status):
                         try:
                             self.audio_queue.put_nowait(indata.copy())
                         except queue.Full:
                             pass
-                            
+
                     audio_stream = sd.InputStream(
                         device=self.active_device_id,
                         channels=channels,
@@ -1067,72 +1105,77 @@ class PyQtBroadcasterApp(QMainWindow):
                     audio_stream.start()
                     current_stream_device_id = self.active_device_id
 
-                # Create RTCPeerConnection
-                pc = RTCPeerConnection()
-                
-                # Create and add the audio stream track
-                track = AudioStreamTrack(self, self.audio_queue, channels=channels, sample_rate=44100)
-                pc.addTrack(track)
+                    # Start the VU + encode loop immediately when mic starts
+                    if vu_task is None or vu_task.done():
+                        vu_task = asyncio.ensure_future(vu_loop())
 
-                # Create SDP offer
-                offer = await pc.createOffer()
-                await pc.setLocalDescription(offer)
+                # Open WebSocket connection
+                ssl_ctx = None
+                if ws_url.startswith("wss://"):
+                    import ssl
+                    ssl_ctx = ssl.create_default_context()
+                    ssl_ctx.check_hostname = False
+                    ssl_ctx.verify_mode = ssl.CERT_NONE
 
-                # Signaling POST SDP to server
-                res, _ = api_request(
-                    f"/radio/{self.selected_station_id}/webrtc/broadcaster",
-                    method="POST",
-                    data={
-                        "sdp": pc.localDescription.sdp,
-                        "type": pc.localDescription.type,
-                        "stream_key": stream_key
-                    }
-                )
+                async with websockets.connect(
+                    ws_url,
+                    ssl=ssl_ctx,
+                    open_timeout=15,
+                    ping_interval=20,
+                    ping_timeout=20,
+                ) as ws:
+                    attempts = 0
+                    self.is_connected = True
+                    self.connection_status = "LIVE"
+                    self.bytes_sent = 0
 
-                # Set remote description (SDP Answer)
-                answer = RTCSessionDescription(sdp=res["sdp"], type=res["type"])
-                await pc.setRemoteDescription(answer)
+                    # Drain mp3_queue and send chunks over WebSocket
+                    while self.is_broadcasting:
+                        try:
+                            mp3_chunk = self.mp3_queue.get_nowait()
+                        except queue.Empty:
+                            await asyncio.sleep(0.005)
+                            continue
 
-                self.is_connected = True
-                self.connection_status = "LIVE"
-                attempts = 0
-
-                # Define track connection monitoring
-                @pc.on("connectionstatechange")
-                def on_state():
-                    if pc.connectionState in ["failed", "closed"]:
-                        self.is_connected = False
-                        self.connection_status = "Disconnected"
-
-                # Keep connection alive and update VU levels
-                while self.is_broadcasting and self.is_connected:
-                    await asyncio.sleep(0.1)
+                        await ws.send(mp3_chunk)
+                        self.bytes_sent += len(mp3_chunk)
 
             except Exception as e:
-                print(f"WebRTC connection attempt failed: {e}")
-                attempts += 1
+                print(f"WebSocket connection attempt failed or dropped: {e}")
                 self.is_connected = False
-                self.connection_status = "Disconnected"
-                
+                self.current_volume_db = -60.0
+
                 err_msg = str(e)
-                is_auth_error = any(kw in err_msg for kw in ["403", "Forbidden", "Expired", "key"])
-                if attempts == 1 and is_auth_error:
+                is_auth_error = any(kw in err_msg for kw in ["403", "Forbidden", "1008", "Expired", "Policy Violation"])
+                if attempts == 0 and is_auth_error:
                     self.broadcast_error = "Invalid or expired connection key. Please verify your key and try again."
                     self.is_broadcasting = False
                     break
-                    
-                if attempts >= max_attempts:
-                    self.broadcast_error = f"Failed to connect after {max_attempts} attempts: {e}"
+
+                attempts += 1
+                if attempts > max_attempts:
+                    self.broadcast_error = "Failed to reconnect after maximum attempts."
                     self.is_broadcasting = False
                     break
-            finally:
-                if pc:
-                    try:
-                        await pc.close()
-                    except Exception:
-                        pass
 
-        # Cleanup input audio stream
+        # Cancel VU loop
+        if vu_task and not vu_task.done():
+            vu_task.cancel()
+            try:
+                await vu_task
+            except asyncio.CancelledError:
+                pass
+
+        # Flush encoder
+        if encoder:
+            try:
+                final_mp3 = encoder.flush()
+                if final_mp3 and hasattr(self, 'mp3_queue'):
+                    self.mp3_queue.put_nowait(final_mp3)
+            except Exception:
+                pass
+
+        # Cleanup audio stream
         if audio_stream:
             try:
                 audio_stream.stop()
@@ -1169,7 +1212,8 @@ class PyQtBroadcasterApp(QMainWindow):
                 hours, remainder = divmod(elapsed_seconds, 3600)
                 minutes, seconds = divmod(remainder, 60)
                 time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-                self.stats_lbl.setText(f"Status: LIVE (WebRTC)  |  Time: {time_str}")
+                mb_sent = getattr(self, 'bytes_sent', 0) / (1024 * 1024)
+                self.stats_lbl.setText(f"Status: LIVE ({self.saved_bitrate} kbps)  |  Sent: {mb_sent:.2f} MB  |  Time: {time_str}")
             else:
                 color = "#f59e0b" if (int(time.time() * 2) % 2 == 0) else "#78350f"
                 self.live_indicator.setStyleSheet(f"color: {color};")

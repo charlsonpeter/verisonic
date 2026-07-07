@@ -78,6 +78,11 @@ class LiveStreamManager:
                 except Exception:
                     pass
 
+        # Also push to any active WebRTC relay tracks (resolved at call time to avoid forward ref)
+        _wm = globals().get('webrtc_manager')
+        if _wm is not None:
+            await _wm.push_chunk(station_id, chunk)
+
     async def stop_broadcasting(self, station_id: int):
         self.broadcasters[station_id] = False
         if station_id in self.history:
@@ -91,58 +96,113 @@ class LiveStreamManager:
 
 live_stream_manager = LiveStreamManager()
 
+# =====================================================================
+# SERVER-SIDE WEBRTC DELIVERY (SFU relay from LiveStreamManager queue)
+# =====================================================================
+if RTCPeerConnection is not None:
+    try:
+        import fractions
+        from av import AudioFrame
+        import numpy as np
+
+        class AudioRelayTrack(MediaStreamTrack):
+            """A server-side MediaStreamTrack that pulls decoded PCM audio
+            from LiveStreamManager's queue and streams it to a WebRTC listener.
+            The inbound stream is MP3; we decode with PyAV and relay raw PCM."""
+            kind = "audio"
+
+            def __init__(self, station_id: int):
+                super().__init__()
+                self.station_id = station_id
+                self._queue: asyncio.Queue = asyncio.Queue(maxsize=50)
+                self._pts = 0
+                self._sample_rate = 44100
+                self._channels = 2
+                self._buf = b""
+                self._running = True
+
+            async def recv(self):
+                # Pull raw audio bytes from the relay queue
+                while True:
+                    try:
+                        chunk = self._queue.get_nowait()
+                        break
+                    except asyncio.QueueEmpty:
+                        await asyncio.sleep(0.005)
+
+                # Decode MP3 bytes to PCM int16 using PyAV
+                import av
+                import io
+                pcm_frames = []
+                try:
+                    container = av.open(io.BytesIO(chunk), format='mp3')
+                    for frame in container.decode(audio=0):
+                        pcm = frame.to_ndarray()
+                        pcm_frames.append(pcm)
+                    container.close()
+                except Exception:
+                    pass
+
+                if pcm_frames:
+                    import numpy as np_inner
+                    combined = np_inner.concatenate(pcm_frames, axis=1)
+                    # Ensure stereo
+                    if combined.shape[0] == 1:
+                        combined = np_inner.repeat(combined, 2, axis=0)
+                    elif combined.shape[0] > 2:
+                        combined = combined[:2, :]
+                else:
+                    # Silence frame
+                    import numpy as np_inner
+                    combined = np_inner.zeros((2, 1024), dtype='int16')
+
+                frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
+                frame.sample_rate = self._sample_rate
+                frame.time_base = fractions.Fraction(1, self._sample_rate)
+                frame.pts = self._pts
+                self._pts += frame.samples
+                return frame
+
+        AUDIO_RELAY_TRACK_CLASS = AudioRelayTrack
+    except ImportError:
+        AUDIO_RELAY_TRACK_CLASS = None
+else:
+    AUDIO_RELAY_TRACK_CLASS = None
+
+
 class WebRTCManager:
+    """Manages WebRTC listener peer connections for server-side audio relay."""
     def __init__(self):
-        # Maps station_id (int) -> MediaStreamTrack
-        self.broadcaster_tracks: Dict[int, Optional[MediaStreamTrack]] = {}
-        # Maps station_id (int) -> RTCPeerConnection
-        self.broadcaster_pcs: Dict[int, Optional[RTCPeerConnection]] = {}
-        # Maps station_id (int) -> Set[RTCPeerConnection] of listeners
-        self.listeners: Dict[int, Set[RTCPeerConnection]] = {}
+        # Maps station_id -> Set[RTCPeerConnection]
+        self.listeners: Dict[int, Set] = {}
+        # Maps station_id -> Set[AudioRelayTrack] so we can push chunks
+        self.relay_tracks: Dict[int, Set] = {}
 
     def is_live(self, station_id: int) -> bool:
-        return self.broadcaster_tracks.get(station_id) is not None
+        # WebRTC is live when the underlying LiveStreamManager has an active WS broadcaster
+        return live_stream_manager.is_live(station_id)
 
-    def register_broadcaster(self, station_id: int, track, pc):
-        self.broadcaster_tracks[station_id] = track
-        self.broadcaster_pcs[station_id] = pc
-        self.listeners[station_id] = set()
-
-        @pc.on("connectionstatechange")
-        async def on_state_change():
-            if pc.connectionState in ["failed", "closed"]:
-                await self.stop_broadcaster(station_id)
-
-    def get_broadcaster_track(self, station_id: int):
-        return self.broadcaster_tracks.get(station_id)
-
-    def register_listener(self, station_id: int, pc):
+    def register_listener(self, station_id: int, pc, track):
         if station_id not in self.listeners:
             self.listeners[station_id] = set()
+            self.relay_tracks[station_id] = set()
         self.listeners[station_id].add(pc)
+        self.relay_tracks[station_id].add(track)
 
         @pc.on("connectionstatechange")
         def on_state_change():
-            if pc.connectionState in ["failed", "closed"]:
-                self.listeners[station_id].discard(pc)
+            if pc.connectionState in ["failed", "closed", "disconnected"]:
+                self.listeners.get(station_id, set()).discard(pc)
+                self.relay_tracks.get(station_id, set()).discard(track)
 
-    async def stop_broadcaster(self, station_id: int):
-        if station_id in self.broadcaster_pcs:
-            pc = self.broadcaster_pcs.pop(station_id)
-            if pc:
-                try:
-                    await pc.close()
-                except Exception:
-                    pass
-        self.broadcaster_tracks.pop(station_id, None)
-        
-        if station_id in self.listeners:
-            pcs = self.listeners.pop(station_id)
-            for pc in pcs:
-                try:
-                    await pc.close()
-                except Exception:
-                    pass
+    async def push_chunk(self, station_id: int, chunk: bytes):
+        """Push an MP3 chunk to all relay tracks for this station."""
+        for track in list(self.relay_tracks.get(station_id, set())):
+            try:
+                track._queue.put_nowait(chunk)
+            except asyncio.QueueFull:
+                pass
+
 
 webrtc_manager = WebRTCManager()
 
@@ -280,32 +340,8 @@ def serialize_station(station: RadioStation, db: Session) -> dict:
         "timezone": station.timezone or "UTC",
     }
 
-    # If WebRTC broadcaster is active
-    if webrtc_manager.is_live(station.id):
-        return {
-            "id": station.id,
-            "name": station.name,
-            "description": station.description,
-            "cover_art_url": station.cover_art_url or "https://images.unsplash.com/photo-1507838153414-b4b713384a76?w=150&auto=format&fit=crop",
-            "is_active": station.is_active,
-            "stream_url": f"/api/radio/{station.id}/live",
-            "owner_id": station.owner_id,
-            "stream_key": station.stream_key,
-            "current_track_id": None,
-            "current_track_started_at": None,
-            "current_track_title": active_program_title or "Live Broadcast (WebRTC)",
-            "current_track_artist": active_rj_name or station.name,
-            "current_track_duration": None,
-            "current_offset": 0.0,
-            "current_program_title": active_program_title,
-            "rj_name": active_rj_name,
-            "rj_details": station.rj_details,
-            "listeners_count": listeners_count,
-            "is_online": True,
-            **profile_data
-        }
-
-    # If broadcaster is active, stream live from WebSocket broker
+    # If broadcaster is active (WebSocket ingest), serve live stream
+    # WebRTC delivery is available as an alternative transport for listeners
     if live_stream_manager.is_live(station.id):
         return {
             "id": station.id,
@@ -578,20 +614,9 @@ def get_station_stream_sync(
     if current_user and current_user.role == "radio_admin" and station.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Radio admins can only access their own radio station")
 
-    if webrtc_manager.is_live(station.id):
-        return {
-            "station_id": station.id,
-            "station_name": station.name,
-            "track_id": station.id * 100,
-            "title": "Live Broadcast (WebRTC)",
-            "artist": station.name,
-            "duration": None,
-            "stream_url": f"/api/radio/{station.id}/live",
-            "is_webrtc": True,
-            "offset": 0.0
-        }
-
     if live_stream_manager.is_live(station.id):
+        # Station is live - offer WebRTC delivery if available, else fallback to HTTP stream
+        use_webrtc = AUDIO_RELAY_TRACK_CLASS is not None
         return {
             "station_id": station.id,
             "station_name": station.name,
@@ -600,6 +625,7 @@ def get_station_stream_sync(
             "artist": station.name,
             "duration": None,
             "stream_url": f"/api/radio/{station.id}/live",
+            "is_webrtc": use_webrtc,
             "offset": 0.0
         }
 
@@ -764,53 +790,35 @@ def regenerate_stream_key(
     return serialize_station(station, db)
 
 
-@router.post("/{id}/webrtc/broadcaster")
-async def webrtc_broadcaster(id: int, params: dict, db: Session = Depends(get_db)):
-    stream_key = params.get("stream_key")
+@router.post("/{id}/webrtc/listener")
+async def webrtc_listener(id: int, params: dict, db: Session = Depends(get_db)):
+    """WebRTC listener signaling: creates a server-side relay track bridging the
+    LiveStreamManager MP3 queue into a WebRTC audio stream for the browser."""
+    if RTCPeerConnection is None:
+        raise HTTPException(status_code=500, detail="WebRTC support is not loaded on server")
+
+    if AUDIO_RELAY_TRACK_CLASS is None:
+        raise HTTPException(status_code=500, detail="PyAV not available for audio relay")
+
     station = db.query(RadioStation).filter(RadioStation.id == id).first()
     if not station:
         raise HTTPException(status_code=404, detail="Station not found")
-        
-    if stream_key and station.stream_key != stream_key:
-        raise HTTPException(status_code=403, detail="Invalid stream key")
-        
-    if RTCPeerConnection is None:
-        raise HTTPException(status_code=500, detail="WebRTC support is not loaded on server")
+
+    if not live_stream_manager.is_live(id):
+        raise HTTPException(status_code=404, detail="Station is offline (no active broadcast)")
 
     offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
     pc = RTCPeerConnection()
-    
-    @pc.on("track")
-    def on_track(track):
-        if track.kind == "audio":
-            webrtc_manager.register_broadcaster(id, track, pc)
-            print(f"Broadcaster connected via WebRTC to station {station.name} (ID: {id})")
-            
+
+    # Create a relay track that will receive MP3 chunks from LiveStreamManager
+    relay_track = AUDIO_RELAY_TRACK_CLASS(id)
+    pc.addTrack(relay_track)
+
     await pc.setRemoteDescription(offer)
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
-    
-    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
 
+    # Register so LiveStreamManager pushes chunks to this relay track
+    webrtc_manager.register_listener(id, pc, relay_track)
 
-@router.post("/{id}/webrtc/listener")
-async def webrtc_listener(id: int, params: dict):
-    if RTCPeerConnection is None:
-        raise HTTPException(status_code=500, detail="WebRTC support is not loaded on server")
-
-    offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
-    pc = RTCPeerConnection()
-    
-    track = webrtc_manager.get_broadcaster_track(id)
-    if not track:
-        raise HTTPException(status_code=404, detail="Station is offline (no WebRTC broadcast available)")
-        
-    pc.addTrack(track)
-    
-    await pc.setRemoteDescription(offer)
-    answer = await pc.createAnswer()
-    await pc.setLocalDescription(answer)
-    
-    webrtc_manager.register_listener(id, pc)
-    
     return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
