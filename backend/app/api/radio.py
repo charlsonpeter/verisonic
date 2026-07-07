@@ -37,13 +37,13 @@ class LiveStreamManager:
             self.listeners[station_id] = set()
         self.listeners[station_id].add(q)
         
-        # Populate new listener's queue with recent history to start playing instantly
-        if station_id in self.history:
-            for chunk in self.history[station_id]:
-                try:
-                    q.put_nowait(chunk)
-                except asyncio.QueueFull:
-                    pass
+        # Populate new listener's queue with combined recent history as a single block to start playing instantly
+        if station_id in self.history and self.history[station_id]:
+            history_data = b"".join(self.history[station_id])
+            try:
+                q.put_nowait(history_data)
+            except asyncio.QueueFull:
+                pass
         return q
 
     def unregister_listener(self, station_id: int, q: asyncio.Queue):
@@ -53,9 +53,9 @@ class LiveStreamManager:
                 del self.listeners[station_id]
 
     async def broadcast_chunk(self, station_id: int, chunk: bytes):
-        # Store chunk in sliding window history buffer (last ~30 chunks is about 3 seconds)
+        # Store chunk in sliding window history buffer (last ~60 chunks is about 5.6 seconds)
         if station_id not in self.history:
-            self.history[station_id] = deque(maxlen=30)
+            self.history[station_id] = deque(maxlen=60)
         self.history[station_id].append(chunk)
 
         if station_id not in self.listeners:
@@ -638,6 +638,7 @@ async def get_live_audio_stream(
             "Pragma": "no-cache",
             "Expires": "0",
             "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
         }
     )
 
