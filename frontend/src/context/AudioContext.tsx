@@ -406,13 +406,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     let trackToPlay = track;
-    try {
-      const res = await fetch(`${API_URL}/music/${track.id}`);
-      if (res.ok) {
-        trackToPlay = await res.json();
+    // Only re-fetch metadata for real music library tracks, not virtual live-radio tracks
+    if (!isRadio) {
+      try {
+        const res = await fetch(`${API_URL}/music/${track.id}`);
+        if (res.ok) {
+          trackToPlay = await res.json();
+        }
+      } catch (e) {
+        console.warn("Failed to fetch fresh metadata, playing with local cache:", e);
       }
-    } catch (e) {
-      console.warn("Failed to fetch fresh metadata, playing with local cache:", e);
     }
 
     // Determine correct audio stream path (checking FLAC/Lossless settings)
@@ -503,43 +506,80 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         };
         
         if (data.is_webrtc) {
-          const pc = new RTCPeerConnection({
-            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-          });
-          webrtcPCRef.current = pc;
-          
-          pc.addTransceiver('audio', { direction: 'recvonly' });
-          
-          pc.ontrack = (event) => {
-            if (audioRef.current) {
-              audioRef.current.srcObject = event.streams[0];
-              audioRef.current.play().catch(err => console.error("WebRTC play error:", err));
+          // Start playing progressive HTTP stream immediately for guaranteed audio
+          playTrack(virtualTrack, true);
+          if (audioRef.current && data.offset && data.offset > 0.1) {
+            audioRef.current.currentTime = data.offset;
+          }
+
+          // Then attempt WebRTC upgrade in background for lower latency
+          const upgradeToWebRTC = async () => {
+            try {
+              const pc = new RTCPeerConnection({
+                iceServers: [
+                  { urls: 'stun:stun.l.google.com:19302' },
+                  { urls: 'stun:stun1.l.google.com:19302' }
+                ]
+              });
+              webrtcPCRef.current = pc;
+
+              pc.addTransceiver('audio', { direction: 'recvonly' });
+
+              let iceComplete = false;
+              pc.oniceconnectionstatechange = () => {
+                if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
+                  console.warn('WebRTC ICE failed, keeping progressive stream');
+                  pc.close();
+                  webrtcPCRef.current = null;
+                }
+              };
+
+              pc.ontrack = (event) => {
+                if (audioRef.current && !iceComplete) {
+                  iceComplete = true;
+                  // Smoothly switch to WebRTC once track arrives
+                  audioRef.current.pause();
+                  audioRef.current.src = '';
+                  audioRef.current.srcObject = event.streams[0];
+                  audioRef.current.play().catch(err => console.error('WebRTC play error:', err));
+                  console.log('Switched to WebRTC audio stream');
+                }
+              };
+
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+
+              const signRes = await fetch(`${API_URL}/radio/${station.id}/webrtc/listener`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({
+                  sdp: pc.localDescription?.sdp,
+                  type: pc.localDescription?.type
+                })
+              });
+
+              if (signRes.ok) {
+                const answer = await signRes.json();
+                await pc.setRemoteDescription(new RTCSessionDescription(answer));
+              } else {
+                console.warn('WebRTC signaling rejected, keeping progressive stream');
+                pc.close();
+                webrtcPCRef.current = null;
+              }
+            } catch (err) {
+              console.warn('WebRTC upgrade failed, keeping progressive stream:', err);
+              if (webrtcPCRef.current) {
+                webrtcPCRef.current.close();
+                webrtcPCRef.current = null;
+              }
             }
           };
 
-          const offer = await pc.createOffer();
-          await pc.setLocalDescription(offer);
-
-          const signRes = await fetch(`${API_URL}/radio/${station.id}/webrtc/listener`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify({
-              sdp: pc.localDescription?.sdp,
-              type: pc.localDescription?.type
-            })
-          });
-
-          if (signRes.ok) {
-            const answer = await signRes.json();
-            await pc.setRemoteDescription(new RTCSessionDescription(answer));
-            setIsPlaying(true);
-            setCurrentTrack(virtualTrack);
-          } else {
-            throw new Error("WebRTC signaling failed");
-          }
+          // Run WebRTC upgrade attempt without blocking
+          upgradeToWebRTC();
         } else {
           playTrack(virtualTrack, true);
           if (audioRef.current && data.offset && data.offset > 0.1) {
