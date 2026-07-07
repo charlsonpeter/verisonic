@@ -8,6 +8,17 @@ import math
 import json
 import urllib.request
 import urllib.error
+import fractions
+import asyncio
+
+# Try importing aiortc & av for WebRTC low latency streaming
+USE_WEBRTC = False
+try:
+    from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
+    from av import AudioFrame
+    USE_WEBRTC = True
+except ImportError:
+    pass
 
 # Dependency tracking
 MISSING_DEPS = []
@@ -45,6 +56,73 @@ except ImportError:
 
 # Define fixed server stream URL (with env override)
 DEFAULT_SERVER_URL = os.environ.get("VERISONIC_SERVER_URL", "ws://54.66.243.141:3000/api/radio/stream/ws")
+
+if USE_WEBRTC:
+    class AudioStreamTrack(MediaStreamTrack):
+        kind = "audio"
+
+        def __init__(self, app_instance, queue_obj, channels=2, sample_rate=44100):
+            super().__init__()
+            self.app = app_instance
+            self.queue = queue_obj
+            self.channels = channels
+            self.sample_rate = sample_rate
+            self.pts = 0
+
+        async def recv(self):
+            while True:
+                try:
+                    data_chunk = self.queue.get_nowait()
+                    break
+                except queue.Empty:
+                    await asyncio.sleep(0.01)
+
+            if data_chunk.size > 0:
+                if data_chunk.ndim > 1:
+                    mono_chunk = np.mean(data_chunk, axis=1)
+                else:
+                    mono_chunk = data_chunk
+                    
+                fft_data = np.abs(np.fft.rfft(mono_chunk)) / len(mono_chunk)
+                fft_data = fft_data[1:]  # Skip DC offset
+                
+                num_bands = 20
+                max_bin = min(400, len(fft_data))
+                log_indices = np.logspace(0, np.log10(max_bin), num_bands + 1, dtype=int)
+                
+                new_levels = []
+                for i in range(num_bands):
+                    start_idx = log_indices[i]
+                    end_idx = max(start_idx + 1, log_indices[i+1])
+                    amp = np.mean(fft_data[start_idx:end_idx])
+                    boost = 1.0 + (i / num_bands) * 5.0
+                    amp = amp * boost
+                    db_val = 20 * math.log10(amp) if amp > 1e-5 else -80.0
+                    val = int((db_val + 50.0) / 45.0 * 100)
+                    val = max(0, min(100, val))
+                    new_levels.append(val)
+                
+                self.app.current_frequency_levels = new_levels
+                
+                rms = np.sqrt(np.mean(mono_chunk**2))
+                self.app.current_volume_db = 20 * math.log10(rms) if rms > 1e-4 else -60.0
+            else:
+                self.app.current_volume_db = -60.0
+                self.app.current_frequency_levels = [0] * 20
+
+            clipped_chunk = np.clip(data_chunk, -1.0, 1.0)
+            pcm_data = (clipped_chunk * 32767).astype(np.int16)
+
+            frame = AudioFrame.from_ndarray(
+                pcm_data.T,
+                format='s16',
+                layout='stereo' if self.channels == 2 else 'mono'
+            )
+            frame.sample_rate = self.sample_rate
+            frame.time_base = fractions.Fraction(1, self.sample_rate)
+            frame.pts = self.pts
+            self.pts += frame.samples
+            return frame
 
 
 # =====================================================================
@@ -922,209 +1000,145 @@ class PyQtBroadcasterApp(QMainWindow):
     # STREAMING WORKER THREAD & RECONNECTION
     # =====================================================================
     def streaming_worker(self, device_id, server_url, stream_key, bitrate):
-        """Worker thread that encodes captured PCM chunks to MP3 and streams to WebSocket."""
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self.async_streaming_worker(device_id, server_url, stream_key, bitrate))
+        except Exception as e:
+            self.broadcast_error = str(e)
+            self.is_connected = False
+            self.is_broadcasting = False
+        finally:
+            loop.close()
+
+    async def async_streaming_worker(self, device_id, server_url, stream_key, bitrate):
+        if not USE_WEBRTC:
+            raise Exception("WebRTC dependencies (aiortc/av) not found. Please install them to stream.")
+
         attempts = 0
-        max_attempts = 100
-        current_stream_key = stream_key
-        
+        max_attempts = 10
+        self.active_device_id = device_id
+        current_stream_device_id = None
+        audio_stream = None
+
         while self.is_broadcasting:
-            ws = None
-            audio_stream = None
+            pc = None
             try:
-                # Triggers auto-reconnection loop on socket drop/failure
                 if attempts > 0:
                     self.connection_status = f"Reconnecting (Attempt {attempts}/{max_attempts})..."
                     self.is_connected = False
+                    await asyncio.sleep(min(10, 2 + (attempts - 1) * 2))
+
+                self.connection_status = "Connecting via WebRTC..."
+                
+                # Query input device channel configuration
+                channels = 2
+                try:
+                    device_info = sd.query_devices(self.active_device_id, 'input')
+                    max_channels = device_info.get("max_input_channels", 2)
+                    channels = min(2, max_channels)
+                except Exception as ce:
+                    print("Failed to query device channels:", ce)
+
+                # Initialize audio input stream if not initialized or swapped
+                if audio_stream is None or self.active_device_id != current_stream_device_id:
+                    if audio_stream:
+                        try:
+                            audio_stream.stop()
+                            audio_stream.close()
+                        except Exception:
+                            pass
                     
-                    backoff = min(10, 2 + (attempts - 1) * 2)
-                    for _ in range(int(backoff * 10)):
-                        if not self.is_broadcasting:
-                            return
-                        time.sleep(0.1)
-                        
-                if attempts > 0 and self.auth_token:
-                    connection_url = f"{server_url}?token={self.auth_token}"
-                    if self.selected_station_id:
-                        connection_url += f"&station_id={self.selected_station_id}"
-                else:
-                    connection_url = f"{server_url}?stream_key={current_stream_key}"
-                self.connection_status = "Connecting to server..."
+                    self.audio_queue = queue.Queue(maxsize=100)
+                    
+                    def audio_callback(indata, frames, time_info, status):
+                        try:
+                            self.audio_queue.put_nowait(indata.copy())
+                        except queue.Full:
+                            pass
+                            
+                    audio_stream = sd.InputStream(
+                        device=self.active_device_id,
+                        channels=channels,
+                        samplerate=44100,
+                        blocksize=4096,
+                        callback=audio_callback
+                    )
+                    audio_stream.start()
+                    current_stream_device_id = self.active_device_id
+
+                # Create RTCPeerConnection
+                pc = RTCPeerConnection()
                 
-                ws = websocket.create_connection(connection_url, timeout=15)
-                
-                attempts = 0
+                # Create and add the audio stream track
+                track = AudioStreamTrack(self, self.audio_queue, channels=channels, sample_rate=44100)
+                pc.addTrack(track)
+
+                # Create SDP offer
+                offer = await pc.createOffer()
+                await pc.setLocalDescription(offer)
+
+                # Signaling POST SDP to server
+                res, _ = api_request(
+                    f"/radio/{self.selected_station_id}/webrtc/broadcaster",
+                    method="POST",
+                    data={
+                        "sdp": pc.localDescription.sdp,
+                        "type": pc.localDescription.type,
+                        "stream_key": stream_key
+                    }
+                )
+
+                # Set remote description (SDP Answer)
+                answer = RTCSessionDescription(sdp=res["sdp"], type=res["type"])
+                await pc.setRemoteDescription(answer)
+
                 self.is_connected = True
                 self.connection_status = "LIVE"
-                
-                self.active_device_id = device_id
-                current_stream_device_id = None
-                
-                import select
-                while self.is_broadcasting:
-                    # Handles dynamic hot-swapping of active input device
-                    if audio_stream is None or self.active_device_id != current_stream_device_id:
-                        if audio_stream:
-                            try:
-                                audio_stream.stop()
-                                audio_stream.close()
-                            except Exception:
-                                pass
-                        
-                        current_stream_device_id = self.active_device_id
-                        channels = 2
-                        try:
-                            device_info = sd.query_devices(current_stream_device_id, 'input')
-                            max_channels = device_info.get("max_input_channels", 2)
-                            channels = min(2, max_channels)
-                        except Exception as ce:
-                            print("Failed to query device channels:", ce)
-                            
-                        encoder = lameenc.Encoder()
-                        encoder.set_bit_rate(bitrate)
-                        encoder.set_in_sample_rate(44100)
-                        encoder.set_channels(channels)
-                        encoder.set_quality(0)
-                        
-                        self.audio_queue = queue.Queue(maxsize=100)
-                        
-                        def audio_callback(indata, frames, time_info, status):
-                            try:
-                                self.audio_queue.put_nowait(indata.copy())
-                            except queue.Full:
-                                pass
-                                
-                        audio_stream = sd.InputStream(
-                            device=current_stream_device_id,
-                            channels=channels,
-                            samplerate=44100,
-                            blocksize=4096,
-                            callback=audio_callback
-                        )
-                        audio_stream.start()
-                        
-                    # Monitor server status frames
-                    try:
-                        if ws and ws.sock:
-                            ready_to_read, _, _ = select.select([ws.sock], [], [], 0.0)
-                            if ready_to_read:
-                                frame = ws.recv_frame()
-                                if frame is None:
-                                    raise Exception("Connection closed by server.")
-                                    
-                                if frame.opcode == 9:
-                                    ws.pong(frame.data)
-                                elif frame.opcode == 8:
-                                    raise Exception("Connection closed by server.")
-                    except Exception as se:
-                        raise se
-                        
-                    # Ingest and encode queue chunks
-                    try:
-                        data_chunk = self.audio_queue.get(timeout=0.05)
-                    except queue.Empty:
-                        continue
-                        
-                    if data_chunk.size > 0:
-                        # Convert stereo to mono for visualizer
-                        if data_chunk.ndim > 1:
-                            mono_chunk = np.mean(data_chunk, axis=1)
-                        else:
-                            mono_chunk = data_chunk
-                            
-                        # FFT
-                        fft_data = np.abs(np.fft.rfft(mono_chunk)) / len(mono_chunk)
-                        fft_data = fft_data[1:]  # Skip DC offset
-                        
-                        num_bands = 20
-                        max_bin = min(400, len(fft_data))  # limit to musical frequencies
-                        log_indices = np.logspace(0, np.log10(max_bin), num_bands + 1, dtype=int)
-                        
-                        # Generate levels
-                        new_levels = []
-                        for i in range(num_bands):
-                            start_idx = log_indices[i]
-                            end_idx = max(start_idx + 1, log_indices[i+1])
-                            amp = np.mean(fft_data[start_idx:end_idx])
-                            
-                            # Equalize levels (boost higher frequencies log-proportionally)
-                            boost = 1.0 + (i / num_bands) * 5.0
-                            amp = amp * boost
-                            
-                            db_val = 20 * math.log10(amp) if amp > 1e-5 else -80.0
-                            val = int((db_val + 50.0) / 45.0 * 100)  # map -50dB..-5dB to 0..100
-                            val = max(0, min(100, val))
-                            new_levels.append(val)
-                            
-                        self.current_frequency_levels = new_levels
-                        
-                        # Set current_volume_db
-                        rms = np.sqrt(np.mean(mono_chunk**2))
-                        self.current_volume_db = 20 * math.log10(rms) if rms > 1e-4 else -60.0
-                    else:
-                        self.current_volume_db = -60.0
-                        self.current_frequency_levels = [0] * 20
-                    
-                    clipped_chunk = np.clip(data_chunk, -1.0, 1.0)
-                    pcm_data = (clipped_chunk * 32767).astype(np.int16).tobytes()
-                    mp3_data = encoder.encode(pcm_data)
-                    
-                    if mp3_data:
-                        ws.send_binary(mp3_data)
-                        self.bytes_sent += len(mp3_data)
-                        
-                if encoder:
-                    try:
-                        final_mp3 = encoder.flush()
-                        if final_mp3:
-                            ws.send_binary(final_mp3)
-                            self.bytes_sent += len(final_mp3)
-                    except Exception:
-                        pass
-                        
+                attempts = 0
+
+                # Define track connection monitoring
+                @pc.on("connectionstatechange")
+                def on_state():
+                    if pc.connectionState in ["failed", "closed"]:
+                        self.is_connected = False
+                        self.connection_status = "Disconnected"
+
+                # Keep connection alive and update VU levels
+                while self.is_broadcasting and self.is_connected:
+                    await asyncio.sleep(0.1)
+
             except Exception as e:
-                print(f"Connection attempt failed or dropped: {e}")
+                print(f"WebRTC connection attempt failed: {e}")
+                attempts += 1
                 self.is_connected = False
-                self.current_volume_db = -60.0
+                self.connection_status = "Disconnected"
                 
-                if audio_stream:
-                    try:
-                        audio_stream.stop()
-                        audio_stream.close()
-                    except Exception:
-                        pass
-                    audio_stream = None
-                if ws:
-                    try:
-                        ws.close()
-                    except Exception:
-                        pass
-                
-                # If the first connection attempt fails due to an auth/expiration error,
-                # do not retry. Stop and show the error message.
                 err_msg = str(e)
-                is_auth_error = any(kw in err_msg for kw in ["403", "Forbidden", "1008", "Expired"])
-                if attempts == 0 and is_auth_error:
+                is_auth_error = any(kw in err_msg for kw in ["403", "Forbidden", "Expired", "key"])
+                if attempts == 1 and is_auth_error:
                     self.broadcast_error = "Invalid or expired connection key. Please verify your key and try again."
                     self.is_broadcasting = False
                     break
-                        
-                attempts += 1
-                if attempts > max_attempts:
-                    self.broadcast_error = "Failed to reconnect after maximum attempts."
+                    
+                if attempts >= max_attempts:
+                    self.broadcast_error = f"Failed to connect after {max_attempts} attempts: {e}"
                     self.is_broadcasting = False
                     break
             finally:
-                if audio_stream:
+                if pc:
                     try:
-                        audio_stream.stop()
-                        audio_stream.close()
+                        await pc.close()
                     except Exception:
                         pass
-                if ws:
-                    try:
-                        ws.close()
-                    except Exception:
-                        pass
+
+        # Cleanup input audio stream
+        if audio_stream:
+            try:
+                audio_stream.stop()
+                audio_stream.close()
+            except Exception:
+                pass
 
     def update_gui_loop(self):
         """Monitors stats and updates volume visuals on the main thread loop."""
@@ -1155,8 +1169,7 @@ class PyQtBroadcasterApp(QMainWindow):
                 hours, remainder = divmod(elapsed_seconds, 3600)
                 minutes, seconds = divmod(remainder, 60)
                 time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-                mb_sent = self.bytes_sent / (1024 * 1024)
-                self.stats_lbl.setText(f"Status: LIVE ({self.saved_bitrate} kbps)  |  Sent: {mb_sent:.2f} MB  |  Time: {time_str}")
+                self.stats_lbl.setText(f"Status: LIVE (WebRTC)  |  Time: {time_str}")
             else:
                 color = "#f59e0b" if (int(time.time() * 2) % 2 == 0) else "#78350f"
                 self.live_indicator.setStyleSheet(f"color: {color};")

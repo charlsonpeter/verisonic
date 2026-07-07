@@ -133,6 +133,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Refs for HTMLAudioElement & HLS
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const webrtcPCRef = useRef<RTCPeerConnection | null>(null);
   const previewTimerRef = useRef<NodeJS.Timeout | null>(null);
   const equalizerIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -169,10 +170,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = '';
+        audioRef.current.srcObject = null;
       }
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
+      }
+      if (webrtcPCRef.current) {
+        webrtcPCRef.current.close();
+        webrtcPCRef.current = null;
       }
       setIsPlaying(false);
       setCurrentTrack(null);
@@ -325,6 +331,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (hlsRef.current) {
         hlsRef.current.destroy();
       }
+      if (webrtcPCRef.current) {
+        webrtcPCRef.current.close();
+        webrtcPCRef.current = null;
+      }
     };
   }, []);
 
@@ -382,6 +392,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       console.warn("Radio admins cannot play standard library music tracks.");
       return;
     }
+
+    if (webrtcPCRef.current) {
+      webrtcPCRef.current.close();
+      webrtcPCRef.current = null;
+    }
+    audioRef.current.srcObject = null;
     
     // Clear live radio station status if playing normal track
     if (!isRadio) {
@@ -464,6 +480,14 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setIsRadioSync(true);
     setCurrentTrack(null);
 
+    if (webrtcPCRef.current) {
+      webrtcPCRef.current.close();
+      webrtcPCRef.current = null;
+    }
+    if (audioRef.current) {
+      audioRef.current.srcObject = null;
+    }
+
     // Fetch synchronized live track metadata from backend radio syncer
     try {
       const res = await fetch(`${API_URL}/radio/${station.id}/stream`);
@@ -478,9 +502,49 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           stream_url: data.stream_url || station.stream_url
         };
         
-        playTrack(virtualTrack, true);
-        if (audioRef.current && data.offset && data.offset > 0.1) {
-          audioRef.current.currentTime = data.offset;
+        if (data.is_webrtc) {
+          const pc = new RTCPeerConnection({
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+          });
+          webrtcPCRef.current = pc;
+          
+          pc.addTransceiver('audio', { direction: 'recvonly' });
+          
+          pc.ontrack = (event) => {
+            if (audioRef.current) {
+              audioRef.current.srcObject = event.streams[0];
+              audioRef.current.play().catch(err => console.error("WebRTC play error:", err));
+            }
+          };
+
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+
+          const signRes = await fetch(`${API_URL}/radio/${station.id}/webrtc/listener`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              sdp: pc.localDescription?.sdp,
+              type: pc.localDescription?.type
+            })
+          });
+
+          if (signRes.ok) {
+            const answer = await signRes.json();
+            await pc.setRemoteDescription(new RTCSessionDescription(answer));
+            setIsPlaying(true);
+            setCurrentTrack(virtualTrack);
+          } else {
+            throw new Error("WebRTC signaling failed");
+          }
+        } else {
+          playTrack(virtualTrack, true);
+          if (audioRef.current && data.offset && data.offset > 0.1) {
+            audioRef.current.currentTime = data.offset;
+          }
         }
       } else {
         if (res.status === 404) {

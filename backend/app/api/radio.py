@@ -8,6 +8,14 @@ import secrets
 import asyncio
 from collections import deque
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
+
+try:
+    from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
+except ImportError:
+    RTCPeerConnection = None
+    RTCSessionDescription = None
+    class MediaStreamTrack:
+        pass
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Dict, Set, Optional
@@ -82,6 +90,61 @@ class LiveStreamManager:
                     pass
 
 live_stream_manager = LiveStreamManager()
+
+class WebRTCManager:
+    def __init__(self):
+        # Maps station_id (int) -> MediaStreamTrack
+        self.broadcaster_tracks: Dict[int, Optional[MediaStreamTrack]] = {}
+        # Maps station_id (int) -> RTCPeerConnection
+        self.broadcaster_pcs: Dict[int, Optional[RTCPeerConnection]] = {}
+        # Maps station_id (int) -> Set[RTCPeerConnection] of listeners
+        self.listeners: Dict[int, Set[RTCPeerConnection]] = {}
+
+    def is_live(self, station_id: int) -> bool:
+        return self.broadcaster_tracks.get(station_id) is not None
+
+    def register_broadcaster(self, station_id: int, track, pc):
+        self.broadcaster_tracks[station_id] = track
+        self.broadcaster_pcs[station_id] = pc
+        self.listeners[station_id] = set()
+
+        @pc.on("connectionstatechange")
+        async def on_state_change():
+            if pc.connectionState in ["failed", "closed"]:
+                await self.stop_broadcaster(station_id)
+
+    def get_broadcaster_track(self, station_id: int):
+        return self.broadcaster_tracks.get(station_id)
+
+    def register_listener(self, station_id: int, pc):
+        if station_id not in self.listeners:
+            self.listeners[station_id] = set()
+        self.listeners[station_id].add(pc)
+
+        @pc.on("connectionstatechange")
+        def on_state_change():
+            if pc.connectionState in ["failed", "closed"]:
+                self.listeners[station_id].discard(pc)
+
+    async def stop_broadcaster(self, station_id: int):
+        if station_id in self.broadcaster_pcs:
+            pc = self.broadcaster_pcs.pop(station_id)
+            if pc:
+                try:
+                    await pc.close()
+                except Exception:
+                    pass
+        self.broadcaster_tracks.pop(station_id, None)
+        
+        if station_id in self.listeners:
+            pcs = self.listeners.pop(station_id)
+            for pc in pcs:
+                try:
+                    await pc.close()
+                except Exception:
+                    pass
+
+webrtc_manager = WebRTCManager()
 
 router = APIRouter(prefix="/radio", tags=["radio"])
 
@@ -488,6 +551,19 @@ def get_station_stream_sync(
     if current_user and current_user.role == "radio_admin" and station.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Radio admins can only access their own radio station")
 
+    if webrtc_manager.is_live(station.id):
+        return {
+            "station_id": station.id,
+            "station_name": station.name,
+            "track_id": station.id * 100,
+            "title": "Live Broadcast (WebRTC)",
+            "artist": station.name,
+            "duration": None,
+            "stream_url": f"/api/radio/{station.id}/live",
+            "is_webrtc": True,
+            "offset": 0.0
+        }
+
     if live_stream_manager.is_live(station.id):
         return {
             "station_id": station.id,
@@ -659,3 +735,55 @@ def regenerate_stream_key(
     db.commit()
     db.refresh(station)
     return serialize_station(station, db)
+
+
+@router.post("/{id}/webrtc/broadcaster")
+async def webrtc_broadcaster(id: int, params: dict, db: Session = Depends(get_db)):
+    stream_key = params.get("stream_key")
+    station = db.query(RadioStation).filter(RadioStation.id == id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail="Station not found")
+        
+    if stream_key and station.stream_key != stream_key:
+        raise HTTPException(status_code=403, detail="Invalid stream key")
+        
+    if RTCPeerConnection is None:
+        raise HTTPException(status_code=500, detail="WebRTC support is not loaded on server")
+
+    offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+    pc = RTCPeerConnection()
+    
+    @pc.on("track")
+    def on_track(track):
+        if track.kind == "audio":
+            webrtc_manager.register_broadcaster(id, track, pc)
+            print(f"Broadcaster connected via WebRTC to station {station.name} (ID: {id})")
+            
+    await pc.setRemoteDescription(offer)
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    
+    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+
+
+@router.post("/{id}/webrtc/listener")
+async def webrtc_listener(id: int, params: dict):
+    if RTCPeerConnection is None:
+        raise HTTPException(status_code=500, detail="WebRTC support is not loaded on server")
+
+    offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+    pc = RTCPeerConnection()
+    
+    track = webrtc_manager.get_broadcaster_track(id)
+    if not track:
+        raise HTTPException(status_code=404, detail="Station is offline (no WebRTC broadcast available)")
+        
+    pc.addTrack(track)
+    
+    await pc.setRemoteDescription(offer)
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    
+    webrtc_manager.register_listener(id, pc)
+    
+    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
