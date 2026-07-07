@@ -155,6 +155,22 @@ class RadioStationCreate(BaseModel):
     description: Optional[str] = None
     stream_url: Optional[str] = None
     owner_id: Optional[int] = None
+    category: Optional[str] = None
+    licence: Optional[str] = None
+    street_address: Optional[str] = None
+    city: Optional[str] = None
+    state_province: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    website: Optional[str] = None
+    broadcast_frequency: Optional[str] = None
+    languages: Optional[str] = None
+    social_twitter: Optional[str] = None
+    social_instagram: Optional[str] = None
+    programs_list: Optional[str] = None
+    timezone: Optional[str] = None
 
 class RadioStationUpdate(BaseModel):
     name: Optional[str] = None
@@ -163,6 +179,22 @@ class RadioStationUpdate(BaseModel):
     current_program_title: Optional[str] = None
     rj_name: Optional[str] = None
     rj_details: Optional[str] = None
+    category: Optional[str] = None
+    licence: Optional[str] = None
+    street_address: Optional[str] = None
+    city: Optional[str] = None
+    state_province: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    website: Optional[str] = None
+    broadcast_frequency: Optional[str] = None
+    languages: Optional[str] = None
+    social_twitter: Optional[str] = None
+    social_instagram: Optional[str] = None
+    programs_list: Optional[str] = None
+    timezone: Optional[str] = None
 
 class RadioStationResponse(BaseModel):
     id: int
@@ -184,6 +216,22 @@ class RadioStationResponse(BaseModel):
     rj_details: Optional[str] = None
     listeners_count: Optional[int] = 0
     is_online: Optional[bool] = True
+    category: Optional[str] = None
+    licence: Optional[str] = None
+    street_address: Optional[str] = None
+    city: Optional[str] = None
+    state_province: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    website: Optional[str] = None
+    broadcast_frequency: Optional[str] = None
+    languages: Optional[str] = None
+    social_twitter: Optional[str] = None
+    social_instagram: Optional[str] = None
+    programs_list: Optional[str] = None
+    timezone: Optional[str] = None
 
     class Config:
         from_attributes = True

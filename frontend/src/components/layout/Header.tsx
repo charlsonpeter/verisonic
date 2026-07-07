@@ -242,6 +242,26 @@ export const Header: React.FC<HeaderProps> = ({
                   My Profile
                 </button>
 
+                {currentUser && ['radio_admin', 'admin'].includes(currentUser.real_role || currentUser.role) && (
+                  <button 
+                    onClick={() => handleDropdownSelect('station-profile')}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
+                  >
+                    <Radio className="w-4 h-4 text-slate-450" />
+                    Station Profile
+                  </button>
+                )}
+
+                {currentUser && ['studio_admin', 'admin'].includes(currentUser.real_role || currentUser.role) && (
+                  <button 
+                    onClick={() => handleDropdownSelect('studio-profile')}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
+                  >
+                    <Disc className="w-4 h-4 text-slate-450" />
+                    Studio Profile
+                  </button>
+                )}
+
                 <button 
                   onClick={() => handleDropdownSelect('settings')}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"

@@ -92,6 +92,20 @@ def startup_seeder():
         except Exception:
             db.rollback()
 
+        new_cols = [
+            "category", "licence", "street_address", "city", 
+            "state_province", "postal_code", "country", "phone", 
+            "email", "website", "broadcast_frequency", "languages", 
+            "social_twitter", "social_instagram", "programs_list", "timezone"
+        ]
+        for col in new_cols:
+            try:
+                db.execute(text(f"ALTER TABLE radio_stations ADD COLUMN {col} VARCHAR;"))
+                db.commit()
+                print(f"Migration: Added column {col} to radio_stations successfully.")
+            except Exception:
+                db.rollback()
+
         # 1. Seed Admin account if empty
         admin_user = db.query(User).filter(User.role == "admin").first()
         if not admin_user:

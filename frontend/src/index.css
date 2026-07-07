@@ -265,3 +265,22 @@
 .mini-wave-bar:nth-child(3) {
   animation-delay: 0.3s;
 }
+
+/* Color Shift Animation for program highlight */
+@keyframes colorShift {
+  0% {
+    color: #ffffff;
+  }
+  33% {
+    color: #34d399;
+  }
+  66% {
+    color: #f43f5e;
+  }
+  100% {
+    color: #ffffff;
+  }
+}
+.animate-color-shift {
+  animation: colorShift 4s ease-in-out infinite;
+}

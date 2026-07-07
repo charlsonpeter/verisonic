@@ -9,6 +9,7 @@ interface RadioCardProps {
 
 export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
   const { playRadioStation, activeRadioStation, isPlaying, togglePlay } = useAudio();
+  const [showDetails, setShowDetails] = React.useState(false);
 
   const isCurrent = activeRadioStation?.id === station.id;
   const isCurrentlyPlaying = isCurrent && isPlaying;
@@ -109,14 +110,108 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
         </div>
       </div>
 
+      {/* Expandable Station Details tray */}
+      {showDetails && (
+        <div 
+          onClick={(e) => e.stopPropagation()} 
+          className="mt-4 p-3.5 bg-slate-950/40 rounded-2xl border border-white/3 text-[11px] text-slate-300 space-y-3 font-sans cursor-default"
+        >
+          {/* Location details */}
+          {(station.street_address || station.city || station.country) && (
+            <div>
+              <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider block">Address</span>
+              <p className="font-semibold text-slate-200">
+                {station.street_address && `${station.street_address}`}
+                {(station.city || station.state_province) && ` - ${station.city || ''}${station.city && station.state_province ? ', ' : ''}${station.state_province || ''}`}
+                {(station.postal_code || station.country) && ` (${station.postal_code || ''} ${station.country || ''})`}
+              </p>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            {station.licence && (
+              <div>
+                <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider block">Licence</span>
+                <p className="font-semibold text-slate-200">{station.licence}</p>
+              </div>
+            )}
+            {station.broadcast_frequency && (
+              <div>
+                <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider block">Frequency</span>
+                <p className="font-semibold text-slate-200">{station.broadcast_frequency}</p>
+              </div>
+            )}
+            {station.languages && (
+              <div>
+                <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider block">Languages</span>
+                <p className="font-semibold text-slate-200">{station.languages}</p>
+              </div>
+            )}
+            {station.phone && (
+              <div>
+                <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider block">Phone</span>
+                <p className="font-semibold text-slate-200">{station.phone}</p>
+              </div>
+            )}
+            {station.email && (
+              <div className="col-span-2">
+                <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider block">Email</span>
+                <p className="font-semibold text-slate-200 truncate">{station.email}</p>
+              </div>
+            )}
+            {station.website && (
+              <div className="col-span-2">
+                <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider block">Website</span>
+                <a 
+                  href={station.website} 
+                  target="_blank" 
+                  rel="noopener noreferrer" 
+                  className="font-bold text-rose-455 hover:underline truncate block"
+                >
+                  {station.website}
+                </a>
+              </div>
+            )}
+          </div>
+
+          {(station.social_twitter || station.social_instagram) && (
+            <div className="flex gap-4 border-t border-white/3 pt-2 mt-1">
+              {station.social_twitter && (
+                <div>
+                  <span className="text-[8px] text-slate-500 font-bold uppercase tracking-wider block">Twitter</span>
+                  <p className="font-semibold text-slate-300">{station.social_twitter}</p>
+                </div>
+              )}
+              {station.social_instagram && (
+                <div>
+                  <span className="text-[8px] text-slate-500 font-bold uppercase tracking-wider block">Instagram</span>
+                  <p className="font-semibold text-slate-300">{station.social_instagram}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Footer stats block */}
       <div className="mt-4 pt-3.5 border-t border-white/3 flex items-center justify-between text-[10px] text-slate-500 font-bold">
-        <div className="flex items-center gap-1">
-          <Users className="w-3.5 h-3.5 text-slate-400" />
-          <span>{station.is_online === false ? '0' : (station.listeners_count?.toLocaleString() || '1.2K')} tuning in</span>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1">
+            <Users className="w-3.5 h-3.5 text-slate-400" />
+            <span>{station.is_online === false ? '0' : (station.listeners_count?.toLocaleString() || '1.2K')} tuning in</span>
+          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowDetails(!showDetails);
+            }}
+            className="text-[9px] font-bold text-rose-455 hover:text-rose-400 uppercase transition tracking-wider flex items-center gap-0.5"
+          >
+            {showDetails ? 'Hide Info' : 'View Info'}
+          </button>
         </div>
         <span className="bg-slate-900 border border-white/3 text-slate-400 font-bold px-2 py-0.5 rounded-md text-[8px] uppercase">
-          {station.category || 'Pop'}
+          {station.category || 'Uncategorized'}
         </span>
       </div>
     </div>

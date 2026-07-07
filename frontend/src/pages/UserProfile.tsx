@@ -1,5 +1,6 @@
 import React from 'react';
-import { User as UserIcon, Crown, BarChart2, ShieldCheck, Heart, Clock, Disc, Activity } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { User as UserIcon, Crown, BarChart2, ShieldCheck, Heart, Clock, Activity, Key, X, Settings } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio, Track } from '../context/AudioContext';
 import { TrackRow } from '../components/shared/TrackRow';
@@ -20,6 +21,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
   const [email, setEmail] = React.useState(currentUser?.email || '');
   const [profileMessage, setProfileMessage] = React.useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [isSavingProfile, setIsSavingProfile] = React.useState(false);
+  const [isPasswordModalOpen, setIsPasswordModalOpen] = React.useState(false);
 
   // Password update states
   const [oldPassword, setOldPassword] = React.useState('');
@@ -51,7 +53,22 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
     loadFavoriteTracks();
   }, [favorites]);
 
-  const handleUpdateProfile = async (e: React.FormEvent) => {
+  React.useEffect(() => {
+    const mainEl = document.querySelector('main');
+    if (isPasswordModalOpen) {
+      document.body.style.overflow = 'hidden';
+      if (mainEl) mainEl.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+      if (mainEl) mainEl.style.overflow = '';
+    }
+    return () => {
+      document.body.style.overflow = '';
+      if (mainEl) mainEl.style.overflow = '';
+    };
+  }, [isPasswordModalOpen]);
+
+  const handleUpdateAllProfileDetails = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!fullName.trim() || !email.trim()) {
       setProfileMessage({ type: 'error', text: 'Display Name and Email are required.' });
@@ -71,12 +88,13 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
           email: email
         })
       });
-      if (res.ok) {
-        setProfileMessage({ type: 'success', text: 'Profile details updated successfully!' });
-        await fetchCurrentUser();
-      } else {
+      
+      if (!res.ok) {
         const data = await res.json();
-        setProfileMessage({ type: 'error', text: data.detail || 'Failed to update profile.' });
+        setProfileMessage({ type: 'error', text: data.detail || 'Failed to update user profile.' });
+      } else {
+        setProfileMessage({ type: 'success', text: 'Profile details saved successfully!' });
+        if (fetchCurrentUser) await fetchCurrentUser();
       }
     } catch (err) {
       console.error(err);
@@ -135,6 +153,8 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
     averageBitrate: favorites.length > 0 ? "1,411 kbps (FLAC CD)" : "N/A"
   };
 
+
+
   return (
     <div className="space-y-10 w-full">
       {/* 1. PROFILE HEADER CARD */}
@@ -172,7 +192,7 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
             { label: "Avg streaming resolution", val: userStats.averageBitrate, desc: "Active format depth" }
           ].map((stat, idx) => (
             <div key={idx} className="glass-card rounded-2xl p-5 border border-white/5 shadow-inner font-sans">
-              <span className="text-[10px] text-slate-500 font-bold uppercase block mb-1">{stat.label}</span>
+              <span className="text-[10px] text-slate-505 font-bold uppercase block mb-1">{stat.label}</span>
               <span className="text-xl md:text-2xl font-extrabold text-white block">{stat.val}</span>
               <span className="text-[9px] text-slate-400 font-bold block mt-1.5">{stat.desc}</span>
             </div>
@@ -181,24 +201,43 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
       </section>
 
       {/* 2.5. ACCOUNT CONFIGURATIONS */}
-      <section className="grid grid-cols-1 md:grid-cols-2 gap-8 font-sans">
-        {/* Profile Details Edit Card */}
-        <div className="glass-card p-6 rounded-3xl border border-white/5 space-y-4">
-          <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5 font-sans">
-            Update Profile Details
-          </h3>
-          
-          {profileMessage && (
-            <div className={`p-3 rounded-xl text-xs font-semibold ${
-              profileMessage.type === 'success' 
-                ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-450' 
-                : 'bg-rose-500/10 border border-rose-500/20 text-rose-400'
-            }`}>
-              {profileMessage.text}
-            </div>
-          )}
+      <form onSubmit={handleUpdateAllProfileDetails} className="bg-slate-900/10 border border-white/3 p-6 rounded-3xl shadow-inner space-y-6">
+        <h3 className="text-xs font-black text-rose-400 uppercase tracking-widest flex items-center gap-1.5 font-sans pt-1">
+          <Settings className="w-4.5 h-4.5" /> Account Settings
+        </h3>
+        {profileMessage && (
+          <div className={`p-4 rounded-2xl text-xs font-semibold max-w-xl mx-auto shadow-md ${
+            profileMessage.type === 'success' 
+              ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-450' 
+              : 'bg-rose-500/10 border border-rose-500/20 text-rose-400'
+          }`}>
+            {profileMessage.text}
+          </div>
+        )}
 
-          <form onSubmit={handleUpdateProfile} className="space-y-4 text-xs">
+        {/* Card 1: User Profile details (Full Width) */}
+        <div className="glass-card p-6 rounded-3xl border border-white/5 space-y-5 shadow-xl font-sans">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5 font-sans">
+              Update Profile Details
+            </h3>
+            <button
+              type="button"
+              onClick={() => {
+                setPasswordMessage(null);
+                setOldPassword('');
+                setNewPassword('');
+                setConfirmPassword('');
+                setIsPasswordModalOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-white/5 text-[10px] font-bold uppercase rounded-xl transition text-slate-300"
+            >
+              <Key className="w-3.5 h-3.5 text-rose-400" />
+              Change Password
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-1.5">
               <label className="font-bold text-slate-400 uppercase tracking-wider block">Display Name</label>
               <input
@@ -218,78 +257,20 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
                 className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
               />
             </div>
-
-            <button 
-              type="submit"
-              disabled={isSavingProfile}
-              className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md transition uppercase tracking-wider cursor-pointer"
-            >
-              {isSavingProfile ? 'Saving...' : 'Save Details'}
-            </button>
-          </form>
+          </div>
         </div>
 
-        {/* Change Password Card */}
-        <div className="glass-card p-6 rounded-3xl border border-white/5 space-y-4">
-          <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5 font-sans">
-            Change Password
-          </h3>
-          
-          {passwordMessage && (
-            <div className={`p-3 rounded-xl text-xs font-semibold ${
-              passwordMessage.type === 'success' 
-                ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-450' 
-                : 'bg-rose-500/10 border border-rose-500/20 text-rose-400'
-            }`}>
-              {passwordMessage.text}
-            </div>
-          )}
-
-          <form onSubmit={handleChangePassword} className="space-y-3.5 text-xs">
-            <div className="space-y-1.5">
-              <label className="font-bold text-slate-400 uppercase tracking-wider block">Current Password</label>
-              <input
-                type="password"
-                placeholder="••••••••"
-                value={oldPassword}
-                onChange={(e) => setOldPassword(e.target.value)}
-                className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-              />
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-400 uppercase tracking-wider block">New Password</label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-400 uppercase tracking-wider block">Confirm New Password</label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                />
-              </div>
-            </div>
-
-            <button 
-              type="submit"
-              disabled={isSavingPassword}
-              className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md transition uppercase tracking-wider cursor-pointer"
-            >
-              {isSavingPassword ? 'Updating...' : 'Update Password'}
-            </button>
-          </form>
+        {/* Centered Single Save Button */}
+        <div className="flex justify-center pt-2">
+          <button 
+            type="submit"
+            disabled={isSavingProfile}
+            className="px-8 py-3.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg transition uppercase tracking-wider cursor-pointer"
+          >
+            {isSavingProfile ? 'Saving Details...' : 'Save Profile Details'}
+          </button>
         </div>
-      </section>
+      </form>
 
       {/* 3. MY FAVORITES */}
       <section className="space-y-4">
@@ -315,6 +296,99 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
           </div>
         )}
       </section>
+
+      {/* Change Password Modal */}
+      {isPasswordModalOpen && createPortal(
+        <div className="fixed inset-0 z-55 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in overflow-y-auto">
+          <div className="glass-card w-full max-w-md p-6 rounded-3xl border border-white/10 space-y-4 shadow-2xl relative animate-scale-up m-4">
+            <button
+              onClick={() => {
+                setIsPasswordModalOpen(false);
+                setPasswordMessage(null);
+                setOldPassword('');
+                setNewPassword('');
+                setConfirmPassword('');
+              }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white transition"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            
+            <h3 className="text-sm font-extrabold text-white uppercase tracking-widest flex items-center gap-1.5 font-sans">
+              <Key className="w-4 h-4 text-rose-500 animate-pulse" /> Change Password
+            </h3>
+
+            {passwordMessage && (
+              <div className={`p-3 rounded-xl text-xs font-semibold ${
+                passwordMessage.type === 'success' 
+                  ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-450' 
+                  : 'bg-rose-500/10 border border-rose-500/20 text-rose-400'
+              }`}>
+                {passwordMessage.text}
+              </div>
+            )}
+
+            <form onSubmit={handleChangePassword} className="space-y-4 text-xs">
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-400 uppercase tracking-wider block">Current Password</label>
+                <input
+                  type="password"
+                  placeholder="••••••••"
+                  value={oldPassword}
+                  onChange={(e) => setOldPassword(e.target.value)}
+                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
+                />
+              </div>
+              
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-400 uppercase tracking-wider block">New Password</label>
+                <input
+                  type="password"
+                  placeholder="••••••••"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
+                />
+              </div>
+              
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-400 uppercase tracking-wider block">Confirm New Password</label>
+                <input
+                  type="password"
+                  placeholder="••••••••"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
+                />
+              </div>
+
+              <div className="flex gap-3 justify-end pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsPasswordModalOpen(false);
+                    setPasswordMessage(null);
+                    setOldPassword('');
+                    setNewPassword('');
+                    setConfirmPassword('');
+                  }}
+                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 border border-white/5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition text-slate-400"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingPassword}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-[10px] rounded-xl shadow-md transition uppercase tracking-wider cursor-pointer"
+                >
+                  {isSavingPassword ? 'Updating...' : 'Update Password'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>,
+        document.body
+      )}
 
     </div>
   );

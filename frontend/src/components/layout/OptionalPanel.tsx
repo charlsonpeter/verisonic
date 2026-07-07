@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ListMusic, X, Trash2, Play, Music, GripVertical } from 'lucide-react';
 import { useAudio } from '../../context/AudioContext';
 
@@ -24,7 +24,7 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
-  if (!isOpen) return null;
+
 
   // Helper to compile playing and upcoming items into a single list
   const getQueueItems = () => {
@@ -43,13 +43,100 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
 
   const itemsToShow = getQueueItems();
 
-  const radioPrograms = activeRadioStation ? [
-    { id: 1, title: activeRadioStation.current_program_title || "Morning Beats Live", time: "08:00 AM - 11:00 AM", host: activeRadioStation.rj_name || "RJ Sarah", isCurrent: true },
-    { id: 2, title: "Afternoon Groove Mix", time: "11:00 AM - 03:00 PM", host: "RJ Alex", isCurrent: false },
-    { id: 3, title: "Sunset Session Live", time: "03:00 PM - 07:00 PM", host: "RJ Elena", isCurrent: false },
-    { id: 4, title: "Night Owl Beats", time: "07:00 PM - 12:00 AM", host: "RJ Marcus", isCurrent: false },
-    { id: 5, title: "Auto-DJ Night Mix", time: "12:00 AM - 08:00 AM", host: "System Auto-DJ", isCurrent: false }
-  ] : [];
+  const getRadioPrograms = () => {
+    if (!activeRadioStation) return [];
+    
+    const utcTimeToLocalTime = (utcTimeStr: string): string => {
+      if (!utcTimeStr) return '00:00';
+      try {
+        const [utcHours, utcMinutes] = utcTimeStr.split(':').map(Number);
+        const date = new Date();
+        date.setUTCHours(utcHours, utcMinutes, 0, 0);
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      } catch (e) {
+        return utcTimeStr;
+      }
+    };
+
+    if (activeRadioStation.programs_list) {
+      try {
+        const parsed = JSON.parse(activeRadioStation.programs_list);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const now = new Date();
+          const currentMinutes = now.getHours() * 60 + now.getMinutes();
+          let currentProgramIndex = -1;
+          
+          const list = parsed.map((p: any, idx: number) => {
+            let isCurrent = false;
+            if (p.timeFrom && p.timeTo) {
+              try {
+                const [utcFromH, utcFromM] = p.timeFrom.split(':').map(Number);
+                const [utcToH, utcToM] = p.timeTo.split(':').map(Number);
+                
+                const fromDate = new Date();
+                fromDate.setUTCHours(utcFromH, utcFromM, 0, 0);
+                const toDate = new Date();
+                toDate.setUTCHours(utcToH, utcToM, 0, 0);
+                
+                const fromMinutes = fromDate.getHours() * 60 + fromDate.getMinutes();
+                const toMinutes = toDate.getHours() * 60 + toDate.getMinutes();
+                
+                if (toMinutes > fromMinutes) {
+                  isCurrent = currentMinutes >= fromMinutes && currentMinutes <= toMinutes;
+                } else {
+                  isCurrent = currentMinutes >= fromMinutes || currentMinutes <= toMinutes;
+                }
+              } catch (e) {}
+            }
+            if (isCurrent) {
+              currentProgramIndex = idx;
+            }
+            
+            return {
+              id: idx + 1,
+              title: p.title || 'Untitled Program',
+              time: `${utcTimeToLocalTime(p.timeFrom)} - ${utcTimeToLocalTime(p.timeTo)}`,
+              host: p.rj || 'N/A',
+              isCurrent: false
+            };
+          });
+          
+          if (currentProgramIndex !== -1) {
+            list[currentProgramIndex].isCurrent = true;
+          } else if (list.length > 0) {
+            list[0].isCurrent = true;
+          }
+          return list;
+        }
+      } catch (e) {
+        console.warn("Failed to parse programs_list in OptionalPanel:", e);
+      }
+    }
+    
+    return [
+      { id: 1, title: activeRadioStation.current_program_title || "Morning Beats Live", time: "08:00 AM - 11:00 AM", host: activeRadioStation.rj_name || "RJ Sarah", isCurrent: true },
+      { id: 2, title: "Afternoon Groove Mix", time: "11:00 AM - 03:00 PM", host: "RJ Alex", isCurrent: false },
+      { id: 3, title: "Sunset Session Live", time: "03:00 PM - 07:00 PM", host: "RJ Elena", isCurrent: false },
+      { id: 4, title: "Night Owl Beats", time: "07:00 PM - 12:00 AM", host: "RJ Marcus", isCurrent: false }
+    ];
+  };
+
+  const radioPrograms = getRadioPrograms();
+
+  useEffect(() => {
+    if (isOpen && activeRadioStation && radioPrograms.length > 0) {
+      const index = radioPrograms.findIndex(p => p.isCurrent);
+      if (index !== -1) {
+        const timer = setTimeout(() => {
+          const element = document.querySelector(`[data-schedule-index="${index}"]`);
+          if (element) {
+            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }, 350);
+        return () => clearTimeout(timer);
+      }
+    }
+  }, [isOpen, activeRadioStation, radioPrograms.length]);
 
   // Drag & drop handlers
   const handleDragStart = (e: React.DragEvent, queueIndex: number) => {
@@ -79,6 +166,8 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
     reorderQueue(draggedIndex, targetQueueIndex);
     setDraggedIndex(null);
   };
+
+  if (!isOpen) return null;
 
   return (
     <aside className="w-full sm:w-80 glass-card border-l border-white/5 flex flex-col z-20 h-[calc(100vh-73px)] fixed right-0 top-[73px] pt-4 pb-28 shadow-2xl">
@@ -115,9 +204,10 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
 
           {activeRadioStation ? (
             <div className="space-y-2">
-              {radioPrograms.map((prog) => (
+              {radioPrograms.map((prog, index) => (
                 <div
                   key={prog.id}
+                  data-schedule-index={index}
                   className={`flex items-center justify-between p-3 rounded-xl border transition-all duration-250 ${
                     prog.isCurrent 
                       ? 'bg-rose-600/10 border-rose-500/30' 

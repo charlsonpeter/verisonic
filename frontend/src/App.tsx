@@ -33,6 +33,8 @@ import { Artist as ArtistPage } from './pages/Artist';
 import { Playlist as PlaylistPage } from './pages/Playlist';
 import { MusicDetails } from './pages/MusicDetails';
 import { UserProfile } from './pages/UserProfile';
+import { StationProfile } from './pages/StationProfile';
+import { StudioProfile } from './pages/StudioProfile';
 import { Settings } from './pages/Settings';
 import { AuthPage } from './pages/AuthPage';
 import { UsersManagement } from './pages/UsersManagement';
@@ -75,7 +77,7 @@ function DashboardContent() {
   // Route protection redirect for Radio Admins
   useEffect(() => {
     if (currentUser && currentUser.role === 'radio_admin') {
-      if (activeTab !== 'radio' && activeTab !== 'contact' && activeTab !== 'settings' && activeTab !== 'profile') {
+      if (activeTab !== 'radio' && activeTab !== 'contact' && activeTab !== 'settings' && activeTab !== 'profile' && activeTab !== 'station-profile' && activeTab !== 'studio-profile') {
         setActiveTab('radio');
       }
     }
@@ -233,6 +235,10 @@ function DashboardContent() {
         return <MusicDetails track={selectedDetailsTrack} onNavigate={setActiveTab} />;
       case 'profile':
         return <UserProfile onViewReport={viewQualityReport} onViewDetails={handleDetailsView} />;
+      case 'station-profile':
+        return <StationProfile />;
+      case 'studio-profile':
+        return <StudioProfile />;
       case 'settings':
         return <Settings />;
       case 'users':

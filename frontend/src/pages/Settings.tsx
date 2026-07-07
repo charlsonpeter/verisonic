@@ -51,12 +51,6 @@ export const Settings: React.FC = () => {
 
   const handleRegenerateKey = async () => {
     if (!station) return;
-    const confirmed = await showConfirm(
-      "Regenerate Stream Key?",
-      "Are you sure you want to regenerate your Stream Key? Your current live broadcaster connection will disconnect!",
-      "Yes, regenerate"
-    );
-    if (!confirmed) return;
     setIsRegeneratingKey(true);
     try {
       const res = await fetch(`/api/radio/${station.id}/regenerate-key`, {

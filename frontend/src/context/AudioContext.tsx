@@ -40,6 +40,21 @@ export interface RadioStation {
   owner_id?: number;
   stream_key?: string;
   is_online?: boolean;
+  licence?: string;
+  street_address?: string;
+  city?: string;
+  state_province?: string;
+  postal_code?: string;
+  country?: string;
+  phone?: string;
+  email?: string;
+  website?: string;
+  broadcast_frequency?: string;
+  languages?: string;
+  social_twitter?: string;
+  social_instagram?: string;
+  programs_list?: string;
+  timezone?: string;
 }
 
 type RepeatMode = 'none' | 'all' | 'one';

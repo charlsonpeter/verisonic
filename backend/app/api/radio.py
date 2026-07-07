@@ -1,4 +1,7 @@
 import datetime
+import json
+import urllib.request
+import urllib.parse
 import time
 import random
 import secrets
@@ -64,75 +67,64 @@ live_stream_manager = LiveStreamManager()
 
 router = APIRouter(prefix="/radio", tags=["radio"])
 
-def advance_station_if_needed(station: RadioStation, db: Session) -> Track:
-    """
-    Auto-DJ scheduler: advances the station current track if it has finished playing.
-    If no tracks are scheduled, falls back to choosing a random approved track.
-    """
-    now = datetime.datetime.utcnow()
-    
-    # 1. Fetch current track details
-    current_track = None
-    if station.current_track_id:
-        current_track = db.query(Track).filter(Track.id == station.current_track_id).first()
+
+
+def get_timezone_from_location(country: str, state: str, postal_code: str) -> str:
+    parts = []
+    if postal_code:
+        parts.append(postal_code)
+    if state:
+        parts.append(state)
+    if country:
+        parts.append(country)
         
-    # Check if current track has finished
-    needs_advance = False
-    if not current_track or not station.current_track_started_at:
-        needs_advance = True
-    else:
-        duration = current_track.duration or 180.0 # 3 min default
-        end_time = station.current_track_started_at + datetime.timedelta(seconds=duration)
-        if now >= end_time:
-            needs_advance = True
-            
-    if needs_advance:
-        # Fetch next track in schedule queue
-        next_schedule = None
-        if current_track:
-            # Find next schedule item with higher position
-            curr_schedule = db.query(RadioSchedule).filter(
-                RadioSchedule.station_id == station.id,
-                RadioSchedule.track_id == current_track.id
-            ).first()
-            
-            if curr_schedule:
-                next_schedule = db.query(RadioSchedule).filter(
-                    RadioSchedule.station_id == station.id,
-                    RadioSchedule.position > curr_schedule.position
-                ).order_by(RadioSchedule.position.asc()).first()
+    if not parts:
+        return "UTC"
+        
+    query = ", ".join(parts)
+    encoded_query = urllib.parse.quote(query)
+    
+    # 1. Geocode via Nominatim
+    geocode_url = f"https://nominatim.openstreetmap.org/search?q={encoded_query}&format=json&limit=1"
+    req = urllib.request.Request(
+        geocode_url, 
+        headers={'User-Agent': 'VeriSonicBroadcaster/1.0 (contact@verisonic.com)'}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=3) as response:
+            data = json.loads(response.read().decode())
+            if data and len(data) > 0:
+                lat = data[0].get("lat")
+                lon = data[0].get("lon")
                 
-        # If no previous track, get the first scheduled item
-        if not next_schedule:
-            next_schedule = db.query(RadioSchedule).filter(
-                RadioSchedule.station_id == station.id
-            ).order_by(RadioSchedule.position.asc()).first()
-            
-        if next_schedule:
-            # Advance to next scheduled track
-            station.current_track_id = next_schedule.track_id
-            station.current_track_started_at = now
-            db.commit()
-            db.refresh(station)
-            current_track = next_schedule.track
-        else:
-            # Auto-DJ Fallback Mode: Pick a random approved track
-            approved_tracks = db.query(Track).filter(Track.approved == True).all()
-            if approved_tracks:
-                random_track = random.choice(approved_tracks)
-                station.current_track_id = random_track.id
-                station.current_track_started_at = now
-                db.commit()
-                db.refresh(station)
-                current_track = random_track
-            else:
-                station.current_track_id = None
-                station.current_track_started_at = None
-                db.commit()
-                db.refresh(station)
-                current_track = None
-                
-    return current_track
+                # 2. Lookup Timezone via timeapi.io
+                tz_url = f"https://timeapi.io/api/Time/current/coordinate?latitude={lat}&longitude={lon}"
+                tz_req = urllib.request.Request(tz_url, headers={'User-Agent': 'VeriSonicBroadcaster/1.0'})
+                with urllib.request.urlopen(tz_req, timeout=3) as tz_response:
+                    tz_data = json.loads(tz_response.read().decode())
+                    timezone_name = tz_data.get("timeZone")
+                    if timezone_name:
+                        return timezone_name
+    except Exception as e:
+        print(f"Error resolving timezone: {e}")
+        
+    # Static mappings fallback for safety if APIs fail or are offline
+    country_upper = country.upper() if country else ""
+    if "US" in country_upper or "UNITED STATES" in country_upper:
+        state_upper = state.upper() if state else ""
+        if state_upper in ["CA", "OR", "WA", "NV"]: return "America/Los_Angeles"
+        if state_upper in ["NY", "NJ", "MA", "PA", "FL", "GA", "NC"]: return "America/New_York"
+        if state_upper in ["TX", "IL", "CH", "MX"]: return "America/Chicago"
+        if state_upper in ["CO", "AZ", "UT", "NM"]: return "America/Denver"
+        return "America/New_York"
+    if "IN" in country_upper or "INDIA" in country_upper:
+        return "Asia/Kolkata"
+    if "GB" in country_upper or "UK" in country_upper or "UNITED KINGDOM" in country_upper:
+        return "Europe/London"
+    if "AU" in country_upper or "AUSTRALIA" in country_upper:
+        return "Australia/Sydney"
+        
+    return "UTC"
 
 def serialize_station(station: RadioStation, db: Session) -> dict:
     # Ensure stream key exists
@@ -142,6 +134,68 @@ def serialize_station(station: RadioStation, db: Session) -> dict:
         db.refresh(station)
 
     listeners_count = len(live_stream_manager.listeners.get(station.id, set()))
+
+    # Determine dynamic active program title and RJ name based on current time
+    active_program_title = station.current_program_title
+    active_rj_name = station.rj_name
+
+    if station.programs_list:
+        try:
+            programs = json.loads(station.programs_list)
+            if isinstance(programs, list) and len(programs) > 0:
+                current_time = datetime.datetime.utcnow() # Always resolve active program based on current UTC time!
+                current_minutes = current_time.hour * 60 + current_time.minute
+                matched = False
+                for prog in programs:
+                    time_from = prog.get('timeFrom')
+                    time_to = prog.get('timeTo')
+                    if time_from and time_to:
+                        try:
+                            from_h, from_m = map(int, time_from.split(':'))
+                            to_h, to_m = map(int, time_to.split(':'))
+                            from_min = from_h * 60 + from_m
+                            to_min = to_h * 60 + to_m
+                            
+                            if to_min > from_min:
+                                if from_min <= current_minutes <= to_min:
+                                    active_program_title = prog.get('title')
+                                    active_rj_name = prog.get('rj')
+                                    matched = True
+                                    break
+                            else:
+                                if current_minutes >= from_min or current_minutes <= to_min:
+                                    active_program_title = prog.get('title')
+                                    active_rj_name = prog.get('rj')
+                                    matched = True
+                                    break
+                        except Exception:
+                            continue
+                if not matched:
+                    # Fallback to first program if none matched
+                    active_program_title = programs[0].get('title')
+                    active_rj_name = programs[0].get('rj')
+        except Exception:
+            pass
+
+    # Common profile fields
+    profile_data = {
+        "category": station.category,
+        "licence": station.licence,
+        "street_address": station.street_address,
+        "city": station.city,
+        "state_province": station.state_province,
+        "postal_code": station.postal_code,
+        "country": station.country,
+        "phone": station.phone,
+        "email": station.email,
+        "website": station.website,
+        "broadcast_frequency": station.broadcast_frequency,
+        "languages": station.languages,
+        "social_twitter": station.social_twitter,
+        "social_instagram": station.social_instagram,
+        "programs_list": station.programs_list,
+        "timezone": station.timezone or "UTC",
+    }
 
     # If broadcaster is active, stream live from WebSocket broker
     if live_stream_manager.is_live(station.id):
@@ -156,15 +210,16 @@ def serialize_station(station: RadioStation, db: Session) -> dict:
             "stream_key": station.stream_key,
             "current_track_id": None,
             "current_track_started_at": None,
-            "current_track_title": station.current_program_title or "Live Broadcast",
-            "current_track_artist": station.rj_name or station.name,
+            "current_track_title": active_program_title or "Live Broadcast",
+            "current_track_artist": active_rj_name or station.name,
             "current_track_duration": None,
             "current_offset": 0.0,
-            "current_program_title": station.current_program_title,
-            "rj_name": station.rj_name,
+            "current_program_title": active_program_title,
+            "rj_name": active_rj_name,
             "rj_details": station.rj_details,
             "listeners_count": listeners_count,
-            "is_online": True
+            "is_online": True,
+            **profile_data
         }
 
     if station.stream_url:
@@ -179,15 +234,16 @@ def serialize_station(station: RadioStation, db: Session) -> dict:
             "stream_key": station.stream_key,
             "current_track_id": None,
             "current_track_started_at": None,
-            "current_track_title": station.current_program_title or "Live Broadcast",
-            "current_track_artist": station.rj_name or station.name,
+            "current_track_title": active_program_title or "Live Broadcast",
+            "current_track_artist": active_rj_name or station.name,
             "current_track_duration": None,
             "current_offset": 0.0,
-            "current_program_title": station.current_program_title,
-            "rj_name": station.rj_name,
+            "current_program_title": active_program_title,
+            "rj_name": active_rj_name,
             "rj_details": station.rj_details,
             "listeners_count": listeners_count,
-            "is_online": True
+            "is_online": True,
+            **profile_data
         }
 
     # Otherwise, the station is offline (no live broadcaster, no stream url)
@@ -206,11 +262,12 @@ def serialize_station(station: RadioStation, db: Session) -> dict:
         "current_track_artist": "No active broadcast",
         "current_track_duration": None,
         "current_offset": 0.0,
-        "current_program_title": station.current_program_title,
-        "rj_name": station.rj_name,
+        "current_program_title": active_program_title,
+        "rj_name": active_rj_name,
         "rj_details": station.rj_details,
         "listeners_count": 0,
-        "is_online": False
+        "is_online": False,
+        **profile_data
     }
 
 @router.post("", response_model=RadioStationResponse)
@@ -228,13 +285,37 @@ def create_radio_station(
     if current_user.role == "admin" and station_in.owner_id is not None:
         resolved_owner_id = station_in.owner_id
         
+    resolved_tz = station_in.timezone
+    if not resolved_tz:
+        resolved_tz = get_timezone_from_location(
+            station_in.country,
+            station_in.state_province,
+            station_in.postal_code
+        )
+
     station = RadioStation(
         name=station_in.name,
         description=station_in.description,
         stream_url=station_in.stream_url,
         owner_id=resolved_owner_id,
         stream_key="rs_key_" + secrets.token_hex(16) + "_" + str(int(time.time())),
-        is_active=True
+        is_active=True,
+        category=station_in.category,
+        licence=station_in.licence,
+        street_address=station_in.street_address,
+        city=station_in.city,
+        state_province=station_in.state_province,
+        postal_code=station_in.postal_code,
+        country=station_in.country,
+        phone=station_in.phone,
+        email=station_in.email,
+        website=station_in.website,
+        broadcast_frequency=station_in.broadcast_frequency,
+        languages=station_in.languages,
+        social_twitter=station_in.social_twitter,
+        social_instagram=station_in.social_instagram,
+        programs_list=station_in.programs_list,
+        timezone=resolved_tz
     )
     db.add(station)
     db.commit()
@@ -267,6 +348,50 @@ def update_radio_station(
         station.rj_name = station_in.rj_name
     if station_in.rj_details is not None:
         station.rj_details = station_in.rj_details
+    if station_in.category is not None:
+        station.category = station_in.category
+    if station_in.licence is not None:
+        station.licence = station_in.licence
+    if station_in.street_address is not None:
+        station.street_address = station_in.street_address
+    if station_in.city is not None:
+        station.city = station_in.city
+    loc_changed = False
+    if station_in.state_province is not None:
+        station.state_province = station_in.state_province
+        loc_changed = True
+    if station_in.postal_code is not None:
+        station.postal_code = station_in.postal_code
+        loc_changed = True
+    if station_in.country is not None:
+        station.country = station_in.country
+        loc_changed = True
+        
+    if station_in.timezone is not None:
+        station.timezone = station_in.timezone
+    elif loc_changed:
+        station.timezone = get_timezone_from_location(
+            station.country,
+            station.state_province,
+            station.postal_code
+        )
+
+    if station_in.phone is not None:
+        station.phone = station_in.phone
+    if station_in.email is not None:
+        station.email = station_in.email
+    if station_in.website is not None:
+        station.website = station_in.website
+    if station_in.broadcast_frequency is not None:
+        station.broadcast_frequency = station_in.broadcast_frequency
+    if station_in.languages is not None:
+        station.languages = station_in.languages
+    if station_in.social_twitter is not None:
+        station.social_twitter = station_in.social_twitter
+    if station_in.social_instagram is not None:
+        station.social_instagram = station_in.social_instagram
+    if station_in.programs_list is not None:
+        station.programs_list = station_in.programs_list
         
     db.commit()
     db.refresh(station)

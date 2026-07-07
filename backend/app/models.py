@@ -146,6 +146,24 @@ class RadioStation(Base):
     current_program_title = Column(String, nullable=True)
     rj_name = Column(String, nullable=True)
     rj_details = Column(String, nullable=True)
+
+    # Detailed profile metadata
+    category = Column(String, nullable=True)
+    licence = Column(String, nullable=True)
+    street_address = Column(String, nullable=True)
+    city = Column(String, nullable=True)
+    state_province = Column(String, nullable=True)
+    postal_code = Column(String, nullable=True)
+    country = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    website = Column(String, nullable=True)
+    broadcast_frequency = Column(String, nullable=True)
+    languages = Column(String, nullable=True)
+    social_twitter = Column(String, nullable=True)
+    social_instagram = Column(String, nullable=True)
+    programs_list = Column(String, nullable=True)
+    timezone = Column(String, nullable=True, default="UTC")
     
     schedules = relationship("RadioSchedule", back_populates="station", cascade="all, delete-orphan")
 
