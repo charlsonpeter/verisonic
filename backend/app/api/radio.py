@@ -6,6 +6,7 @@ import time
 import random
 import secrets
 import asyncio
+from collections import deque
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -24,6 +25,8 @@ class LiveStreamManager:
         self.listeners: Dict[int, Set[asyncio.Queue]] = {}
         # Maps station_id (int) -> bool indicating if a broadcaster is currently connected
         self.broadcasters: Dict[int, bool] = {}
+        # Maps station_id (int) -> deque of recent audio chunks for fast-start
+        self.history: Dict[int, deque] = {}
 
     def is_live(self, station_id: int) -> bool:
         return self.broadcasters.get(station_id, False)
@@ -33,6 +36,14 @@ class LiveStreamManager:
         if station_id not in self.listeners:
             self.listeners[station_id] = set()
         self.listeners[station_id].add(q)
+        
+        # Populate new listener's queue with recent history to start playing instantly
+        if station_id in self.history:
+            for chunk in self.history[station_id]:
+                try:
+                    q.put_nowait(chunk)
+                except asyncio.QueueFull:
+                    pass
         return q
 
     def unregister_listener(self, station_id: int, q: asyncio.Queue):
@@ -42,6 +53,11 @@ class LiveStreamManager:
                 del self.listeners[station_id]
 
     async def broadcast_chunk(self, station_id: int, chunk: bytes):
+        # Store chunk in sliding window history buffer (last ~30 chunks is about 3 seconds)
+        if station_id not in self.history:
+            self.history[station_id] = deque(maxlen=30)
+        self.history[station_id].append(chunk)
+
         if station_id not in self.listeners:
             return
         for q in list(self.listeners[station_id]):
@@ -56,6 +72,8 @@ class LiveStreamManager:
 
     async def stop_broadcasting(self, station_id: int):
         self.broadcasters[station_id] = False
+        if station_id in self.history:
+            del self.history[station_id]
         if station_id in self.listeners:
             for q in list(self.listeners[station_id]):
                 try:
