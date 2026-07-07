@@ -214,7 +214,9 @@ def serialize_station(station: RadioStation, db: Session) -> dict:
         db.commit()
         db.refresh(station)
 
-    listeners_count = len(live_stream_manager.listeners.get(station.id, set()))
+    webrtc_listeners = len(webrtc_manager.listeners.get(station.id, set())) if hasattr(webrtc_manager, 'listeners') else 0
+    websocket_listeners = len(live_stream_manager.listeners.get(station.id, set()))
+    listeners_count = webrtc_listeners + websocket_listeners
 
     # Determine dynamic active program title and RJ name based on current time
     active_program_title = station.current_program_title
@@ -277,6 +279,31 @@ def serialize_station(station: RadioStation, db: Session) -> dict:
         "programs_list": station.programs_list,
         "timezone": station.timezone or "UTC",
     }
+
+    # If WebRTC broadcaster is active
+    if webrtc_manager.is_live(station.id):
+        return {
+            "id": station.id,
+            "name": station.name,
+            "description": station.description,
+            "cover_art_url": station.cover_art_url or "https://images.unsplash.com/photo-1507838153414-b4b713384a76?w=150&auto=format&fit=crop",
+            "is_active": station.is_active,
+            "stream_url": f"/api/radio/{station.id}/live",
+            "owner_id": station.owner_id,
+            "stream_key": station.stream_key,
+            "current_track_id": None,
+            "current_track_started_at": None,
+            "current_track_title": active_program_title or "Live Broadcast (WebRTC)",
+            "current_track_artist": active_rj_name or station.name,
+            "current_track_duration": None,
+            "current_offset": 0.0,
+            "current_program_title": active_program_title,
+            "rj_name": active_rj_name,
+            "rj_details": station.rj_details,
+            "listeners_count": listeners_count,
+            "is_online": True,
+            **profile_data
+        }
 
     # If broadcaster is active, stream live from WebSocket broker
     if live_stream_manager.is_live(station.id):
