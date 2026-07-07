@@ -1038,7 +1038,10 @@ class PyQtBroadcasterApp(QMainWindow):
                 # Encode to MP3 and queue for WebSocket send
                 if encoder is not None:
                     clipped = np.clip(data_chunk, -1.0, 1.0)
-                    pcm_bytes = (clipped * 32767).astype(np.int16).tobytes()
+                    pcm_int16 = (clipped * 32767).astype(np.int16)
+                    # Ensure C-contiguous layout for lameenc (interleaved stereo or mono)
+                    pcm_int16 = np.ascontiguousarray(pcm_int16)
+                    pcm_bytes = pcm_int16.tobytes()
                     mp3_data = encoder.encode(pcm_bytes)
                     if mp3_data:
                         try:
@@ -1099,7 +1102,7 @@ class PyQtBroadcasterApp(QMainWindow):
                         device=self.active_device_id,
                         channels=channels,
                         samplerate=44100,
-                        blocksize=4096,
+                        blocksize=2048,
                         callback=audio_callback
                     )
                     audio_stream.start()

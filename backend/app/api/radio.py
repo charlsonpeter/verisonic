@@ -66,9 +66,8 @@ class LiveStreamManager:
             self.history[station_id] = deque(maxlen=60)
         self.history[station_id].append(chunk)
 
-        if station_id not in self.listeners:
-            return
-        for q in list(self.listeners[station_id]):
+        # Push to all HTTP streaming listeners
+        for q in list(self.listeners.get(station_id, set())):
             try:
                 q.put_nowait(chunk)
             except asyncio.QueueFull:
@@ -78,7 +77,7 @@ class LiveStreamManager:
                 except Exception:
                     pass
 
-        # Also push to any active WebRTC relay tracks (resolved at call time to avoid forward ref)
+        # Also push to any active WebRTC relay tracks
         _wm = globals().get('webrtc_manager')
         if _wm is not None:
             await _wm.push_chunk(station_id, chunk)
@@ -750,7 +749,13 @@ async def get_live_audio_stream(
             while True:
                 if not live_stream_manager.is_live(id):
                     break
-                chunk = await queue.get()
+                try:
+                    chunk = await asyncio.wait_for(queue.get(), timeout=10.0)
+                except asyncio.TimeoutError:
+                    # Station may have gone offline silently — recheck
+                    if not live_stream_manager.is_live(id):
+                        break
+                    continue
                 if chunk is None:
                     break
                 yield chunk
@@ -767,7 +772,11 @@ async def get_live_audio_stream(
             "Pragma": "no-cache",
             "Expires": "0",
             "Connection": "keep-alive",
+            "Transfer-Encoding": "chunked",
             "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+            "icy-name": "VeriSonic Live",
+            "icy-metaint": "0",
         }
     )
 
