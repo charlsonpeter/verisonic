@@ -10,10 +10,12 @@ from collections import deque
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Header
 
 try:
-    from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
+    from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack, RTCConfiguration, RTCIceServer
 except ImportError:
     RTCPeerConnection = None
     RTCSessionDescription = None
+    RTCConfiguration = None
+    RTCIceServer = None
     class MediaStreamTrack:
         pass
 from fastapi.responses import StreamingResponse
@@ -61,9 +63,9 @@ class LiveStreamManager:
                 del self.listeners[station_id]
 
     async def broadcast_chunk(self, station_id: int, chunk: bytes):
-        # Store chunk in sliding window history buffer (last ~15 chunks is about 0.7 seconds)
+        # Store chunk in sliding window history buffer (last ~100 chunks is about 4.6 seconds)
         if station_id not in self.history:
-            self.history[station_id] = deque(maxlen=15)
+            self.history[station_id] = deque(maxlen=100)
         self.history[station_id].append(chunk)
 
         # Push to all HTTP streaming listeners
@@ -629,7 +631,7 @@ def get_station_stream_sync(
 
     if live_stream_manager.is_live(station.id):
         # Station is live - offer WebRTC delivery if available, else fallback to HTTP stream
-        use_webrtc = False
+        use_webrtc = RTCPeerConnection is not None and AUDIO_RELAY_TRACK_CLASS is not None
         return {
             "station_id": station.id,
             "station_name": station.name,
@@ -868,7 +870,17 @@ async def webrtc_listener(id: int, params: dict, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Station is offline (no active broadcast)")
 
     offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
-    pc = RTCPeerConnection()
+    
+    # Configure STUN servers to resolve the server's public IP address on AWS
+    config = None
+    if RTCConfiguration is not None and RTCIceServer is not None:
+        config = RTCConfiguration(
+            iceServers=[
+                RTCIceServer(urls="stun:stun.l.google.com:19302"),
+                RTCIceServer(urls="stun:stun1.l.google.com:19302")
+            ]
+        )
+    pc = RTCPeerConnection(configuration=config) if config else RTCPeerConnection()
 
     # Create a relay track that will receive MP3 chunks from LiveStreamManager
     relay_track = AUDIO_RELAY_TRACK_CLASS(id)
