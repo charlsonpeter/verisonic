@@ -43,7 +43,7 @@ services:
       dockerfile: Dockerfile
     container_name: verisonic_backend
     network_mode: host
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
     volumes:
       - ./backend:/app
     environment:
