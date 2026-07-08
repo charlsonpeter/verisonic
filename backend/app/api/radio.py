@@ -40,7 +40,7 @@ class LiveStreamManager:
         return self.broadcasters.get(station_id, False)
 
     def register_listener(self, station_id: int) -> asyncio.Queue:
-        q = asyncio.Queue(maxsize=50)
+        q = asyncio.Queue(maxsize=10)
         if station_id not in self.listeners:
             self.listeners[station_id] = set()
         self.listeners[station_id].add(q)
@@ -113,7 +113,7 @@ if RTCPeerConnection is not None:
             def __init__(self, station_id: int):
                 super().__init__()
                 self.station_id = station_id
-                self._queue: asyncio.Queue = asyncio.Queue(maxsize=50)
+                self._queue: asyncio.Queue = asyncio.Queue(maxsize=10)
                 self._pts = 0
                 self._sample_rate = 44100
                 self._channels = 2
