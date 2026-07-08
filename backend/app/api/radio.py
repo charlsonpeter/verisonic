@@ -139,6 +139,11 @@ if RTCPeerConnection is not None:
                         for frame in self._codec.decode(packet):
                             pcm = frame.to_ndarray()
                             pcm_frames.append(pcm)
+                    
+                    if pcm_frames:
+                        self._frame_count = getattr(self, '_frame_count', 0) + len(pcm_frames)
+                        if self._frame_count % 100 == 0:
+                            print(f"DEBUG: WebRTC relay decoded 100 frames for station {self.station_id}", flush=True)
                 except Exception as e:
                     print(f"Error decoding WebRTC chunk: {e}", flush=True)
 
@@ -187,9 +192,11 @@ class WebRTCManager:
             self.relay_tracks[station_id] = set()
         self.listeners[station_id].add(pc)
         self.relay_tracks[station_id].add(track)
+        print(f"DEBUG: WebRTC listener registered. Initial connectionState: {pc.connectionState}", flush=True)
 
         @pc.on("connectionstatechange")
         def on_state_change():
+            print(f"DEBUG: WebRTC connection state change for station {station_id}: {pc.connectionState}", flush=True)
             if pc.connectionState in ["failed", "closed", "disconnected"]:
                 self.listeners.get(station_id, set()).discard(pc)
                 self.relay_tracks.get(station_id, set()).discard(track)
