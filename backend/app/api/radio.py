@@ -267,8 +267,19 @@ def get_timezone_from_location(country: str, state: str, postal_code: str) -> st
     return "UTC"
 
 def serialize_station(station: RadioStation, db: Session) -> dict:
-    # Ensure stream key exists
-    if not station.stream_key:
+    # Ensure stream key exists and check for expiration (5 minutes validity)
+    is_expired = False
+    if station.stream_key:
+        try:
+            parts = station.stream_key.split("_")
+            if len(parts) >= 4:
+                timestamp = int(parts[-1])
+                if int(time.time()) - timestamp > 300:
+                    is_expired = True
+        except Exception:
+            is_expired = True
+
+    if not station.stream_key or is_expired:
         station.stream_key = "rs_key_" + secrets.token_hex(16) + "_" + str(int(time.time()))
         db.commit()
         db.refresh(station)

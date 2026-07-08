@@ -14,7 +14,6 @@ export const Settings: React.FC = () => {
 
   // Broadcaster states
   const [station, setStation] = useState<any>(null);
-  const [showKey, setShowKey] = useState(true);
   const [isRegeneratingKey, setIsRegeneratingKey] = useState(false);
   const [copiedKey, setCopiedKey] = useState(false);
 
@@ -92,23 +91,76 @@ export const Settings: React.FC = () => {
     document.body.removeChild(textArea);
   };
 
-  const handleCopyKey = () => {
+  const [currentTime, setCurrentTime] = useState(Math.floor(Date.now() / 1000));
+
+  React.useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(Math.floor(Date.now() / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const isKeyExpired = (key: string): boolean => {
+    if (!key || !key.startsWith("rs_key_")) return true;
+    const parts = key.split("_");
+    if (parts.length < 4) return true;
+    const timestamp = parseInt(parts[parts.length - 1], 10);
+    if (isNaN(timestamp)) return true;
+    return (currentTime - timestamp) > 300;
+  };
+
+  const getKeyExpiryInfo = () => {
+    if (!station || !station.stream_key) return null;
+    const parts = station.stream_key.split("_");
+    if (parts.length < 4) return { expired: true, text: "Invalid Format", color: "text-rose-500" };
+    const timestamp = parseInt(parts[parts.length - 1], 10);
+    if (isNaN(timestamp)) return { expired: true, text: "Invalid Format", color: "text-rose-500" };
+    
+    const elapsed = currentTime - timestamp;
+    const remaining = 300 - elapsed;
+    
+    if (remaining <= 0) {
+      return { expired: true, text: "Expired (will auto-renew on copy)", color: "text-amber-500 animate-pulse" };
+    }
+    return null;
+  };
+
+  const handleCopyKey = async () => {
     if (!station) return;
-    const textToCopy = station.stream_key || '';
+    let keyToCopy = station.stream_key || '';
+    if (isKeyExpired(keyToCopy)) {
+      try {
+        const res = await fetch(`/api/radio/${station.id}/regenerate-key`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          keyToCopy = data.stream_key;
+          setStation(data);
+        }
+      } catch (e) {
+        console.error("Failed to silently regenerate stream key:", e);
+      }
+    }
+    
     const onSuccess = () => {
       setCopiedKey(true);
       setTimeout(() => setCopiedKey(false), 2000);
     };
 
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(textToCopy)
+      navigator.clipboard.writeText(keyToCopy)
         .then(onSuccess)
         .catch(err => {
           console.warn("Clipboard API failed, trying fallback:", err);
-          fallbackCopyText(textToCopy, onSuccess);
+          fallbackCopyText(keyToCopy, onSuccess);
         });
     } else {
-      fallbackCopyText(textToCopy, onSuccess);
+      fallbackCopyText(keyToCopy, onSuccess);
     }
   };
 
@@ -204,21 +256,26 @@ export const Settings: React.FC = () => {
 
                 {/* Stream Key */}
                 <div className="space-y-1">
-                  <label className="text-[9.5px] font-bold text-slate-550 uppercase block">Stream Key</label>
+                  <div className="flex justify-between items-center">
+                    <label className="text-[9.5px] font-bold text-slate-550 uppercase block">Stream Key</label>
+                    {(() => {
+                      const info = getKeyExpiryInfo();
+                      if (!info) return null;
+                      return (
+                        <span className={`text-[9px] font-bold uppercase tracking-wider flex items-center gap-1.5 ${info.color}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${info.expired ? 'bg-amber-500' : 'bg-emerald-400'}`} />
+                          {info.text}
+                        </span>
+                      );
+                    })()}
+                  </div>
                   <div className="flex gap-2">
                     <input
-                      type={showKey ? 'text' : 'password'}
+                      type="text"
                       readOnly
                       value={station.stream_key || ''}
                       className="w-full bg-slate-950 border border-white/5 text-[10px] p-2.5 rounded-xl text-white font-mono font-semibold outline-none tracking-wider"
                     />
-                    <button
-                      type="button"
-                      onClick={() => setShowKey(!showKey)}
-                      className="px-3 bg-slate-900 hover:bg-slate-800 border border-white/5 text-slate-450 hover:text-white rounded-xl transition cursor-pointer"
-                    >
-                      {showKey ? 'Hide' : 'Show'}
-                    </button>
                     <button
                       type="button"
                       onClick={handleCopyKey}
