@@ -139,11 +139,16 @@ if RTCPeerConnection is not None:
                 try:
                     packets = self._codec.parse(chunk)
                     for packet in packets:
-                        for frame in self._codec.decode(packet):
-                            pcm = frame.to_ndarray()
-                            pcm_frames.append(pcm)
+                        try:
+                            for frame in self._codec.decode(packet):
+                                pcm = frame.to_ndarray()
+                                pcm_frames.append(pcm)
+                        except Exception as e:
+                            # The first packet in a stream is often unaligned (middle of an MP3 frame) 
+                            # and can cause an avcodec_send_packet() invalid data error. We catch and skip it.
+                            print(f"WebRTC packet decode warning (normal at start): {e}", flush=True)
                 except Exception as e:
-                    print(f"Error decoding WebRTC chunk: {e}", flush=True)
+                    print(f"Error parsing WebRTC chunk: {e}", flush=True)
 
                 if pcm_frames:
                     import numpy as np_inner
