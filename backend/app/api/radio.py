@@ -7,7 +7,7 @@ import random
 import secrets
 import asyncio
 from collections import deque
-from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Header
 
 try:
     from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
@@ -750,11 +750,33 @@ async def websocket_stream_endpoint(
 @router.get("/{id}/live")
 async def get_live_audio_stream(
     id: int,
-    current_user = Depends(get_optional_current_user)
+    authorization: Optional[str] = Header(None),
+    x_user_mode: Optional[str] = Header(None)
 ):
+    # Custom, dependency-free optional user resolution to avoid DB connection leaks
+    current_user = None
     from app.db.session import SessionLocal
     db = SessionLocal()
     try:
+        if authorization and authorization.startswith("Bearer "):
+            token = authorization.split(" ")[1]
+            try:
+                from jose import jwt
+                from app.core.config import settings
+                from app.core.security import ALGORITHM
+                payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+                user_id = int(payload.get("sub"))
+                
+                from app.models import User
+                user = db.query(User).filter(User.id == user_id).first()
+                if user:
+                    user._real_role = user.role
+                    if x_user_mode == "listener" and user.role in ["admin", "radio_admin", "studio_admin"]:
+                        user.__dict__["role"] = "listener"
+                    current_user = user
+            except Exception:
+                pass
+
         station = db.query(RadioStation).filter(RadioStation.id == id).first()
         if not station:
             raise HTTPException(status_code=404, detail="Radio station not found")
