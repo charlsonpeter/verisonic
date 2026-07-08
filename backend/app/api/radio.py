@@ -659,100 +659,110 @@ async def websocket_stream_endpoint(
     websocket: WebSocket,
     stream_key: Optional[str] = None,
     token: Optional[str] = None,
-    station_id: Optional[int] = None,
-    db: Session = Depends(get_db)
+    station_id: Optional[int] = None
 ):
+    from app.db.session import SessionLocal
+    db = SessionLocal()
     station = None
-    if token:
-        # Validate JWT token
-        try:
-            from jose import jwt
-            from app.core.config import settings
-            from app.core.security import ALGORITHM
-            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
-            user_id = int(payload.get("sub"))
-            
-            # Fetch user to verify role and permissions
-            from app.models import User
-            user = db.query(User).filter(User.id == user_id).first()
-            if not user:
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="User Not Found")
-                return
+    try:
+        if token:
+            # Validate JWT token
+            try:
+                from jose import jwt
+                from app.core.config import settings
+                from app.core.security import ALGORITHM
+                payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+                user_id = int(payload.get("sub"))
                 
-            if station_id:
-                station = db.query(RadioStation).filter(RadioStation.id == station_id).first()
-                if not station:
-                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Station Not Found")
+                # Fetch user to verify role and permissions
+                from app.models import User
+                user = db.query(User).filter(User.id == user_id).first()
+                if not user:
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="User Not Found")
                     return
-                # Check permissions: must be admin or the station owner
-                if user.role != "admin" and station.owner_id != user.id:
-                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Not Authorized")
-                    return
-            else:
-                # Find station owned by this user
-                station = db.query(RadioStation).filter(RadioStation.owner_id == user_id).first()
-        except Exception as e:
-            print("WebSocket token validation failed:", e)
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid Token")
+                    
+                if station_id:
+                    station = db.query(RadioStation).filter(RadioStation.id == station_id).first()
+                    if not station:
+                        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Station Not Found")
+                        return
+                    # Check permissions: must be admin or the station owner
+                    if user.role != "admin" and station.owner_id != user.id:
+                        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Not Authorized")
+                        return
+                else:
+                    # Find station owned by this user
+                    station = db.query(RadioStation).filter(RadioStation.owner_id == user_id).first()
+            except Exception as e:
+                print("WebSocket token validation failed:", e)
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid Token")
+                return
+        elif stream_key:
+            # Verify stream key
+            station = db.query(RadioStation).filter(RadioStation.stream_key == stream_key).first()
+            if not station:
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid Stream Key")
+                return
+
+            # Check key expiration (5 minutes validity for connecting)
+            try:
+                parts = stream_key.split("_")
+                if len(parts) >= 4:  # "rs", "key", hex, timestamp
+                    timestamp = int(parts[-1])
+                    import time
+                    if time.time() - timestamp > 300:  # 5 minutes
+                        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Stream Key Expired")
+                        return
+            except Exception as e:
+                print("Error checking stream key expiration:", e)
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid Stream Key Format")
+                return
+        else:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Authentication Required")
             return
-    elif stream_key:
-        # Verify stream key
-        station = db.query(RadioStation).filter(RadioStation.stream_key == stream_key).first()
+
         if not station:
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid Stream Key")
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Station Not Found")
             return
 
-        # Check key expiration (5 minutes validity for connecting)
-        try:
-            parts = stream_key.split("_")
-            if len(parts) >= 4:  # "rs", "key", hex, timestamp
-                timestamp = int(parts[-1])
-                import time
-                if time.time() - timestamp > 300:  # 5 minutes
-                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Stream Key Expired")
-                    return
-        except Exception as e:
-            print("Error checking stream key expiration:", e)
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid Stream Key Format")
-            return
-    else:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Authentication Required")
-        return
-
-    if not station:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Station Not Found")
-        return
+        station_name = station.name
+        resolved_station_id = station.id
+    finally:
+        db.close()
 
     await websocket.accept()
-    station_id = station.id
-    live_stream_manager.broadcasters[station_id] = True
-    print(f"Broadcaster connected to station {station.name} (ID: {station_id})")
+    live_stream_manager.broadcasters[resolved_station_id] = True
+    print(f"Broadcaster connected to station {station_name} (ID: {resolved_station_id})")
 
     try:
         while True:
             # Receive audio chunk as bytes
             data = await websocket.receive_bytes()
             if data:
-                await live_stream_manager.broadcast_chunk(station_id, data)
+                await live_stream_manager.broadcast_chunk(resolved_station_id, data)
     except WebSocketDisconnect:
-        print(f"Broadcaster disconnected from station {station.name} (ID: {station_id})")
+        print(f"Broadcaster disconnected from station {station_name} (ID: {resolved_station_id})")
     except Exception as e:
-        print(f"Broadcaster error on station {station.name} (ID: {station_id}): {e}")
+        print(f"Broadcaster error on station {station_name} (ID: {resolved_station_id}): {e}")
     finally:
-        await live_stream_manager.stop_broadcasting(station_id)
+        await live_stream_manager.stop_broadcasting(resolved_station_id)
 
 @router.get("/{id}/live")
 async def get_live_audio_stream(
     id: int,
-    db: Session = Depends(get_db),
     current_user = Depends(get_optional_current_user)
 ):
-    station = db.query(RadioStation).filter(RadioStation.id == id).first()
-    if not station:
-        raise HTTPException(status_code=404, detail="Radio station not found")
+    from app.db.session import SessionLocal
+    db = SessionLocal()
+    try:
+        station = db.query(RadioStation).filter(RadioStation.id == id).first()
+        if not station:
+            raise HTTPException(status_code=404, detail="Radio station not found")
 
-    if current_user and current_user.role == "radio_admin" and station.owner_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Radio admins can only access their own radio station")
+        if current_user and current_user.role == "radio_admin" and station.owner_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Radio admins can only access their own radio station")
+    finally:
+        db.close()
 
     async def audio_generator():
         queue = live_stream_manager.register_listener(id)
