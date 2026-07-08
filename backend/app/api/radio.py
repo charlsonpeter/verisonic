@@ -732,18 +732,22 @@ async def websocket_stream_endpoint(
 
     await websocket.accept()
     live_stream_manager.broadcasters[resolved_station_id] = True
-    print(f"Broadcaster connected to station {station_name} (ID: {resolved_station_id})")
+    print(f"Broadcaster connected to station {station_name} (ID: {resolved_station_id})", flush=True)
 
     try:
+        chunk_count = 0
         while True:
             # Receive audio chunk as bytes
             data = await websocket.receive_bytes()
             if data:
+                chunk_count += 1
+                if chunk_count % 100 == 0:
+                    print(f"Received 100 chunks from station {resolved_station_id}. Chunk size: {len(data)} bytes.", flush=True)
                 await live_stream_manager.broadcast_chunk(resolved_station_id, data)
     except WebSocketDisconnect:
-        print(f"Broadcaster disconnected from station {station_name} (ID: {resolved_station_id})")
+        print(f"Broadcaster disconnected from station {station_name} (ID: {resolved_station_id})", flush=True)
     except Exception as e:
-        print(f"Broadcaster error on station {station_name} (ID: {resolved_station_id}): {e}")
+        print(f"Broadcaster error on station {station_name} (ID: {resolved_station_id}): {e}", flush=True)
     finally:
         await live_stream_manager.stop_broadcasting(resolved_station_id)
 
@@ -788,24 +792,29 @@ async def get_live_audio_stream(
 
     async def audio_generator():
         queue = live_stream_manager.register_listener(id)
+        print(f"Listener registered for station {id}", flush=True)
         try:
             while True:
                 if not live_stream_manager.is_live(id):
+                    print(f"Station {id} went offline. Stopping listener stream.", flush=True)
                     break
                 try:
                     chunk = await asyncio.wait_for(queue.get(), timeout=10.0)
                 except asyncio.TimeoutError:
-                    # Station may have gone offline silently — recheck
+                    print(f"Listener timeout waiting for chunks on station {id}...", flush=True)
                     if not live_stream_manager.is_live(id):
                         break
                     continue
                 if chunk is None:
+                    print(f"Listener received None chunk on station {id}. Closing stream.", flush=True)
                     break
                 yield chunk
         except asyncio.CancelledError:
+            print(f"Listener connection cancelled/closed on station {id}", flush=True)
             pass
         finally:
             live_stream_manager.unregister_listener(id, queue)
+            print(f"Listener unregistered for station {id}", flush=True)
 
     return StreamingResponse(
         audio_generator(),

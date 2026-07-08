@@ -1120,6 +1120,7 @@ class PyQtBroadcasterApp(QMainWindow):
                     ssl_ctx.check_hostname = False
                     ssl_ctx.verify_mode = ssl.CERT_NONE
 
+                print("Broadcaster attempting to connect to URL:", ws_url)
                 async with websockets.connect(
                     ws_url,
                     ssl=ssl_ctx,
