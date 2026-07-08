@@ -117,7 +117,7 @@ if RTCPeerConnection is not None:
                 self.station_id = station_id
                 self._queue: asyncio.Queue = asyncio.Queue(maxsize=10)
                 self._pts = 0
-                self._sample_rate = 44100
+                self._sample_rate = 48000
                 self._channels = 2
                 self._running = True
                 
@@ -126,8 +126,23 @@ if RTCPeerConnection is not None:
                 self._codec = av.CodecContext.create('mp3', 'r')
                 self._codec.open()
 
+                # Resampler to convert 44.1 kHz planar s16p to WebRTC standard 48 kHz packed s16
+                self._resampler = av.AudioResampler(
+                    format='s16',
+                    layout='stereo',
+                    rate=48000
+                )
+                self._resampled_queue = []
+
             async def recv(self):
-                # Pull raw audio bytes from the relay queue
+                # If we have buffered resampled frames, return the next one immediately
+                if self._resampled_queue:
+                    frame = self._resampled_queue.pop(0)
+                    frame.pts = self._pts
+                    self._pts += frame.samples
+                    return frame
+
+                # Otherwise, fetch and process the next chunk from the queue
                 while True:
                     try:
                         chunk = self._queue.get_nowait()
@@ -142,12 +157,10 @@ if RTCPeerConnection is not None:
                         for packet in packets:
                             try:
                                 for frame in self._codec.decode(packet):
-                                    # Print frame properties for debugging
-                                    print(f"DEBUG WebRTC Decoded Frame: format={frame.format.name}, layout={frame.layout.name}, rate={frame.sample_rate}, samples={frame.samples}", flush=True)
                                     pcm = frame.to_ndarray()
                                     pcm_frames.append(pcm)
                             except Exception as e:
-                                print(f"WebRTC packet decode warning (normal at start): {e}", flush=True)
+                                print(f"WebRTC packet decode warning: {e}", flush=True)
                     except Exception as e:
                         print(f"Error parsing WebRTC chunk: {e}", flush=True)
 
@@ -160,41 +173,53 @@ if RTCPeerConnection is not None:
                         elif combined.shape[0] > 2:
                             combined = combined[:2, :]
                         
-                        # Convert float32 (fltp) to int16
+                        # Convert float32 (fltp) to int16 (keeping planar layout channels, samples)
                         if np_inner.issubdtype(combined.dtype, np_inner.floating):
                             combined = np_inner.clip(combined, -1.0, 1.0)
-                            combined_int16 = (combined * 32767).astype(np_inner.int16)
+                            combined = (combined * 32767).astype(np_inner.int16)
                         else:
-                            combined_int16 = combined.astype(np_inner.int16)
+                            combined = combined.astype(np_inner.int16)
                             
-                        # Interleave channels explicitly to guarantee C-contiguous [L0, R0, L1, R1, ...] layout
-                        samples = combined_int16.shape[1]
-                        interleaved = np_inner.empty(samples * 2, dtype=np_inner.int16)
-                        interleaved[0::2] = combined_int16[0, :]
-                        interleaved[1::2] = combined_int16[1, :]
+                        # Create raw frame at 44100Hz planar layout (channels, samples)
+                        raw_frame = AudioFrame.from_ndarray(combined, format='s16p', layout='stereo')
+                        raw_frame.sample_rate = 44100
+                        raw_frame.time_base = fractions.Fraction(1, 44100)
                         
-                        # Shape as (1, samples * channels) for packed s16 format
-                        combined = interleaved.reshape(1, -1)
+                        # Resample to 48000Hz s16 packed format
+                        resampled = self._resampler.resample(raw_frame)
+                        if resampled:
+                            self._resampled_queue.extend(resampled)
                     else:
+                        # Fallback silence frame directly at 48000Hz packed layout (1, samples * 2)
                         import numpy as np_inner
-                        # Silence frame in packed layout (1, samples * channels)
-                        combined = np_inner.zeros((1, 1024 * 2), dtype='int16')
+                        combined = np_inner.zeros((1, 960 * 2), dtype='int16')
+                        frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
+                        frame.sample_rate = 48000
+                        frame.time_base = fractions.Fraction(1, 48000)
+                        self._resampled_queue.append(frame)
 
-                    # Create AudioFrame in packed s16 format
+                except Exception as e:
+                    print(f"CRITICAL WebRTC track error inside recv: {e}", flush=True)
+                    import numpy as np_inner
+                    combined = np_inner.zeros((1, 960 * 2), dtype='int16')
                     frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
-                    frame.sample_rate = self._sample_rate
-                    frame.time_base = fractions.Fraction(1, self._sample_rate)
+                    frame.sample_rate = 48000
+                    frame.time_base = fractions.Fraction(1, 48000)
+                    self._resampled_queue.append(frame)
+
+                # Pop and return the first resampled frame
+                if self._resampled_queue:
+                    frame = self._resampled_queue.pop(0)
                     frame.pts = self._pts
                     self._pts += frame.samples
                     return frame
-                except Exception as e:
-                    print(f"CRITICAL WebRTC track error inside recv: {e}", flush=True)
-                    # Safe fallback to silence frame in packed layout
+                else:
+                    # Fallback to 20ms of silence if queue is still empty
                     import numpy as np_inner
-                    combined = np_inner.zeros((1, 1024 * 2), dtype='int16')
+                    combined = np_inner.zeros((1, 960 * 2), dtype='int16')
                     frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
-                    frame.sample_rate = self._sample_rate
-                    frame.time_base = fractions.Fraction(1, self._sample_rate)
+                    frame.sample_rate = 48000
+                    frame.time_base = fractions.Fraction(1, 48000)
                     frame.pts = self._pts
                     self._pts += frame.samples
                     return frame
