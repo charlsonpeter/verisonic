@@ -117,8 +117,11 @@ if RTCPeerConnection is not None:
                 self._pts = 0
                 self._sample_rate = 44100
                 self._channels = 2
-                self._buf = b""
                 self._running = True
+                
+                # Persistent codec context for streaming MP3 decoding
+                import av
+                self._codec = av.CodecContext.create('mp3', 'r')
 
             async def recv(self):
                 # Pull raw audio bytes from the relay queue
@@ -129,18 +132,15 @@ if RTCPeerConnection is not None:
                     except asyncio.QueueEmpty:
                         await asyncio.sleep(0.005)
 
-                # Decode MP3 bytes to PCM int16 using PyAV
-                import av
-                import io
                 pcm_frames = []
                 try:
-                    container = av.open(io.BytesIO(chunk), format='mp3')
-                    for frame in container.decode(audio=0):
-                        pcm = frame.to_ndarray()
-                        pcm_frames.append(pcm)
-                    container.close()
-                except Exception:
-                    pass
+                    packets = self._codec.parse(chunk)
+                    for packet in packets:
+                        for frame in self._codec.decode(packet):
+                            pcm = frame.to_ndarray()
+                            pcm_frames.append(pcm)
+                except Exception as e:
+                    print(f"Error decoding WebRTC chunk: {e}", flush=True)
 
                 if pcm_frames:
                     import numpy as np_inner
@@ -626,7 +626,7 @@ def get_station_stream_sync(
 
     if live_stream_manager.is_live(station.id):
         # Station is live - offer WebRTC delivery if available, else fallback to HTTP stream
-        use_webrtc = False
+        use_webrtc = (RTCPeerConnection is not None)
         return {
             "station_id": station.id,
             "station_name": station.name,
