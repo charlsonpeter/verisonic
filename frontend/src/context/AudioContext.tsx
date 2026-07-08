@@ -540,7 +540,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                   // Smoothly switch to WebRTC once track arrives
                   audioRef.current.pause();
                   audioRef.current.src = '';
-                  audioRef.current.srcObject = event.streams[0];
+                  
+                  let stream = event.streams[0];
+                  if (!stream && event.track) {
+                    stream = new MediaStream([event.track]);
+                  }
+                  
+                  audioRef.current.srcObject = stream;
                   audioRef.current.play().catch(err => console.error('WebRTC play error:', err));
                   console.log('Switched to WebRTC audio stream');
                 }
