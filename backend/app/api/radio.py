@@ -139,11 +139,6 @@ if RTCPeerConnection is not None:
                         for frame in self._codec.decode(packet):
                             pcm = frame.to_ndarray()
                             pcm_frames.append(pcm)
-                    
-                    if pcm_frames:
-                        self._frame_count = getattr(self, '_frame_count', 0) + len(pcm_frames)
-                        if self._frame_count % 100 == 0:
-                            print(f"DEBUG: WebRTC relay decoded 100 frames for station {self.station_id}", flush=True)
                 except Exception as e:
                     print(f"Error decoding WebRTC chunk: {e}", flush=True)
 
@@ -633,7 +628,7 @@ def get_station_stream_sync(
 
     if live_stream_manager.is_live(station.id):
         # Station is live - offer WebRTC delivery if available, else fallback to HTTP stream
-        use_webrtc = False
+        use_webrtc = (RTCPeerConnection is not None)
         return {
             "station_id": station.id,
             "station_name": station.name,
@@ -742,14 +737,10 @@ async def websocket_stream_endpoint(
     print(f"Broadcaster connected to station {station_name} (ID: {resolved_station_id})", flush=True)
 
     try:
-        chunk_count = 0
         while True:
             # Receive audio chunk as bytes
             data = await websocket.receive_bytes()
             if data:
-                chunk_count += 1
-                if chunk_count % 100 == 0:
-                    print(f"Received 100 chunks from station {resolved_station_id}. Chunk size: {len(data)} bytes.", flush=True)
                 await live_stream_manager.broadcast_chunk(resolved_station_id, data)
     except WebSocketDisconnect:
         print(f"Broadcaster disconnected from station {station_name} (ID: {resolved_station_id})", flush=True)
