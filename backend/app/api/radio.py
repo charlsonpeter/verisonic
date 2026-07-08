@@ -61,9 +61,9 @@ class LiveStreamManager:
                 del self.listeners[station_id]
 
     async def broadcast_chunk(self, station_id: int, chunk: bytes):
-        # Store chunk in sliding window history buffer (last ~60 chunks is about 5.6 seconds)
+        # Store chunk in sliding window history buffer (last ~15 chunks is about 0.7 seconds)
         if station_id not in self.history:
-            self.history[station_id] = deque(maxlen=60)
+            self.history[station_id] = deque(maxlen=15)
         self.history[station_id].append(chunk)
 
         # Push to all HTTP streaming listeners
