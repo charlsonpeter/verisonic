@@ -138,11 +138,16 @@ if RTCPeerConnection is not None:
                 pcm_frames = []
                 try:
                     packets = self._codec.parse(chunk)
+                    print(f"DEBUG WebRTC: chunk size={len(chunk)}, parsed packets={len(packets)}", flush=True)
                     for packet in packets:
                         try:
+                            decoded_count = 0
                             for frame in self._codec.decode(packet):
                                 pcm = frame.to_ndarray()
                                 pcm_frames.append(pcm)
+                                decoded_count += 1
+                            if decoded_count > 0:
+                                print(f"DEBUG WebRTC: decoded packet into {decoded_count} frames", flush=True)
                         except Exception as e:
                             # The first packet in a stream is often unaligned (middle of an MP3 frame) 
                             # and can cause an avcodec_send_packet() invalid data error. We catch and skip it.
