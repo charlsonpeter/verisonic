@@ -304,6 +304,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     };
     const onError = () => {
+      // Ignore errors if we are currently playing via WebRTC (srcObject is active)
+      if (audioRef.current && audioRef.current.srcObject) {
+        console.log("Ignoring audio error because WebRTC srcObject is active");
+        return;
+      }
       if (activeRadioStationRef.current) {
         setIsPlaying(false);
         setActiveRadioStation(null);
@@ -530,11 +535,17 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
                   console.warn('WebRTC ICE failed, keeping progressive stream');
                   pc.close();
-                  webrtcPCRef.current = null;
+                  if (webrtcPCRef.current === pc) {
+                    webrtcPCRef.current = null;
+                  }
                 }
               };
 
               pc.ontrack = (event) => {
+                if (webrtcPCRef.current !== pc) {
+                  pc.close();
+                  return;
+                }
                 if (audioRef.current && !iceComplete) {
                   iceComplete = true;
                   // Smoothly switch to WebRTC once track arrives
@@ -569,16 +580,23 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
               if (signRes.ok) {
                 const answer = await signRes.json();
+                if (webrtcPCRef.current !== pc) {
+                  console.log('Obsolete WebRTC connection, aborting signaling');
+                  pc.close();
+                  return;
+                }
                 await pc.setRemoteDescription(new RTCSessionDescription(answer));
               } else {
                 console.warn('WebRTC signaling rejected, keeping progressive stream');
                 pc.close();
-                webrtcPCRef.current = null;
+                if (webrtcPCRef.current === pc) {
+                  webrtcPCRef.current = null;
+                }
               }
             } catch (err) {
               console.warn('WebRTC upgrade failed, keeping progressive stream:', err);
-              if (webrtcPCRef.current) {
-                webrtcPCRef.current.close();
+              pc.close();
+              if (webrtcPCRef.current === pc) {
                 webrtcPCRef.current = null;
               }
             }
