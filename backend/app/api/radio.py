@@ -160,19 +160,28 @@ if RTCPeerConnection is not None:
                         elif combined.shape[0] > 2:
                             combined = combined[:2, :]
                         
-                        # Convert float32 (fltp) to int16 if necessary (keep planar layout)
+                        # Convert float32 (fltp) to int16
                         if np_inner.issubdtype(combined.dtype, np_inner.floating):
                             combined = np_inner.clip(combined, -1.0, 1.0)
-                            combined = (combined * 32767).astype(np_inner.int16)
+                            combined_int16 = (combined * 32767).astype(np_inner.int16)
                         else:
-                            combined = combined.astype(np_inner.int16)
+                            combined_int16 = combined.astype(np_inner.int16)
+                            
+                        # Interleave channels explicitly to guarantee C-contiguous [L0, R0, L1, R1, ...] layout
+                        samples = combined_int16.shape[1]
+                        interleaved = np_inner.empty(samples * 2, dtype=np_inner.int16)
+                        interleaved[0::2] = combined_int16[0, :]
+                        interleaved[1::2] = combined_int16[1, :]
+                        
+                        # Shape as (1, samples * channels) for packed s16 format
+                        combined = interleaved.reshape(1, -1)
                     else:
                         import numpy as np_inner
-                        # Silence frame in planar layout (channels, samples)
-                        combined = np_inner.zeros((2, 1024), dtype='int16')
+                        # Silence frame in packed layout (1, samples * channels)
+                        combined = np_inner.zeros((1, 1024 * 2), dtype='int16')
 
-                    # Create AudioFrame in planar s16p format
-                    frame = AudioFrame.from_ndarray(combined, format='s16p', layout='stereo')
+                    # Create AudioFrame in packed s16 format
+                    frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
                     frame.sample_rate = self._sample_rate
                     frame.time_base = fractions.Fraction(1, self._sample_rate)
                     frame.pts = self._pts
@@ -180,10 +189,10 @@ if RTCPeerConnection is not None:
                     return frame
                 except Exception as e:
                     print(f"CRITICAL WebRTC track error inside recv: {e}", flush=True)
-                    # Safe fallback to silence frame in planar layout
+                    # Safe fallback to silence frame in packed layout
                     import numpy as np_inner
-                    combined = np_inner.zeros((2, 1024), dtype='int16')
-                    frame = AudioFrame.from_ndarray(combined, format='s16p', layout='stereo')
+                    combined = np_inner.zeros((1, 1024 * 2), dtype='int16')
+                    frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
                     frame.sample_rate = self._sample_rate
                     frame.time_base = fractions.Fraction(1, self._sample_rate)
                     frame.pts = self._pts
