@@ -135,45 +135,62 @@ if RTCPeerConnection is not None:
                     except asyncio.QueueEmpty:
                         await asyncio.sleep(0.005)
 
-                pcm_frames = []
                 try:
-                    packets = self._codec.parse(chunk)
-                    print(f"DEBUG WebRTC: chunk size={len(chunk)}, parsed packets={len(packets)}", flush=True)
-                    for packet in packets:
-                        try:
-                            decoded_count = 0
-                            for frame in self._codec.decode(packet):
-                                pcm = frame.to_ndarray()
-                                pcm_frames.append(pcm)
-                                decoded_count += 1
-                            if decoded_count > 0:
-                                print(f"DEBUG WebRTC: decoded packet into {decoded_count} frames", flush=True)
-                        except Exception as e:
-                            # The first packet in a stream is often unaligned (middle of an MP3 frame) 
-                            # and can cause an avcodec_send_packet() invalid data error. We catch and skip it.
-                            print(f"WebRTC packet decode warning (normal at start): {e}", flush=True)
+                    pcm_frames = []
+                    try:
+                        packets = self._codec.parse(chunk)
+                        # print(f"DEBUG WebRTC: chunk size={len(chunk)}, parsed packets={len(packets)}", flush=True)
+                        for packet in packets:
+                            try:
+                                for frame in self._codec.decode(packet):
+                                    pcm = frame.to_ndarray()
+                                    pcm_frames.append(pcm)
+                            except Exception as e:
+                                # The first packet in a stream is often unaligned (middle of an MP3 frame) 
+                                # and can cause an avcodec_send_packet() invalid data error. We catch and skip it.
+                                print(f"WebRTC packet decode warning (normal at start): {e}", flush=True)
+                    except Exception as e:
+                        print(f"Error parsing WebRTC chunk: {e}", flush=True)
+
+                    if pcm_frames:
+                        import numpy as np_inner
+                        combined = np_inner.concatenate(pcm_frames, axis=1)
+                        # Ensure stereo
+                        if combined.shape[0] == 1:
+                            combined = np_inner.repeat(combined, 2, axis=0)
+                        elif combined.shape[0] > 2:
+                            combined = combined[:2, :]
+                        
+                        # Transpose from (channels, samples) to (samples, channels)
+                        combined = combined.T
+                        
+                        # Convert float32 (fltp) to int16 if necessary
+                        if np_inner.issubdtype(combined.dtype, np_inner.floating):
+                            combined = np_inner.clip(combined, -1.0, 1.0)
+                            combined = (combined * 32767).astype(np_inner.int16)
+                        else:
+                            combined = combined.astype(np_inner.int16)
+                    else:
+                        import numpy as np_inner
+                        combined = np_inner.zeros((1024, 2), dtype='int16')
+
+                    frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
+                    frame.sample_rate = self._sample_rate
+                    frame.time_base = fractions.Fraction(1, self._sample_rate)
+                    frame.pts = self._pts
+                    self._pts += frame.samples
+                    return frame
                 except Exception as e:
-                    print(f"Error parsing WebRTC chunk: {e}", flush=True)
-
-                if pcm_frames:
+                    print(f"CRITICAL WebRTC track error inside recv: {e}", flush=True)
+                    # Safe fallback to silence frame to keep WebRTC track alive
                     import numpy as np_inner
-                    combined = np_inner.concatenate(pcm_frames, axis=1)
-                    # Ensure stereo
-                    if combined.shape[0] == 1:
-                        combined = np_inner.repeat(combined, 2, axis=0)
-                    elif combined.shape[0] > 2:
-                        combined = combined[:2, :]
-                else:
-                    # Silence frame
-                    import numpy as np_inner
-                    combined = np_inner.zeros((2, 1024), dtype='int16')
-
-                frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
-                frame.sample_rate = self._sample_rate
-                frame.time_base = fractions.Fraction(1, self._sample_rate)
-                frame.pts = self._pts
-                self._pts += frame.samples
-                return frame
+                    combined = np_inner.zeros((1024, 2), dtype='int16')
+                    frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
+                    frame.sample_rate = self._sample_rate
+                    frame.time_base = fractions.Fraction(1, self._sample_rate)
+                    frame.pts = self._pts
+                    self._pts += frame.samples
+                    return frame
 
         AUDIO_RELAY_TRACK_CLASS = AudioRelayTrack
     except ImportError:
