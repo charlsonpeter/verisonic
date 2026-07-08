@@ -161,7 +161,7 @@ if RTCPeerConnection is not None:
                         elif combined.shape[0] > 2:
                             combined = combined[:2, :]
                         
-                        # Transpose from (channels, samples) to (samples, channels)
+                        # Transpose from (channels, samples) to (samples, channels) to interleave the channels
                         combined = combined.T
                         
                         # Convert float32 (fltp) to int16 if necessary
@@ -170,9 +170,13 @@ if RTCPeerConnection is not None:
                             combined = (combined * 32767).astype(np_inner.int16)
                         else:
                             combined = combined.astype(np_inner.int16)
+                            
+                        # Reshape to (1, samples * channels) for packed s16 format
+                        combined = combined.reshape(1, -1)
                     else:
                         import numpy as np_inner
-                        combined = np_inner.zeros((1024, 2), dtype='int16')
+                        # Silence frame in packed layout (1, samples * channels)
+                        combined = np_inner.zeros((1, 1024 * 2), dtype='int16')
 
                     frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
                     frame.sample_rate = self._sample_rate
