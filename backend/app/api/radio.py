@@ -690,7 +690,7 @@ def get_station_stream_sync(
 
     if live_stream_manager.is_live(station.id):
         # Station is live - offer WebRTC delivery if available, else fallback to HTTP stream
-        use_webrtc = RTCPeerConnection is not None and AUDIO_RELAY_TRACK_CLASS is not None
+        use_webrtc = False
         return {
             "station_id": station.id,
             "station_name": station.name,
