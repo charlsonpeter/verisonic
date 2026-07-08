@@ -62,7 +62,7 @@ except ImportError:
     MISSING_DEPS.append("websocket-client")
 
 # Define fixed server stream URL (with env override)
-DEFAULT_SERVER_URL = os.environ.get("VERISONIC_SERVER_URL", "ws://54.66.243.141:3000/api/radio/stream/ws")
+DEFAULT_SERVER_URL = os.environ.get("VERISONIC_SERVER_URL", "ws://localhost:3000/api/radio/stream/ws")
 
 # AudioStreamTrack is only needed if we ever do full WebRTC ingest in future
 if USE_WEBRTC:
