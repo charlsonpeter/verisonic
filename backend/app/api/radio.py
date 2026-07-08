@@ -122,6 +122,7 @@ if RTCPeerConnection is not None:
                 # Persistent codec context for streaming MP3 decoding
                 import av
                 self._codec = av.CodecContext.create('mp3', 'r')
+                self._codec.open()
 
             async def recv(self):
                 # Pull raw audio bytes from the relay queue
@@ -628,7 +629,7 @@ def get_station_stream_sync(
 
     if live_stream_manager.is_live(station.id):
         # Station is live - offer WebRTC delivery if available, else fallback to HTTP stream
-        use_webrtc = (RTCPeerConnection is not None)
+        use_webrtc = False
         return {
             "station_id": station.id,
             "station_name": station.name,
