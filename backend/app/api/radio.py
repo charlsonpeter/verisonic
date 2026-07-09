@@ -171,6 +171,8 @@ if RTCPeerConnection is not None:
                             for packet in packets:
                                 try:
                                     for frame in self._codec.decode(packet):
+                                        if self._frames_sent % 500 == 0:
+                                            print(f"DEBUG Incoming: Layout={frame.layout.name}, rate={frame.sample_rate}", flush=True)
                                         resampled = self._resampler.resample(frame)
                                         if resampled:
                                             for f in resampled:
