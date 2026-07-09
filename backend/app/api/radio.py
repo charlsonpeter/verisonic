@@ -172,48 +172,25 @@ if RTCPeerConnection is not None:
                     return frame
 
                 try:
-                    pcm_frames = []
+                    pcm_frames_decoded = False
                     try:
                         packets = self._codec.parse(chunk)
                         for packet in packets:
                             try:
                                 for frame in self._codec.decode(packet):
-                                    pcm = frame.to_ndarray()
-                                    pcm_frames.append(pcm)
+                                    resampled = self._resampler.resample(frame)
+                                    if resampled:
+                                        for f in resampled:
+                                            f.sample_rate = 48000
+                                            f.time_base = fractions.Fraction(1, 48000)
+                                        self._resampled_queue.extend(resampled)
+                                    pcm_frames_decoded = True
                             except Exception as e:
                                 print(f"WebRTC packet decode warning: {e}", flush=True)
                     except Exception as e:
                         print(f"Error parsing WebRTC chunk: {e}", flush=True)
 
-                    if pcm_frames:
-                        import numpy as np_inner
-                        combined = np_inner.concatenate(pcm_frames, axis=1)
-                        # Ensure stereo
-                        if combined.shape[0] == 1:
-                            combined = np_inner.repeat(combined, 2, axis=0)
-                        elif combined.shape[0] > 2:
-                            combined = combined[:2, :]
-                        
-                        # Convert float32 (fltp) to int16 (keeping planar layout channels, samples)
-                        if np_inner.issubdtype(combined.dtype, np_inner.floating):
-                            combined = np_inner.clip(combined, -1.0, 1.0)
-                            combined = (combined * 32767).astype(np_inner.int16)
-                        else:
-                            combined = combined.astype(np_inner.int16)
-                            
-                        # Create raw frame at 44100Hz planar layout (channels, samples)
-                        raw_frame = AudioFrame.from_ndarray(combined, format='s16p', layout='stereo')
-                        raw_frame.sample_rate = 44100
-                        raw_frame.time_base = fractions.Fraction(1, 44100)
-                        
-                        # Resample to 48000Hz s16 packed format
-                        resampled = self._resampler.resample(raw_frame)
-                        if resampled:
-                            for f in resampled:
-                                f.sample_rate = 48000
-                                f.time_base = fractions.Fraction(1, 48000)
-                            self._resampled_queue.extend(resampled)
-                    else:
+                    if not pcm_frames_decoded:
                         # Fallback silence frame directly at 48000Hz packed layout (1, samples * 2)
                         import numpy as np_inner
                         combined = np_inner.zeros((1, 960 * 2), dtype='int16')
