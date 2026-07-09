@@ -474,19 +474,48 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     const analyser = analyserRef.current;
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    const dataArray = new Float32Array(analyser.frequencyBinCount);
 
     const tick = () => {
-      analyser.getByteFrequencyData(dataArray);
+      analyser.getFloatFrequencyData(dataArray);
 
-      // Map the frequency bins to 20 bands (0 to 100 level scale)
-      const step = Math.floor(dataArray.length / NUM_BARS);
-      const bars = Array.from({ length: NUM_BARS }, (_, i) => {
-        const bin = dataArray[i * step] ?? 0;
-        return Math.min(100, Math.round((bin / 255) * 100));
-      });
+      // Map frequency bins to 20 bands logarithmically like the broadcaster
+      const maxBin = Math.min(400, dataArray.length);
+      const logIndices = new Array(NUM_BARS + 1);
+      const minLog = Math.log10(1);
+      const maxLog = Math.log10(maxBin || 1);
+      const logRange = maxLog - minLog;
+
+      for (let i = 0; i <= NUM_BARS; i++) {
+        logIndices[i] = Math.round(Math.pow(10, minLog + (i / NUM_BARS) * logRange));
+      }
+
+      const bars = new Array(NUM_BARS);
+      for (let i = 0; i < NUM_BARS; i++) {
+        const startIdx = logIndices[i];
+        const endIdx = Math.max(startIdx + 1, logIndices[i + 1]);
+
+        // Average the db value in the bin range
+        let sum = 0;
+        let count = 0;
+        for (let j = startIdx; j < endIdx && j < dataArray.length; j++) {
+          sum += dataArray[j];
+          count++;
+        }
+        const avgDb = count > 0 ? sum / count : -100;
+
+        // High frequency treble boost (boost = 1.0 + i/20 * 5.0)
+        // Since db scale is logarithmic, amp * boost => db + 20 * log10(boost)
+        const boost = 1.0 + (i / NUM_BARS) * 5.0;
+        const boostedDb = avgDb + (20 * Math.log10(boost));
+
+        // Map decibels (-50dB to -5dB) to level scale (0 to 100)
+        // val = (boostedDb + 50) / 45 * 100
+        const level = Math.max(0, Math.min(100, Math.round(((boostedDb + 50) / 45) * 100)));
+        bars[i] = level;
+      }
+
       setEqualizerBars(bars);
-
       animFrameRef.current = requestAnimationFrame(tick);
     };
 
