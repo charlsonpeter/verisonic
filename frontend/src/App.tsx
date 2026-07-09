@@ -51,6 +51,8 @@ function DashboardContent() {
 
   // Route/Tab Switcher state
   const [activeTab, setActiveTab] = useState<string>(() => {
+    const hashTab = window.location.hash.replace('#', '');
+    if (hashTab) return hashTab;
     const savedTab = localStorage.getItem('activeTab');
     const hasToken = localStorage.getItem('token');
     if (hasToken) {
@@ -62,9 +64,24 @@ function DashboardContent() {
   const [isQueueOpen, setIsQueueOpen] = useState<boolean>(false);
   const [isLyricsOpen, setIsLyricsOpen] = useState<boolean>(false);
 
-  // Sync activeTab with localStorage
+  // Sync activeTab with localStorage & URL Hash
   useEffect(() => {
     localStorage.setItem('activeTab', activeTab);
+    if (window.location.hash !== `#${activeTab}`) {
+      window.location.hash = activeTab;
+    }
+  }, [activeTab]);
+
+  // Listen for hash changes (browser back/forward button clicks)
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hashTab = window.location.hash.replace('#', '');
+      if (hashTab && hashTab !== activeTab) {
+        setActiveTab(hashTab);
+      }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
   }, [activeTab]);
 
   // Handle logout redirect or invalid session redirect
