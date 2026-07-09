@@ -122,6 +122,10 @@ if RTCPeerConnection is not None:
                 self._running = True
                 self._buffering = True
                 
+                # NumPy audio buffer for stereo 16-bit interleaved samples
+                import numpy as np
+                self._audio_buffer = np.array([], dtype=np.int16)
+                
                 # Persistent codec context for streaming MP3 decoding
                 import av
                 self._codec = av.CodecContext.create('mp3', 'r')
@@ -133,46 +137,23 @@ if RTCPeerConnection is not None:
                     layout='stereo',
                     rate=48000
                 )
-                self._resampled_queue = []
 
             async def recv(self):
-                # If we have buffered resampled frames, return the next one immediately
-                if self._resampled_queue:
-                    frame = self._resampled_queue.pop(0)
-                    frame.pts = self._pts
-                    self._pts += frame.samples
-                    return frame
-
-                # If we are buffering, wait until queue is filled to 22 chunks (~1 second of audio)
-                if self._buffering:
-                    if self._queue.qsize() < 22:
-                        import numpy as np_inner
-                        combined = np_inner.zeros((1, 960 * 2), dtype='int16')
-                        frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
-                        frame.sample_rate = 48000
-                        frame.time_base = fractions.Fraction(1, 48000)
-                        frame.pts = self._pts
-                        self._pts += frame.samples
-                        return frame
-                    else:
-                        self._buffering = False
-
-                # Otherwise, fetch the next chunk from the queue (non-blocking)
-                try:
-                    chunk = self._queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    # Queue ran dry: play a single silence frame and stay in playing mode
-                    import numpy as np_inner
-                    combined = np_inner.zeros((1, 960 * 2), dtype='int16')
-                    frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
-                    frame.sample_rate = 48000
-                    frame.time_base = fractions.Fraction(1, 48000)
-                    frame.pts = self._pts
-                    self._pts += frame.samples
-                    return frame
-
-                try:
-                    pcm_frames_decoded = False
+                import numpy as np_inner
+                
+                # 1. Pull from queue and decode/resample to replenish self._audio_buffer
+                # Limit the buffering loop so it doesn't block CPU forever if there's massive backlog
+                chunks_read = 0
+                max_chunks_to_read = 15
+                
+                # We buffer up to 96,000 elements (1.0 second of stereo interleaved samples)
+                while self._queue.qsize() > 0 and len(self._audio_buffer) < 96000 and chunks_read < max_chunks_to_read:
+                    try:
+                        chunk = self._queue.get_nowait()
+                        chunks_read += 1
+                    except asyncio.QueueEmpty:
+                        break
+                        
                     try:
                         packets = self._codec.parse(chunk)
                         for packet in packets:
@@ -181,48 +162,49 @@ if RTCPeerConnection is not None:
                                     resampled = self._resampler.resample(frame)
                                     if resampled:
                                         for f in resampled:
-                                            f.sample_rate = 48000
-                                            f.time_base = fractions.Fraction(1, 48000)
-                                        self._resampled_queue.extend(resampled)
-                                    pcm_frames_decoded = True
+                                            # Convert frame to flat array of interleaved samples
+                                            f_data = f.to_ndarray().flatten()
+                                            self._audio_buffer = np_inner.concatenate([self._audio_buffer, f_data])
                             except Exception as e:
-                                print(f"WebRTC packet decode warning: {e}", flush=True)
+                                print(f"WebRTC frame decode warning: {e}", flush=True)
                     except Exception as e:
                         print(f"Error parsing WebRTC chunk: {e}", flush=True)
 
-                    if not pcm_frames_decoded:
-                        # Fallback silence frame directly at 48000Hz packed layout (1, samples * 2)
-                        import numpy as np_inner
+                # 2. Check if we need to buffer
+                if self._buffering:
+                    # 96,000 elements corresponds to 48000 samples * 2 channels (1.0 second of audio)
+                    if len(self._audio_buffer) < 96000:
+                        # Output silence frame (960 samples, stereo packed = 1920 elements)
                         combined = np_inner.zeros((1, 960 * 2), dtype='int16')
                         frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
                         frame.sample_rate = 48000
                         frame.time_base = fractions.Fraction(1, 48000)
-                        self._resampled_queue.append(frame)
+                        frame.pts = self._pts
+                        self._pts += 960
+                        return frame
+                    else:
+                        self._buffering = False
 
-                except Exception as e:
-                    print(f"CRITICAL WebRTC track error inside recv: {e}", flush=True)
-                    import numpy as np_inner
-                    combined = np_inner.zeros((1, 960 * 2), dtype='int16')
-                    frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
+                # 3. Pull 960 samples (1920 elements) from the buffer to play
+                if len(self._audio_buffer) >= 1920:
+                    out_samples = self._audio_buffer[:1920]
+                    self._audio_buffer = self._audio_buffer[1920:]
+                    
+                    frame = AudioFrame.from_ndarray(out_samples.reshape(1, -1), format='s16', layout='stereo')
                     frame.sample_rate = 48000
                     frame.time_base = fractions.Fraction(1, 48000)
-                    self._resampled_queue.append(frame)
-
-                # Pop and return the first resampled frame
-                if self._resampled_queue:
-                    frame = self._resampled_queue.pop(0)
                     frame.pts = self._pts
-                    self._pts += frame.samples
+                    self._pts += 960
                     return frame
                 else:
-                    # Fallback to 20ms of silence if queue is still empty
-                    import numpy as np_inner
+                    # Buffer ran dry: go back to buffering state and output silence
+                    self._buffering = True
                     combined = np_inner.zeros((1, 960 * 2), dtype='int16')
                     frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
                     frame.sample_rate = 48000
                     frame.time_base = fractions.Fraction(1, 48000)
                     frame.pts = self._pts
-                    self._pts += frame.samples
+                    self._pts += 960
                     return frame
 
         AUDIO_RELAY_TRACK_CLASS = AudioRelayTrack
