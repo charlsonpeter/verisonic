@@ -606,11 +606,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     if (audioRef.current) {
       audioRef.current.srcObject = null;
-    }
-
-    // Fetch synchronized live track metadata from backend radio syncer
+      // Fetch synchronized live track metadata from backend radio syncer
     try {
-      const res = await fetch(`${API_URL}/radio/${station.id}/stream?skip_history=${isResume}`);
+      const res = await fetch(`${API_URL}/radio/${station.id}/stream`);
       if (res.ok) {
         const data = await res.json();
         
@@ -623,20 +621,25 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         };
         
         if (data.is_websocket) {
-          // Start playing progressive HTTP stream immediately for guaranteed audio
-          playTrack(virtualTrack, true);
-          if (audioRef.current && data.offset && data.offset > 0.1) {
-            audioRef.current.currentTime = data.offset;
-          }
+          let fallbackTimeout: any = null;
+          let isWsConnected = false;
 
-          // Then attempt WebSocket MSE upgrade in background for lower latency
+          const startProgressiveFallback = () => {
+            if (isWsConnected) return;
+            console.log("WebSocket connection timed out or failed, falling back to progressive HTTP stream");
+            playTrack(virtualTrack, true);
+          };
+
+          // If WS connection takes more than 800ms to open, fall back to progressive HTTP stream
+          fallbackTimeout = setTimeout(startProgressiveFallback, 800);
+
           const upgradeToWebSocketStream = () => {
             try {
-              // Convert HTTP/HTTPS API URL to WS/WSS URL
               const wsBase = API_URL.startsWith('https') 
                 ? API_URL.replace('https://', 'wss://') 
                 : API_URL.replace('http://', 'ws://');
-              const wsUrl = `${wsBase}/radio/${station.id}/stream/ws/listener${isResume ? '?skip_history=true' : ''}`;
+              
+              const wsUrl = `${wsBase}/radio/${station.id}/stream/ws/listener`;
               const ws = new WebSocket(wsUrl);
               websocketRef.current = ws;
 
@@ -664,7 +667,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                   sourceBuffer.addEventListener('updateend', () => {
                     appendNext();
                     
-                    // Buffer at least 1.5 seconds of audio before starting playback
                     if (!hasStartedPlaying && sourceBuffer && sourceBuffer.buffered.length > 0) {
                       const start = sourceBuffer.buffered.start(0);
                       const end = sourceBuffer.buffered.end(0);
@@ -672,27 +674,38 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                       if (bufferedDuration >= 1.5) {
                         hasStartedPlaying = true;
                         if (audioRef.current) {
+                          // Seek to the live edge to skip the history buffer
+                          try {
+                            audioRef.current.currentTime = Math.max(0, end - 0.2);
+                            console.log("WebSocket MSE synced to live edge:", audioRef.current.currentTime);
+                          } catch (seekError) {
+                            console.warn("Failed to seek MSE playhead, playing from start:", seekError);
+                          }
+
                           audioRef.current.play()
-                            .then(() => console.log('MSE Jitter buffer filled (1.5s). Started playing.'))
+                            .then(() => console.log('MSE Jitter buffer filled. Started playing.'))
                             .catch(err => console.error('WebSocket playback play error:', err));
                         }
                       }
                     }
                   });
                 } catch (e) {
-                  console.error('Failed to create SourceBuffer for audio/mpeg:', e);
+                  console.error('Failed to create SourceBuffer:', e);
                   ws.close();
                 }
               });
 
               ws.binaryType = 'arraybuffer';
               ws.onopen = () => {
+                isWsConnected = true;
+                clearTimeout(fallbackTimeout);
                 console.log('WebSocket listener connected to live stream');
+                
+                // Clear any existing source and bind the MediaSource
                 if (audioRef.current) {
                   audioRef.current.pause();
                   audioRef.current.srcObject = null;
                   audioRef.current.src = URL.createObjectURL(mediaSource);
-                  console.log('Switched to WebSocket MSE source. Buffering...');
                 }
               };
 
@@ -722,28 +735,29 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               };
 
               ws.onclose = () => {
-                console.warn('WebSocket streaming closed, fallback if needed');
+                console.warn('WebSocket streaming closed');
+                clearTimeout(fallbackTimeout);
                 if (websocketRef.current === ws) {
                   websocketRef.current = null;
-                  // If we were playing via websocket, fall back to progressive stream
+                  // If we were playing via WebSocket, fall back to progressive stream
                   if (audioRef.current && audioRef.current.src.startsWith('blob:')) {
                     const fallbackUrl = resolveStreamUrl(virtualTrack.stream_url);
                     audioRef.current.src = fallbackUrl;
                     audioRef.current.load();
                     audioRef.current.play().catch(() => {});
+                  } else {
+                    startProgressiveFallback();
                   }
                 }
               };
 
             } catch (err) {
-              console.warn('WebSocket MSE upgrade failed, keeping progressive stream:', err);
+              console.warn('WebSocket MSE setup failed, falling back:', err);
+              startProgressiveFallback();
             }
           };
 
-          // Run WebSocket upgrade attempt without blocking if not resuming
-          if (!isResume) {
-            upgradeToWebSocketStream();
-          }
+          upgradeToWebSocketStream();
         } else {
           playTrack(virtualTrack, true);
           if (audioRef.current && data.offset && data.offset > 0.1) {
