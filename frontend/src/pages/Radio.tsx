@@ -10,10 +10,11 @@ const API_URL = '/api';
 
 export const Radio: React.FC = () => {
   const { playRadioStation, activeRadioStation, isPlaying, togglePlay } = useAudio();
-  const { token, currentUser, checkRadioStationStatus } = useAuth();
+  const { token, currentUser, isLoading: isAuthLoading, checkRadioStationStatus } = useAuth();
 
   // Radio states
   const [stations, setStations] = useState<RadioStation[]>([]);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   // Creation state
   const [newStationName, setNewStationName] = useState('');
@@ -201,6 +202,7 @@ export const Radio: React.FC = () => {
       setStations([]);
     } finally {
       setIsLoading(false);
+      setIsInitialLoad(false);
     }
   };
 
@@ -283,6 +285,17 @@ export const Radio: React.FC = () => {
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
+  if (isAuthLoading || isInitialLoad) {
+    return (
+      <div className="min-h-[60vh] flex flex-col items-center justify-center space-y-4">
+        <div className="w-10 h-10 border-2 border-rose-500/20 border-t-rose-500 rounded-full animate-spin" />
+        <p className="text-[10px] text-slate-500 font-extrabold uppercase tracking-widest animate-pulse font-sans">
+          Syncing Broadcast Nodes...
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-10 w-full">
 
