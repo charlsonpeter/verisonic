@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Trash2, Shield, User as UserIcon, Check } from 'lucide-react';
+import { Users, Trash2, Shield } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { showConfirm } from '../utils/swal';
 
