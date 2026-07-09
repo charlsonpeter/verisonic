@@ -42,14 +42,14 @@ class LiveStreamManager:
     def is_live(self, station_id: int) -> bool:
         return self.broadcasters.get(station_id, False)
 
-    def register_listener(self, station_id: int) -> asyncio.Queue:
+    def register_listener(self, station_id: int, skip_history: bool = False) -> asyncio.Queue:
         q = asyncio.Queue(maxsize=10)
         if station_id not in self.listeners:
             self.listeners[station_id] = set()
         self.listeners[station_id].add(q)
         
         # Populate new listener's queue with combined recent history as a single block to start playing instantly
-        if station_id in self.history and self.history[station_id]:
+        if not skip_history and station_id in self.history and self.history[station_id]:
             history_data = b"".join(self.history[station_id])
             try:
                 q.put_nowait(history_data)
@@ -650,6 +650,7 @@ def add_track_to_schedule(
 @router.get("/{id}/stream")
 def get_station_stream_sync(
     id: int,
+    skip_history: bool = False,
     db: Session = Depends(get_db),
     current_user = Depends(get_optional_current_user)
 ):
@@ -664,8 +665,11 @@ def get_station_stream_sync(
         
     if current_user and current_user.role == "radio_admin" and station.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Radio admins can only access their own radio station")
-
+ 
     if live_stream_manager.is_live(station.id):
+        stream_url = f"/api/radio/{station.id}/live"
+        if skip_history:
+            stream_url += "?skip_history=true"
         return {
             "station_id": station.id,
             "station_name": station.name,
@@ -673,7 +677,7 @@ def get_station_stream_sync(
             "title": "Live Broadcast",
             "artist": station.name,
             "duration": None,
-            "stream_url": f"/api/radio/{station.id}/live",
+            "stream_url": stream_url,
             "is_websocket": True,
             "offset": 0.0
         }
@@ -790,12 +794,13 @@ async def websocket_stream_endpoint(
 @router.websocket("/{id}/stream/ws/listener")
 async def websocket_listener_endpoint(
     websocket: WebSocket,
-    id: int
+    id: int,
+    skip_history: bool = False
 ):
     await websocket.accept()
     
     # Register this listener's queue
-    queue = live_stream_manager.register_listener(id)
+    queue = live_stream_manager.register_listener(id, skip_history=skip_history)
     print(f"WebSocket listener connected to station ID: {id}", flush=True)
     
     try:
@@ -815,6 +820,7 @@ async def websocket_listener_endpoint(
 @router.get("/{id}/live")
 async def get_live_audio_stream(
     id: int,
+    skip_history: bool = False,
     authorization: Optional[str] = Header(None),
     x_user_mode: Optional[str] = Header(None)
 ):
@@ -852,7 +858,7 @@ async def get_live_audio_stream(
         db.close()
 
     async def audio_generator():
-        queue = live_stream_manager.register_listener(id)
+        queue = live_stream_manager.register_listener(id, skip_history=skip_history)
         print(f"Listener registered for station {id}", flush=True)
         try:
             while True:

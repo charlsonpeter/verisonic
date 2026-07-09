@@ -585,7 +585,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setIsPlaying(true);
   };
 
-  const playRadioStation = async (station: RadioStation) => {
+  const playRadioStation = async (station: RadioStation, isResume = false) => {
     if (currentUser && currentUser.role === 'radio_admin' && station.owner_id !== currentUser.id) {
       console.warn("Radio admins cannot play other radio stations.");
       showError("Access Denied", "You are not authorized to tune in to this station.");
@@ -615,7 +615,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // Fetch synchronized live track metadata from backend radio syncer
     try {
-      const res = await fetch(`${API_URL}/radio/${station.id}/stream`);
+      const res = await fetch(`${API_URL}/radio/${station.id}/stream?skip_history=${isResume}`);
       if (res.ok) {
         const data = await res.json();
         
@@ -641,7 +641,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               const wsBase = API_URL.startsWith('https') 
                 ? API_URL.replace('https://', 'wss://') 
                 : API_URL.replace('http://', 'ws://');
-              const wsUrl = `${wsBase}/radio/${station.id}/stream/ws/listener`;
+              const wsUrl = `${wsBase}/radio/${station.id}/stream/ws/listener${isResume ? '?skip_history=true' : ''}`;
               const ws = new WebSocket(wsUrl);
               websocketRef.current = ws;
 
@@ -812,7 +812,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       
       if (activeRadioStation) {
         console.log("Radio resumed. Force fully reloading the stream fresh from the live head.");
-        playRadioStation(activeRadioStation);
+        playRadioStation(activeRadioStation, true);
       } else {
         console.log("Normal track resumed.");
         audioRef.current.play().catch(() => {});
