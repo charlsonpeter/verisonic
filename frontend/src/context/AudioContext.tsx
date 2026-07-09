@@ -514,6 +514,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
+    if (isRadio) {
+      // Append cache buster to force browsers to bypass cache and pull live head from the network
+      const separator = streamUrl.includes('?') ? '&' : '?';
+      streamUrl = `${streamUrl}${separator}nocache=${Date.now()}`;
+    }
+
     // Reset details
     setCurrentTrack(trackToPlay);
     setCurrentTime(0);
