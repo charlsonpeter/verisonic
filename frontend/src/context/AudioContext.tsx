@@ -606,7 +606,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
     if (audioRef.current) {
       audioRef.current.srcObject = null;
-      // Fetch synchronized live track metadata from backend radio syncer
+    }
+
+    // Fetch synchronized live track metadata from backend radio syncer
     try {
       const res = await fetch(`${API_URL}/radio/${station.id}/stream`);
       if (res.ok) {
