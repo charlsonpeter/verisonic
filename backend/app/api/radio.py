@@ -161,8 +161,7 @@ if RTCPeerConnection is not None:
                 try:
                     chunk = self._queue.get_nowait()
                 except asyncio.QueueEmpty:
-                    # Queue ran dry: re-enter buffering mode, play silence
-                    self._buffering = True
+                    # Queue ran dry: play a single silence frame and stay in playing mode
                     import numpy as np_inner
                     combined = np_inner.zeros((1, 960 * 2), dtype='int16')
                     frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
