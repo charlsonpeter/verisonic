@@ -548,6 +548,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               const mediaSource = new MediaSource();
               let sourceBuffer: SourceBuffer | null = null;
               let queue: Uint8Array[] = [];
+              let hasStartedPlaying = false;
 
               const appendNext = () => {
                 if (queue.length > 0 && sourceBuffer && !sourceBuffer.updating) {
@@ -565,7 +566,24 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               mediaSource.addEventListener('sourceopen', () => {
                 try {
                   sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
-                  sourceBuffer.addEventListener('updateend', appendNext);
+                  sourceBuffer.addEventListener('updateend', () => {
+                    appendNext();
+                    
+                    // Buffer at least 1.5 seconds of audio before starting playback
+                    if (!hasStartedPlaying && sourceBuffer && sourceBuffer.buffered.length > 0) {
+                      const start = sourceBuffer.buffered.start(0);
+                      const end = sourceBuffer.buffered.end(0);
+                      const bufferedDuration = end - start;
+                      if (bufferedDuration >= 1.5) {
+                        hasStartedPlaying = true;
+                        if (audioRef.current) {
+                          audioRef.current.play()
+                            .then(() => console.log('MSE Jitter buffer filled (1.5s). Started playing.'))
+                            .catch(err => console.error('WebSocket playback play error:', err));
+                        }
+                      }
+                    }
+                  });
                 } catch (e) {
                   console.error('Failed to create SourceBuffer for audio/mpeg:', e);
                   ws.close();
@@ -579,8 +597,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                   audioRef.current.pause();
                   audioRef.current.srcObject = null;
                   audioRef.current.src = URL.createObjectURL(mediaSource);
-                  audioRef.current.play().catch(err => console.error('WebSocket playback play error:', err));
-                  console.log('Switched to WebSocket MSE audio stream');
+                  console.log('Switched to WebSocket MSE source. Buffering...');
                 }
               };
 
