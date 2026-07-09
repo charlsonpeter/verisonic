@@ -201,6 +201,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
             const trackId = data.track_id;
             if (!trackId) throw new Error("Missing track ID");
             
+            setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'completed', message: 'Success', progress: 100 } : q));
             fetchTracks(true);
             resolve();
           } catch {
@@ -244,16 +245,14 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     setUploadMessage(null);
     
     const itemsToUpload = [...uploadQueue];
-    setUploadQueue([]);
-    setIsUploadModalOpen(false);
-    
     for (const item of itemsToUpload) {
-      if (item.status === 'completed' || item.status === 'rejected') continue;
+      if (item.status === 'completed' || item.status === 'rejected' || item.status === 'failed') continue;
       await uploadSingleQueueItem(item);
     }
     
     setIsQueueUploading(false);
     fetchSuggestions();
+    fetchTracks(true);
   };
 
   const fetchTracks = async (silent = false) => {
@@ -648,15 +647,68 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                               <span className="text-[9px] text-slate-550 font-bold uppercase tracking-wider block">File {idx + 1}</span>
                               <span className="text-xs font-bold text-slate-200 block truncate" title={item.file.name}>{item.file.name}</span>
                               <span className="text-[9px] text-slate-500 font-semibold font-sans">{(item.file.size / (1024 * 1024)).toFixed(2)} MB</span>
-                              {isPending && item.message && (
-                                <span className="text-[9px] text-rose-400 font-extrabold uppercase font-sans ml-2.5 bg-rose-500/10 px-1.5 py-0.5 rounded border border-rose-500/20">{item.message}</span>
+                              {item.message && (
+                                <span className={`text-[9px] font-extrabold uppercase font-sans ml-2.5 px-1.5 py-0.5 rounded border ${
+                                  item.status === 'completed'
+                                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-450'
+                                    : item.status === 'failed'
+                                    ? 'bg-rose-500/10 border-rose-500/20 text-rose-455'
+                                    : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                                }`}>
+                                  {item.message}
+                                </span>
                               )}
                             </div>
 
                             <div className="flex items-center gap-2">
-                              <span className="px-2.5 py-0.5 rounded-full text-[9px] font-extrabold uppercase border bg-slate-950 border-white/5 text-slate-500">
-                                {item.status}
-                              </span>
+                              {/* Circular progress / status indicators */}
+                              {isUploading ? (
+                                (() => {
+                                  const radius = 14;
+                                  const circumference = 2 * Math.PI * radius;
+                                  const strokeDashoffset = circumference - (item.progress / 100) * circumference;
+                                  return (
+                                    <div className="relative w-8 h-8 flex items-center justify-center">
+                                      <svg className="w-8 h-8 transform -rotate-90">
+                                        <circle
+                                          cx="16"
+                                          cy="16"
+                                          r={radius}
+                                          className="stroke-slate-800"
+                                          strokeWidth="2.5"
+                                          fill="transparent"
+                                        />
+                                        <circle
+                                          cx="16"
+                                          cy="16"
+                                          r={radius}
+                                          className="stroke-rose-500 transition-all duration-300 ease-out"
+                                          strokeWidth="2.5"
+                                          fill="transparent"
+                                          strokeDasharray={circumference}
+                                          strokeDashoffset={strokeDashoffset}
+                                          strokeLinecap="round"
+                                        />
+                                      </svg>
+                                      <span className="absolute text-[8px] font-black text-rose-455">
+                                        {item.progress}%
+                                      </span>
+                                    </div>
+                                  );
+                                })()
+                              ) : item.status === 'completed' ? (
+                                <div className="w-8 h-8 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400" title="Completed">
+                                  <Check className="w-4 h-4" />
+                                </div>
+                              ) : item.status === 'failed' ? (
+                                <div className="w-8 h-8 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400" title="Upload Failed">
+                                  <AlertTriangle className="w-4 h-4" />
+                                </div>
+                              ) : (
+                                <span className="px-2.5 py-0.5 rounded-full text-[9px] font-extrabold uppercase border bg-slate-950 border-white/5 text-slate-500">
+                                  Pending
+                                </span>
+                              )}
                               
                               {isPending && (
                                 <button 
@@ -808,13 +860,31 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
             {/* Footer (Sticky/Static with Action Button) */}
             {uploadQueue.length > 0 && (
               <div className="p-6 pt-4 border-t border-white/5 bg-slate-950/20 flex-shrink-0">
-                <button 
-                  onClick={handleUploadQueue}
-                  disabled={isQueueUploading}
-                  className="w-full bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 text-white font-bold py-3 rounded-xl transition text-xs shadow flex items-center justify-center gap-1.5 font-sans"
-                >
-                  Verify and Upload Queue
-                </button>
+                {isQueueUploading ? (
+                  <button 
+                    disabled 
+                    className="w-full bg-slate-900 border border-white/5 text-slate-500 font-bold py-3 rounded-xl transition text-xs font-sans cursor-not-allowed text-center"
+                  >
+                    Uploading queue... {uploadQueue.filter(q => q.status === 'completed' || q.status === 'failed').length} / {uploadQueue.length} done
+                  </button>
+                ) : uploadQueue.some(q => q.status === 'completed' || q.status === 'failed') ? (
+                  <button 
+                    onClick={() => {
+                      setUploadQueue([]);
+                      setIsUploadModalOpen(false);
+                    }}
+                    className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-xl transition text-xs shadow flex items-center justify-center gap-1.5 font-sans"
+                  >
+                    Close & Finish
+                  </button>
+                ) : (
+                  <button 
+                    onClick={handleUploadQueue}
+                    className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-xl transition text-xs shadow flex items-center justify-center gap-1.5 font-sans"
+                  >
+                    Verify and Upload Queue
+                  </button>
+                )}
               </div>
             )}
           </div>

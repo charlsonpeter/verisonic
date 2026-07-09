@@ -309,3 +309,25 @@ def calculate_quality_score(metadata: dict, spectral: dict) -> dict:
         "rejection_reasons": rejection_reasons,
         "is_lossless": is_lossless
     }
+
+def extract_embedded_cover(audio_path: str, output_image_path: str) -> bool:
+    """
+    Tries to extract an embedded cover art image from the audio track using ffmpeg.
+    Returns True if successfully extracted, False otherwise.
+    """
+    import os
+    import subprocess
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", audio_path,
+        "-an",
+        "-vcodec", "mjpeg",
+        output_image_path
+    ]
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode == 0 and os.path.exists(output_image_path) and os.path.getsize(output_image_path) > 0:
+            return True
+        return False
+    except Exception:
+        return False

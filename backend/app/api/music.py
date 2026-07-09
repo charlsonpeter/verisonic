@@ -396,6 +396,33 @@ async def upload_music(
             track.genres.append(g_model)
         db.commit()
         
+    # Try to extract embedded cover image from audio track
+    try:
+        from app.services.audio import extract_embedded_cover
+        from app.services.storage import upload_file
+        
+        # Temp image path in same shared tmp directory
+        temp_img_path = temp_file_path + ".jpg"
+        if extract_embedded_cover(temp_file_path, temp_img_path):
+            cover_key = f"covers/{track.id}.jpg"
+            with open(temp_img_path, 'rb') as img_f:
+                file_bytes = img_f.read()
+                upload_file(file_bytes, cover_key, content_type="image/jpeg")
+            track.cover_image_path = cover_key
+            
+            # If the track has an album, and the album has no cover art yet, copy/set it
+            if track.album and not track.album.cover_art_url:
+                track.album.cover_art_url = cover_key
+                db.add(track.album)
+                
+            db.commit()
+            
+            # Clean up temp image
+            if os.path.exists(temp_img_path):
+                os.remove(temp_img_path)
+    except Exception as e:
+        print(f"Error extracting embedded cover art: {e}")
+
     # Trigger spectral quality analysis background task
     analyze_audio_task.delay(track.id, temp_file_path)
     
