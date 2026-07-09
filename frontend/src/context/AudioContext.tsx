@@ -143,6 +143,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
+  const hasSyncedLiveHeadRef = useRef(false);
 
   // Track speed state in ref to avoid stale closure in audio event handlers
   const playbackSpeedRef = useRef<number>(1.0);
@@ -292,6 +293,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       // Eliminate browser buffering latency on live broadcasts by catching up to the live edge
       if (activeRadioStationRef.current && !audio.paused && audio.buffered.length > 0) {
         const bufferedEnd = audio.buffered.end(audio.buffered.length - 1);
+        
+        // Initial skip of the server-side history buffer to play the absolute live head instantly
+        if (!hasSyncedLiveHeadRef.current) {
+          hasSyncedLiveHeadRef.current = true;
+          audio.currentTime = Math.max(0, bufferedEnd - 0.2);
+          console.log("Synced initial playhead to live edge:", audio.currentTime);
+          return;
+        }
+
         const latency = bufferedEnd - audio.currentTime;
         if (latency > 3.5) {
           audio.currentTime = Math.max(0, bufferedEnd - 1.5);
@@ -478,6 +488,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const playTrack = async (track: Track, isRadio = false) => {
     if (!audioRef.current) return;
+
+    if (isRadio) {
+      hasSyncedLiveHeadRef.current = false;
+    }
 
     if (currentUser && currentUser.role === 'radio_admin' && !isRadio) {
       console.warn("Radio admins cannot play standard library music tracks.");
