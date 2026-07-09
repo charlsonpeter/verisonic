@@ -121,31 +121,40 @@ if RTCPeerConnection is not None:
                 self._channels = 2
                 self._running = True
                 self._buffering = True
-                
-                # NumPy audio buffer for stereo 16-bit interleaved samples
-                import numpy as np
-                self._audio_buffer = np.array([], dtype=np.int16)
-                
-                # Persistent codec context for streaming MP3 decoding
+                self._queue = asyncio.Queue(maxsize=35)
                 import av
                 self._codec = av.CodecContext.create('mp3', 'r')
                 self._codec.open()
-
-                # Resampler to convert 44.1 kHz planar s16p to WebRTC standard 48 kHz packed s16
                 self._resampler = av.AudioResampler(
                     format='s16',
                     layout='stereo',
                     rate=48000
                 )
+                self._fifo = av.AudioFifo()
+                self._pts = 0
+                self._buffering = True
 
             async def recv(self):
                 try:
-                    # 1. Pull from queue and decode/resample to replenish self._audio_buffer
-                    # Limit the buffering loop so it doesn't block CPU forever if there's massive backlog
+                    import time
+                    
+                    # Ensure we pace the WebRTC packets to EXACTLY 50 frames per second (20ms)
+                    if getattr(self, '_start_time', None) is None:
+                        self._start_time = time.time()
+                        self._frames_sent = 0
+                    
+                    expected_time = self._start_time + (self._frames_sent * 0.020) # 20ms per frame
+                    now = time.time()
+                    wait_time = expected_time - now
+                    if wait_time > 0:
+                        await asyncio.sleep(wait_time)
+                    
+                    self._frames_sent += 1
+
                     chunks_read = 0
                     max_chunks_to_read = 20
                     
-                    # We always drain the queue completely to avoid backups and chunk drops
+                    # Drain WebSocket queue into PyAV AudioFifo
                     while self._queue.qsize() > 0 and chunks_read < max_chunks_to_read:
                         try:
                             chunk = self._queue.get_nowait()
@@ -161,21 +170,16 @@ if RTCPeerConnection is not None:
                                         resampled = self._resampler.resample(frame)
                                         if resampled:
                                             for f in resampled:
-                                                # Convert frame to flat array of interleaved samples
-                                                f_data = f.to_ndarray().flatten()
-                                                self._audio_buffer = np.concatenate([self._audio_buffer, f_data])
+                                                self._fifo.write(f)
                                 except Exception as e:
                                     print(f"WebRTC frame decode warning: {e}", flush=True)
                         except Exception as e:
                             print(f"Error parsing WebRTC chunk: {e}", flush=True)
 
-                    # (Removed artificial latency limiter. The maxsize=35 queue handles latency natively.)
-
-                    # 2. Check if we need to buffer
+                    # Check buffering state (48000 samples = 1 second)
                     if self._buffering:
-                        # 96,000 elements corresponds to 48000 samples * 2 channels (1.0 second of audio)
-                        if len(self._audio_buffer) < 96000:
-                            # Output silence frame (960 samples, stereo packed = 1920 elements)
+                        if self._fifo.samples < 48000:
+                            # Output silence frame while buffering
                             combined = np.zeros((1, 960 * 2), dtype='int16')
                             frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
                             frame.sample_rate = 48000
@@ -186,17 +190,11 @@ if RTCPeerConnection is not None:
                         else:
                             self._buffering = False
 
-                    # 3. Pull 960 samples (1920 elements) from the buffer to play
-                    if len(self._audio_buffer) >= 1920:
-                        out_samples = self._audio_buffer[:1920]
-                        self._audio_buffer = self._audio_buffer[1920:]
-                        
-                        # Ensure we make a true copy so PyAV doesn't hold a reference to a shifting buffer view
-                        out_samples_copy = np.array(out_samples, copy=True)
-                        frame = AudioFrame.from_ndarray(out_samples_copy.reshape(1, -1), format='s16', layout='stereo')
-                        frame.sample_rate = 48000
-                        frame.time_base = fractions.Fraction(1, 48000)
+                    # Read exactly 960 samples from the FIFO (20ms Opus frame)
+                    if self._fifo.samples >= 960:
+                        frame = self._fifo.read(960)
                         frame.pts = self._pts
+                        frame.time_base = fractions.Fraction(1, 48000)
                         self._pts += 960
                         return frame
                     else:
@@ -214,7 +212,6 @@ if RTCPeerConnection is not None:
                     print(f"FATAL ERROR in recv(): {type(e)} {e}", flush=True)
                     print(traceback.format_exc(), flush=True)
                     
-                    # Safe fallback to prevent complete WebRTC channel teardown if possible
                     combined = np.zeros((1, 960 * 2), dtype='int16')
                     frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
                     frame.sample_rate = 48000
