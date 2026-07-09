@@ -745,8 +745,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             }
           };
 
-          // Run WebSocket upgrade attempt without blocking
-          upgradeToWebSocketStream();
+          // Run WebSocket upgrade attempt without blocking if not resuming
+          if (!isResume) {
+            upgradeToWebSocketStream();
+          }
         } else {
           playTrack(virtualTrack, true);
           if (audioRef.current && data.offset && data.offset > 0.1) {

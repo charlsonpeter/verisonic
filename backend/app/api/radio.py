@@ -48,6 +48,10 @@ class LiveStreamManager:
             self.listeners[station_id] = set()
         self.listeners[station_id].add(q)
         
+        # Normalize skip_history string if passed as query parameter string
+        if isinstance(skip_history, str):
+            skip_history = skip_history.lower() == "true"
+
         # Populate new listener's queue with combined recent history as a single block to start playing instantly
         if not skip_history and station_id in self.history and self.history[station_id]:
             history_data = b"".join(self.history[station_id])
