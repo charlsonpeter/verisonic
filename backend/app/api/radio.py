@@ -197,6 +197,9 @@ if RTCPeerConnection is not None:
                     # Read exactly 960 samples from the FIFO (20ms Opus frame)
                     if self._fifo.samples >= 960:
                         frame = self._fifo.read(960)
+                        # Log frame details periodically to confirm layout
+                        if self._frames_sent % 500 == 0:
+                            print(f"DEBUG WebRTC: Frame format={frame.format.name}, layout={frame.layout.name}, samples={frame.samples}, rate={frame.sample_rate}", flush=True)
                         frame.pts = self._pts
                         frame.time_base = fractions.Fraction(1, 48000)
                         self._pts += 960
@@ -943,17 +946,15 @@ def customize_sdp(sdp: str) -> str:
         fmtp_prefix = f"a=fmtp:{opus_pt}"
         for i, line in enumerate(lines):
             if line.startswith(fmtp_prefix):
-                # Append high-quality stereo parameters
-                if "stereo=1" not in line:
-                    lines[i] = line + ";stereo=1;sprop-stereo=1;maxaveragebitrate=256000"
-                elif "maxaveragebitrate" not in line:
-                    lines[i] = line + ";maxaveragebitrate=256000"
+                # Append high-quality stereo parameters and disable voice processing
+                extra_params = ";stereo=1;sprop-stereo=1;maxaveragebitrate=256000;echoCancellation=false;noiseSuppression=false;autoGainControl=false"
+                lines[i] = line + extra_params
                 break
         else:
             # If no fmtp line exists, find the rtpmap line and insert the fmtp line after it
             for i, line in enumerate(lines):
                 if line.startswith(f"a=rtpmap:{opus_pt}"):
-                    lines.insert(i + 1, f"a=fmtp:{opus_pt} minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1;maxaveragebitrate=256000")
+                    lines.insert(i + 1, f"a=fmtp:{opus_pt} minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1;maxaveragebitrate=256000;echoCancellation=false;noiseSuppression=false;autoGainControl=false")
                     break
 
     return "\r\n".join(lines)
