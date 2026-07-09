@@ -40,6 +40,7 @@ import { AuthPage } from './pages/AuthPage';
 import { UsersManagement } from './pages/UsersManagement';
 import { TracksManagement } from './pages/TracksManagement';
 import { Contact } from './pages/Contact';
+import { BroadcasterDownload } from './pages/BroadcasterDownload';
 
 const API_URL = '/api';
 
@@ -77,7 +78,7 @@ function DashboardContent() {
   // Route protection redirect for Radio Admins who do NOT have a station yet
   useEffect(() => {
     if (currentUser && currentUser.role === 'radio_admin' && !hasRadioStation) {
-      if (activeTab !== 'radio' && activeTab !== 'contact' && activeTab !== 'settings' && activeTab !== 'profile' && activeTab !== 'station-profile' && activeTab !== 'studio-profile') {
+      if (activeTab !== 'radio' && activeTab !== 'contact' && activeTab !== 'settings' && activeTab !== 'profile' && activeTab !== 'station-profile' && activeTab !== 'studio-profile' && activeTab !== 'broadcaster-download') {
         setActiveTab('radio');
       }
     }
@@ -247,6 +248,8 @@ function DashboardContent() {
         return <TracksManagement onViewReport={viewQualityReport} />;
       case 'contact':
         return <Contact />;
+      case 'broadcaster-download':
+        return <BroadcasterDownload />;
       case 'auth':
         return <AuthPage onSuccess={() => setActiveTab('home')} />;
       

@@ -244,7 +244,7 @@ export const Settings: React.FC = () => {
         station ? (
           <section className="grid grid-cols-1 md:grid-cols-12 gap-8 animate-fade-in bg-slate-900/10 border border-white/3 p-6 rounded-3xl shadow-inner">
             {/* Broadcaster Connection Settings */}
-            <div className="md:col-span-7 space-y-4">
+            <div className="md:col-span-12 max-w-xl space-y-4">
               <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest font-sans">
                 Broadcaster Connection Settings
               </h3>
@@ -257,7 +257,7 @@ export const Settings: React.FC = () => {
                 {/* Stream Key */}
                 <div className="space-y-1">
                   <div className="flex justify-between items-center">
-                    <label className="text-[9.5px] font-bold text-slate-550 uppercase block">Stream Key</label>
+                    <label className="text-[9.5px] font-bold text-slate-555 uppercase block">Stream Key</label>
                     {(() => {
                       const info = getKeyExpiryInfo();
                       if (!info) return null;
@@ -294,60 +294,6 @@ export const Settings: React.FC = () => {
                 >
                   {isRegeneratingKey ? 'Regenerating...' : 'Regenerate Stream Key'}
                 </button>
-              </div>
-            </div>
-
-            {/* Broadcast Link Software Widget */}
-            <div className="md:col-span-5 bg-slate-900/40 border border-white/3 p-6 rounded-3xl space-y-4 shadow-xl relative overflow-hidden">
-              <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5 font-sans">
-                Broadcast Software Link
-              </h3>
-              <p className="text-[10.5px] text-slate-400 leading-relaxed font-semibold">
-                Install the VeriSonic desktop background service to stream system audio or microphone input to your live feed.
-              </p>
-              <div className="bg-slate-950/45 p-4 border border-white/3 rounded-2xl flex flex-col gap-3 font-sans text-xs">
-                {(() => {
-                  const ua = window.navigator.userAgent.toLowerCase();
-                  let detectedOS = 'Windows';
-                  if (ua.includes('android')) detectedOS = 'Android';
-                  else if (ua.includes('linux')) detectedOS = 'Linux';
-                  else if (ua.includes('mac')) detectedOS = 'macOS';
-                  else if (ua.includes('win')) detectedOS = 'Windows';
-
-                  const allPlatforms = ['Windows', 'macOS', 'Linux'];
-                  const alternatives = allPlatforms.filter(p => p !== detectedOS);
-
-                  return (
-                    <>
-                      <div className="flex items-center justify-between text-[10px]">
-                        <span className="text-slate-550 font-bold uppercase">Detected Platform:</span>
-                        <span className="font-bold text-rose-455 uppercase">{detectedOS}</span>
-                      </div>
-                      <button
-                        onClick={() => showInfo("Broadcaster Download", `Initiating download: VeriSonic Broadcast Link background service for ${detectedOS}.`)}
-                        className="flex items-center justify-center gap-2 py-2.5 px-4 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow-lg transition duration-300 uppercase tracking-wider cursor-pointer"
-                      >
-                        Download Broadcaster
-                      </button>
-
-                      {/* Alternative Options */}
-                      <div className="border-t border-white/5 pt-3 mt-1.5 space-y-2">
-                        <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider block">Alternative platforms:</span>
-                        <div className="grid grid-cols-2 gap-1.5 text-[9px] font-bold text-center uppercase tracking-wide">
-                          {alternatives.map(p => (
-                            <button 
-                              key={p}
-                              onClick={() => showInfo("Broadcaster Download", `Initiating download: VeriSonic Broadcast Link background service for ${p}.`)}
-                              className="py-1.5 bg-slate-900/60 hover:bg-slate-800 text-slate-350 hover:text-white border border-white/3 rounded-lg transition cursor-pointer font-sans"
-                            >
-                              {p}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </>
-                  );
-                })()}
               </div>
             </div>
           </section>

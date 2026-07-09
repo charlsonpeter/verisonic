@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Plus, Edit2, ArrowLeft, ExternalLink, Radio, Info, MapPin, Globe, Phone, Mail } from 'lucide-react';
+import { Settings, Plus, Edit2, ArrowLeft, Radio, Info, MapPin, Globe, Eye, EyeOff, Copy, Check, RefreshCw, Wifi } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { showConfirm, showError } from '../utils/swal';
 
 interface StationProfileProps {
   onNavigate?: (tab: string) => void;
@@ -13,6 +14,11 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
   const [viewMode, setViewMode] = useState<'list' | 'edit' | 'add'>('list');
   const [editingStationId, setEditingStationId] = useState<number | null>(null);
   
+  // Credentials & Settings Subsections per Station Card
+  const [showCredentialsMap, setShowCredentialsMap] = useState<Record<number, boolean>>({});
+  const [copiedKeyMap, setCopiedKeyMap] = useState<Record<number, boolean>>({});
+  const [isRegeneratingKey, setIsRegeneratingKey] = useState<Record<number, boolean>>({});
+
   const [formValues, setFormValues] = useState({
     name: '',
     description: '',
@@ -168,6 +174,42 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
     }
   };
 
+  const handleCopy = (text: string, id: number) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKeyMap(prev => ({ ...prev, [id]: true }));
+    setTimeout(() => setCopiedKeyMap(prev => ({ ...prev, [id]: false })), 2000);
+  };
+
+  const handleRegenerateKey = async (stationId: number) => {
+    const confirm = await showConfirm(
+      'Are you sure?',
+      'This will invalidate the current connection key. The desktop broadcaster will be disconnected if it is streaming, and you will need to paste the new key into the broadcaster app.',
+      'warning',
+      'Yes, Regenerate'
+    );
+    if (!confirm) return;
+
+    setIsRegeneratingKey(prev => ({ ...prev, [stationId]: true }));
+    try {
+      const res = await fetch(`/api/radio/${stationId}/regenerate-key`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token || localStorage.getItem('token') || ''}`
+        }
+      });
+      if (res.ok) {
+        await fetchStations();
+      } else {
+        const err = await res.json();
+        showError('Error', err.detail || 'Failed to regenerate key.');
+      }
+    } catch (e) {
+      showError('Error', 'Connection failed.');
+    } finally {
+      setIsRegeneratingKey(prev => ({ ...prev, [stationId]: false }));
+    }
+  };
+
   return (
     <div className="space-y-8 w-full animate-page-entry font-sans">
       
@@ -175,11 +217,11 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
       <div className="flex justify-between items-center">
         <div>
           <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
-            <Radio className="w-8 h-8 text-rose-450 animate-pulse" /> Station Profiles
+            <Radio className="w-8 h-8 text-rose-455 animate-pulse" /> Station Profiles
           </h2>
           <p className="text-sm text-slate-400 mt-1">
             {viewMode === 'list' 
-              ? 'Manage your registered live radio station nodes, locations, and details.' 
+              ? 'Manage your registered live radio station nodes, credentials, and settings.' 
               : viewMode === 'edit' 
                 ? 'Update location details and settings for your station node.'
                 : 'Register a new station node to stream live over the network.'}
@@ -189,7 +231,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
         {viewMode === 'list' && (
           <button
             onClick={handleAddNewClick}
-            className="flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-500 rounded-xl text-xs font-bold text-white shadow-lg transition animate-fade-in"
+            className="flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-500 rounded-xl text-xs font-bold text-white shadow-lg transition"
           >
             <Plus className="w-4 h-4" /> Add Station
           </button>
@@ -219,7 +261,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
       {viewMode === 'list' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
           {isLoading ? (
-            <p className="text-slate-500 text-xs py-8 col-span-2 text-center">Loading station profiles...</p>
+            <p className="text-slate-500 text-xs py-8 col-span-2 text-center font-sans">Loading station profiles...</p>
           ) : myStations.length === 0 ? (
             <div className="glass-card p-12 rounded-3xl border border-white/5 text-center col-span-2 space-y-4">
               <Info className="w-12 h-12 text-rose-400/50 mx-auto" />
@@ -275,12 +317,60 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
                     <Edit2 className="w-3.5 h-3.5" /> Edit Profile
                   </button>
                   <button
-                    onClick={() => onNavigate?.('radio')}
-                    className="flex-1 py-2.5 bg-gradient-to-r from-rose-600 to-rose-500 text-white font-bold text-[10px] rounded-xl shadow-md uppercase tracking-wider flex items-center justify-center gap-1 transition cursor-pointer"
+                    onClick={() => setShowCredentialsMap(prev => ({ ...prev, [station.id]: !prev[station.id] }))}
+                    className={`flex-1 py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-wider flex items-center justify-center gap-1 transition cursor-pointer border ${
+                      showCredentialsMap[station.id] 
+                        ? 'bg-rose-500/10 border-rose-500/25 text-rose-400' 
+                        : 'bg-slate-900 hover:bg-slate-800 border-white/5 text-slate-300'
+                    }`}
                   >
-                    Dashboard <ExternalLink className="w-3 h-3" />
+                    <Wifi className="w-3.5 h-3.5" /> Connection Settings
                   </button>
                 </div>
+
+                {/* Connection Settings Expandable Panel */}
+                {showCredentialsMap[station.id] && (
+                  <div className="border-t border-white/5 pt-4 mt-3 space-y-4 animate-slide-down font-sans">
+                    <div className="space-y-1">
+                      <h4 className="text-xs font-bold text-rose-400 uppercase tracking-widest block">Stream Ingestion Node</h4>
+                      <p className="text-[11px] text-slate-405 leading-normal">
+                        Copy your personal stream key into your PyQt5 desktop broadcaster application or encoder to stream live.
+                      </p>
+                    </div>
+                    
+                    <div className="space-y-3">
+                      {/* Stream Key */}
+                      <div className="space-y-1">
+                        <label className="text-[9.5px] font-bold text-slate-555 uppercase block">Stream Key</label>
+                        <div className="flex gap-2">
+                          <input 
+                            type="text" 
+                            value={station.stream_key || ''} 
+                            readOnly 
+                            className="w-full bg-slate-950 border border-white/5 text-[10px] p-2.5 rounded-xl text-white font-mono font-semibold outline-none tracking-wider"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(station.stream_key || '', station.id)}
+                            className="px-3 bg-slate-900 hover:bg-slate-800 border border-white/5 text-slate-405 hover:text-white rounded-xl transition cursor-pointer font-bold text-[10px]"
+                          >
+                            {copiedKeyMap[station.id] ? 'Copied' : 'Copy'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Regenerate Button */}
+                      <button
+                        type="button"
+                        disabled={isRegeneratingKey[station.id]}
+                        onClick={() => handleRegenerateKey(station.id)}
+                        className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-rose-455 font-bold border border-rose-500/10 hover:border-rose-500/30 rounded-xl transition text-[10px] uppercase tracking-wider"
+                      >
+                        {isRegeneratingKey[station.id] ? 'Regenerating...' : 'Regenerate Stream Key'}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))
           )}

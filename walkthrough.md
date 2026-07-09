@@ -28,14 +28,21 @@ This walkthrough summarizes the live broadcasting system implemented for VeriSon
 * **Modified File**: [Radio.tsx](file:///Users/charlsonpeter/Documents/Projects/My_Projects/verisonic/frontend/src/pages/Radio.tsx)
   * Updated the Radio Admin Control Panel layout:
     * Added **Broadcaster Status Indicator** showing *LIVE Streaming* (flashing emerald green) or *Standby (Auto-DJ)* (amber yellow) in real-time.
-    * Added **Stream URL** field showing `ws://localhost:8000/api/radio/stream/ws` with a Copy button.
-    * Added **Stream Key** field with password mask, reveal toggle, Copy button, and a **Regenerate Stream Key** button.
+    * Connection Settings Subsection: Shows connection configurations (Connection Stream Key as plain text, copy button, and key regeneration).
+    * Edit Mode: Opens standard profile forms (Category, Location, Contact, Socials) for a selected station.
+    * Add Mode: Opens a registration form to create a new station node.
 
 ### 4. Standalone Desktop Broadcaster App
 * **New Files**:
   * [broadcaster/verisonic_broadcaster.py](file:///Users/charlsonpeter/Documents/Projects/My_Projects/verisonic/broadcaster/verisonic_broadcaster.py) - Premium dark-themed PyQt5 GUI broadcaster desktop application.
   * [broadcaster/requirements.txt](file:///Users/charlsonpeter/Documents/Projects/My_Projects/verisonic/broadcaster/requirements.txt) - Python package list.
   * [broadcaster/requirements.py](file:///Users/charlsonpeter/Documents/Projects/My_Projects/verisonic/broadcaster/requirements.py) - Programmatic pip installer helper script.
+
+### 8. macOS Docker Compatibility & Network Routing Realignment
+* **Files**: [docker-compose.yml](file:///Users/charlsonpeter/Documents/Projects/My_Projects/verisonic/docker-compose.yml) and [nginx.conf](file:///Users/charlsonpeter/Documents/Projects/My_Projects/verisonic/nginx.conf)
+* Changed the network model from macOS-incompatible `network_mode: host` to a standard Docker Compose bridge network.
+* Exposed port `8001:8001` on the `backend` service container.
+* Realigned all environment host connections in the backend configuration (`POSTGRES_SERVER=db`, `REDIS_HOST=redis`, `S3_ENDPOINT_URL=http://minio:9000`) and the reverse proxy destinations in Nginx (`proxy_pass http://backend:8001`) to route internally via bridge gateway service names instead of `localhost` or `host.docker.internal`.
 
 ---
 
@@ -63,23 +70,24 @@ Ensure your React frontend is running:
 npm run dev
 ```
 
-### 4. Setup Broadcast Settings on the Website
-1. Log in to the VeriSonic web application.
-2. Go to the **Live Radio Dashboard**.
-3. Under **Your Radio Node**, find the newly generated **Stream URL** and **Stream Key** connection credentials.
-4. Copy them.
+---
 
-### 5. Launch and Connect the Broadcaster Software
-1. Launch the broadcaster application:
-   ```bash
-   python broadcaster/verisonic_broadcaster.py
-   ```
-2. Select your desired input source (Microphone, Stereo Mix, etc.) from the dropdown.
-3. Paste the **Stream Key** into the text field (the Stream URL is already pre-configured automatically under the hood).
-4. Click **Start Broadcast**.
-5. The window will show **LIVE** status, start counting MB sent, and the visual VU level bar will dynamically bounce to your voice or system music input.
+## Verification Plan
 
-### 6. Listen Live on the Website
-1. On the VeriSonic website, refresh the dashboard.
-2. Observe your station's **Broadcaster Status** has changed to **LIVE Streaming**.
-3. Click the **Play** button on your station card. You will hear your live audio broadcast playing in real-time!
+### Manual Verification Steps
+1. Log in as an admin (`admin@verisonic.com`). Navigate to the **Live Radio Dashboard** tab and verify that the "Register New Live Station Node" registration form is no longer visible.
+2. In the user management interface or settings, promote a test user to **Radio Admin**.
+3. Log in as the newly promoted **Radio Admin** (or use the simulated `radio_admin@verisonic.com` credentials).
+4. Verify that you are immediately redirected to the **Live Radio Dashboard** to register your station and see the banner on Home. Try clicking on other tabs (like Home, Search) and verify you are redirected back to the `/radio` page.
+5. Fill out the station details form and click **Provision Radio Node**.
+6. Verify that once created:
+   - The registration form is replaced by the radio station management dashboard widget.
+   - You can now navigate to other tabs (e.g. Home page) freely.
+   - The promotional banner on the Home page is hidden.
+7. Launch the broadcaster application (`python broadcaster/verisonic_broadcaster.py`) and attempt to log in as the platform administrator (`admin@verisonic.com`). Verify that access is denied with a message stating that only Radio Admins are allowed.
+8. Log in to the broadcaster application using the `radio_admin` account. Verify that the "RADIO STATION" dropdown selection only shows the station owned by this user and links directly to it.
+9. Click **Station Profile** settings in the web app. Verify you see the list of your stations containing the first one.
+10. Click **+ Add Station**, register a second station (e.g. "VeriSonic Chillout"), and verify it successfully registers and appears in the list.
+11. Edit one of the stations, click save, and verify it updates.
+12. Click the **Connection Settings** button on one of the cards in the list. Verify that the Connection Stream Key is displayed always in plain text, that the copy button changes state to "Copied", and click **Regenerate Stream Key** to confirm key rotation.
+13. Launch the desktop broadcaster app and verify that both stations now appear in the "RADIO STATION" dropdown list.

@@ -42,21 +42,22 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: verisonic_backend
-    network_mode: host
+    ports:
+      - "8001:8001"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
     volumes:
       - ./backend:/app
     environment:
-      - POSTGRES_SERVER=localhost
+      - POSTGRES_SERVER=db
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=verisonic
-      - REDIS_HOST=localhost
+      - REDIS_HOST=redis
       - REDIS_PORT=6379
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
       - S3_BUCKET_NAME=verisonic-audio
-      - S3_ENDPOINT_URL=http://localhost:9000
+      - S3_ENDPOINT_URL=http://minio:9000
       - TZ=UTC
       - WEBRTC_BUFFER_SEC=3
     depends_on:

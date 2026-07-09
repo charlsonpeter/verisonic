@@ -137,6 +137,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const websocketRef = useRef<WebSocket | null>(null);
   const previewTimerRef = useRef<NodeJS.Timeout | null>(null);
   const equalizerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const animFrameRef = useRef<number | null>(null);
 
   // Track speed state in ref to avoid stale closure in audio event handlers
   const playbackSpeedRef = useRef<number>(1.0);
@@ -352,23 +355,87 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, []);
 
-  // Handle equalizer bar animations when playing
+  // Real VU meter — driven by Web Audio API AnalyserNode
   useEffect(() => {
-    if (isPlaying) {
-      equalizerIntervalRef.current = setInterval(() => {
-        setEqualizerBars(prev => prev.map(() => Math.floor(Math.random() * 20) + 4));
-      }, 120);
-    } else {
-      if (equalizerIntervalRef.current) {
-        clearInterval(equalizerIntervalRef.current);
+    const NUM_BARS = 10;
+
+    const stopAnalyser = () => {
+      if (animFrameRef.current !== null) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
       }
-      setEqualizerBars(new Array(10).fill(4));
-    }
-    return () => {
-      if (equalizerIntervalRef.current) {
-        clearInterval(equalizerIntervalRef.current);
-      }
+      setEqualizerBars(new Array(NUM_BARS).fill(4));
     };
+
+    if (!isPlaying) {
+      stopAnalyser();
+      return;
+    }
+
+    const audio = audioRef.current;
+    if (!audio) { stopAnalyser(); return; }
+
+    // Lazily create AudioContext + analyser once
+    if (!audioCtxRef.current) {
+      try {
+        audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      } catch (e) {
+        console.warn('Web Audio API not supported:', e);
+        stopAnalyser();
+        return;
+      }
+    }
+
+    const ctx = audioCtxRef.current;
+
+    // Resume if suspended (browser autoplay policy)
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+
+    // Create analyser only once per audio element
+    if (!analyserRef.current) {
+      try {
+        const source = ctx.createMediaElementSource(audio);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 64; // 32 frequency bins
+        analyser.smoothingTimeConstant = 0.8;
+        source.connect(analyser);
+        analyser.connect(ctx.destination);
+        analyserRef.current = analyser;
+      } catch (e) {
+        // CORS or already-connected element — fall back to random
+        console.warn('AnalyserNode setup failed (likely CORS on radio stream):', e);
+        equalizerIntervalRef.current = setInterval(() => {
+          setEqualizerBars(prev => prev.map(() => Math.floor(Math.random() * 20) + 4));
+        }, 120);
+        return () => {
+          if (equalizerIntervalRef.current) clearInterval(equalizerIntervalRef.current);
+          setEqualizerBars(new Array(NUM_BARS).fill(4));
+        };
+      }
+    }
+
+    const analyser = analyserRef.current;
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+    const tick = () => {
+      analyser.getByteFrequencyData(dataArray);
+
+      // Map the frequency bins to NUM_BARS evenly spaced bars (4–24px)
+      const step = Math.floor(dataArray.length / NUM_BARS);
+      const bars = Array.from({ length: NUM_BARS }, (_, i) => {
+        const bin = dataArray[i * step] ?? 0;
+        return Math.max(4, Math.round((bin / 255) * 24));
+      });
+      setEqualizerBars(bars);
+
+      animFrameRef.current = requestAnimationFrame(tick);
+    };
+
+    animFrameRef.current = requestAnimationFrame(tick);
+
+    return () => { stopAnalyser(); };
   }, [isPlaying]);
 
   const handleLimitReached = () => {

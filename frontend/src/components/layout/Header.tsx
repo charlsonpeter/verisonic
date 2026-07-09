@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   Search, Crown, Signal, User, ShieldAlert, ChevronDown, 
   Compass, Music, Radio, Heart, FolderHeart, UploadCloud, 
-  ShieldCheck, BarChart2, Settings, LogOut, Disc, Mail
+  ShieldCheck, BarChart2, Settings, LogOut, Disc, Mail, Laptop
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -34,6 +34,7 @@ export const Header: React.FC<HeaderProps> = ({
   const navItems = (currentUser && currentUser.role === 'radio_admin')
     ? [
         { id: 'radio', label: 'Radio Dashboard', icon: Radio },
+        { id: 'broadcaster-download', label: 'Broadcaster App', icon: Laptop },
         { id: 'contact', label: 'Contact Us', icon: Mail }
       ]
     : [
@@ -242,7 +243,7 @@ export const Header: React.FC<HeaderProps> = ({
                   My Profile
                 </button>
 
-                {currentUser && ['radio_admin', 'admin'].includes(currentUser.real_role || currentUser.role) && (
+                {currentUser && ['radio_admin', 'admin'].includes(currentUser.real_role || currentUser.role) && userMode === 'admin' && (
                   <button 
                     onClick={() => handleDropdownSelect('station-profile')}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
@@ -262,13 +263,15 @@ export const Header: React.FC<HeaderProps> = ({
                   </button>
                 )}
 
-                <button 
-                  onClick={() => handleDropdownSelect('settings')}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
-                >
-                  <Settings className="w-4 h-4 text-slate-450" />
-                  Platform Settings
-                </button>
+                {currentUser && (currentUser.real_role || currentUser.role) !== 'radio_admin' && (
+                  <button 
+                    onClick={() => handleDropdownSelect('settings')}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
+                  >
+                    <Settings className="w-4 h-4 text-slate-450" />
+                    Platform Settings
+                  </button>
+                )}
 
                 {/* Artist/Admin actions */}
                 {(currentUser.role === 'studio_admin' || currentUser.role === 'admin') && (
