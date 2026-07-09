@@ -455,7 +455,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       try {
         const source = ctx.createMediaElementSource(audio);
         const analyser = ctx.createAnalyser();
-        analyser.fftSize = 64; // 32 frequency bins
+        analyser.fftSize = 512; // 256 frequency bins
         analyser.smoothingTimeConstant = 0.8;
         source.connect(analyser);
         analyser.connect(ctx.destination);
@@ -480,7 +480,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       analyser.getFloatFrequencyData(dataArray);
 
       // Map frequency bins to 20 bands logarithmically like the broadcaster
-      const maxBin = Math.min(400, dataArray.length);
+      const maxBin = Math.min(150, dataArray.length);
       const logIndices = new Array(NUM_BARS + 1);
       const minLog = Math.log10(1);
       const maxLog = Math.log10(maxBin || 1);
