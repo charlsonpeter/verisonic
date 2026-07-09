@@ -671,8 +671,6 @@ def get_station_stream_sync(
         raise HTTPException(status_code=403, detail="Radio admins can only access their own radio station")
 
     if live_stream_manager.is_live(station.id):
-        # Station is live - offer WebRTC delivery if available, else fallback to HTTP stream
-        use_webrtc = RTCPeerConnection is not None and AUDIO_RELAY_TRACK_CLASS is not None
         return {
             "station_id": station.id,
             "station_name": station.name,
@@ -681,7 +679,7 @@ def get_station_stream_sync(
             "artist": station.name,
             "duration": None,
             "stream_url": f"/api/radio/{station.id}/live",
-            "is_webrtc": use_webrtc,
+            "is_websocket": True,
             "offset": 0.0
         }
 
@@ -792,6 +790,32 @@ async def websocket_stream_endpoint(
         print(f"Broadcaster error on station {station_name} (ID: {resolved_station_id}): {e}", flush=True)
     finally:
         await live_stream_manager.stop_broadcasting(resolved_station_id)
+
+
+@router.websocket("/{id}/stream/ws/listener")
+async def websocket_listener_endpoint(
+    websocket: WebSocket,
+    id: int
+):
+    await websocket.accept()
+    
+    # Register this listener's queue
+    queue = live_stream_manager.register_listener(id)
+    print(f"WebSocket listener connected to station ID: {id}", flush=True)
+    
+    try:
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                break
+            await websocket.send_bytes(chunk)
+    except WebSocketDisconnect:
+        print(f"WebSocket listener disconnected from station ID: {id}", flush=True)
+    except Exception as e:
+        print(f"WebSocket listener error on station ID: {id}: {e}", flush=True)
+    finally:
+        live_stream_manager.unregister_listener(id, queue)
+
 
 @router.get("/{id}/live")
 async def get_live_audio_stream(

@@ -134,6 +134,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const hlsRef = useRef<Hls | null>(null);
   const webrtcPCRef = useRef<RTCPeerConnection | null>(null);
+  const websocketRef = useRef<WebSocket | null>(null);
   const previewTimerRef = useRef<NodeJS.Timeout | null>(null);
   const equalizerIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -179,6 +180,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (webrtcPCRef.current) {
         webrtcPCRef.current.close();
         webrtcPCRef.current = null;
+      }
+      if (websocketRef.current) {
+        websocketRef.current.close();
+        websocketRef.current = null;
       }
       setIsPlaying(false);
       setCurrentTrack(null);
@@ -340,6 +345,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         webrtcPCRef.current.close();
         webrtcPCRef.current = null;
       }
+      if (websocketRef.current) {
+        websocketRef.current.close();
+        websocketRef.current = null;
+      }
     };
   }, []);
 
@@ -401,6 +410,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (webrtcPCRef.current) {
       webrtcPCRef.current.close();
       webrtcPCRef.current = null;
+    }
+    if (websocketRef.current) {
+      websocketRef.current.close();
+      websocketRef.current = null;
     }
     audioRef.current.srcObject = null;
     
@@ -492,6 +505,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       webrtcPCRef.current.close();
       webrtcPCRef.current = null;
     }
+    if (websocketRef.current) {
+      websocketRef.current.close();
+      websocketRef.current = null;
+    }
     if (audioRef.current) {
       audioRef.current.srcObject = null;
     }
@@ -510,100 +527,109 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           stream_url: data.stream_url || station.stream_url
         };
         
-        if (data.is_webrtc) {
+        if (data.is_websocket) {
           // Start playing progressive HTTP stream immediately for guaranteed audio
           playTrack(virtualTrack, true);
           if (audioRef.current && data.offset && data.offset > 0.1) {
             audioRef.current.currentTime = data.offset;
           }
 
-          // Then attempt WebRTC upgrade in background for lower latency
-          const upgradeToWebRTC = async () => {
+          // Then attempt WebSocket MSE upgrade in background for lower latency
+          const upgradeToWebSocketStream = () => {
             try {
-              const pc = new RTCPeerConnection({
-                iceServers: [
-                  { urls: 'stun:stun.l.google.com:19302' },
-                  { urls: 'stun:stun1.l.google.com:19302' }
-                ]
-              });
-              webrtcPCRef.current = pc;
+              // Convert HTTP/HTTPS API URL to WS/WSS URL
+              const wsBase = API_URL.startsWith('https') 
+                ? API_URL.replace('https://', 'wss://') 
+                : API_URL.replace('http://', 'ws://');
+              const wsUrl = `${wsBase}/radio/${station.id}/stream/ws/listener`;
+              const ws = new WebSocket(wsUrl);
+              websocketRef.current = ws;
 
-              pc.addTransceiver('audio', { direction: 'recvonly' });
+              const mediaSource = new MediaSource();
+              let sourceBuffer: SourceBuffer | null = null;
+              let queue: Uint8Array[] = [];
 
-              let iceComplete = false;
-              pc.oniceconnectionstatechange = () => {
-                if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
-                  console.warn('WebRTC ICE failed, keeping progressive stream');
-                  pc.close();
-                  if (webrtcPCRef.current === pc) {
-                    webrtcPCRef.current = null;
+              const appendNext = () => {
+                if (queue.length > 0 && sourceBuffer && !sourceBuffer.updating) {
+                  const chunk = queue.shift();
+                  if (chunk) {
+                    try {
+                      sourceBuffer.appendBuffer(chunk);
+                    } catch (e) {
+                      console.error('Error appending chunk to SourceBuffer:', e);
+                    }
                   }
                 }
               };
 
-              pc.ontrack = (event) => {
-                if (webrtcPCRef.current !== pc) {
-                  pc.close();
-                  return;
+              mediaSource.addEventListener('sourceopen', () => {
+                try {
+                  sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+                  sourceBuffer.addEventListener('updateend', appendNext);
+                } catch (e) {
+                  console.error('Failed to create SourceBuffer for audio/mpeg:', e);
+                  ws.close();
                 }
-                if (audioRef.current && !iceComplete) {
-                  iceComplete = true;
-                  // Smoothly switch to WebRTC once track arrives
+              });
+
+              ws.binaryType = 'arraybuffer';
+              ws.onopen = () => {
+                console.log('WebSocket listener connected to live stream');
+                if (audioRef.current) {
                   audioRef.current.pause();
-                  
-                  let stream = event.streams[0];
-                  if (!stream && event.track) {
-                    stream = new MediaStream([event.track]);
-                  }
-                  
-                  audioRef.current.srcObject = stream;
-                  audioRef.current.removeAttribute('src');
-                  audioRef.current.play().catch(err => console.error('WebRTC play error:', err));
-                  console.log('Switched to WebRTC audio stream');
+                  audioRef.current.srcObject = null;
+                  audioRef.current.src = URL.createObjectURL(mediaSource);
+                  audioRef.current.play().catch(err => console.error('WebSocket playback play error:', err));
+                  console.log('Switched to WebSocket MSE audio stream');
                 }
               };
 
-              const offer = await pc.createOffer();
-              await pc.setLocalDescription(offer);
-
-              const signRes = await fetch(`${API_URL}/radio/${station.id}/webrtc/listener`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({
-                  sdp: pc.localDescription?.sdp,
-                  type: pc.localDescription?.type
-                })
-              });
-
-              if (signRes.ok) {
-                const answer = await signRes.json();
-                if (webrtcPCRef.current !== pc) {
-                  console.log('Obsolete WebRTC connection, aborting signaling');
-                  pc.close();
+              ws.onmessage = (event) => {
+                if (websocketRef.current !== ws) {
+                  ws.close();
                   return;
                 }
-                await pc.setRemoteDescription(new RTCSessionDescription(answer));
-              } else {
-                console.warn('WebRTC signaling rejected, keeping progressive stream');
-                pc.close();
-                if (webrtcPCRef.current === pc) {
-                  webrtcPCRef.current = null;
+                const chunk = new Uint8Array(event.data as ArrayBuffer);
+                queue.push(chunk);
+                appendNext();
+
+                // Memory management: Prune old played ranges from the buffer once in a while
+                if (audioRef.current && audioRef.current.currentTime > 30 && sourceBuffer && !sourceBuffer.updating) {
+                  try {
+                    // Remove data from start to 10 seconds behind current time
+                    sourceBuffer.remove(0, audioRef.current.currentTime - 10);
+                  } catch (e) {
+                    // Ignore transient removal errors
+                  }
                 }
-              }
+              };
+
+              ws.onerror = (err) => {
+                console.error('WebSocket streaming error, falling back:', err);
+                ws.close();
+              };
+
+              ws.onclose = () => {
+                console.warn('WebSocket streaming closed, fallback if needed');
+                if (websocketRef.current === ws) {
+                  websocketRef.current = null;
+                  // If we were playing via websocket, fall back to progressive stream
+                  if (audioRef.current && audioRef.current.src.startsWith('blob:')) {
+                    const fallbackUrl = resolveStreamUrl(virtualTrack.stream_url);
+                    audioRef.current.src = fallbackUrl;
+                    audioRef.current.load();
+                    audioRef.current.play().catch(() => {});
+                  }
+                }
+              };
+
             } catch (err) {
-              console.warn('WebRTC upgrade failed, keeping progressive stream:', err);
-              pc.close();
-              if (webrtcPCRef.current === pc) {
-                webrtcPCRef.current = null;
-              }
+              console.warn('WebSocket MSE upgrade failed, keeping progressive stream:', err);
             }
           };
 
-          // Run WebRTC upgrade attempt without blocking
-          upgradeToWebRTC();
+          // Run WebSocket upgrade attempt without blocking
+          upgradeToWebSocketStream();
         } else {
           playTrack(virtualTrack, true);
           if (audioRef.current && data.offset && data.offset > 0.1) {
