@@ -52,7 +52,7 @@ export class FrequencyBandCalculator {
     }
   }
 
-  public calculateBands(floatData: Float32Array, outputArray: number[]) {
+  public calculateBands(floatData: any, outputArray: number[]) {
     const numBins = floatData.length;
 
     for (let i = 0; i < this.barCount; i++) {
