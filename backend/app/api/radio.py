@@ -178,7 +178,7 @@ if RTCPeerConnection is not None:
                         # 96,000 elements corresponds to 48000 samples * 2 channels (1.0 second of audio)
                         if len(self._audio_buffer) < 96000:
                             # Output silence frame (960 samples, stereo packed = 1920 elements)
-                            combined = np.zeros((1, 960 * 2), dtype='int16')
+                            combined = np.zeros((960, 2), dtype='int16')
                             frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
                             frame.sample_rate = 48000
                             frame.time_base = fractions.Fraction(1, 48000)
@@ -193,7 +193,7 @@ if RTCPeerConnection is not None:
                         out_samples = self._audio_buffer[:1920]
                         self._audio_buffer = self._audio_buffer[1920:]
                         
-                        frame = AudioFrame.from_ndarray(out_samples.reshape(1, -1), format='s16', layout='stereo')
+                        frame = AudioFrame.from_ndarray(out_samples.reshape(960, 2), format='s16', layout='stereo')
                         frame.sample_rate = 48000
                         frame.time_base = fractions.Fraction(1, 48000)
                         frame.pts = self._pts
@@ -202,7 +202,7 @@ if RTCPeerConnection is not None:
                     else:
                         # Buffer ran dry: go back to buffering state and output silence
                         self._buffering = True
-                        combined = np.zeros((1, 960 * 2), dtype='int16')
+                        combined = np.zeros((960, 2), dtype='int16')
                         frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
                         frame.sample_rate = 48000
                         frame.time_base = fractions.Fraction(1, 48000)
@@ -217,7 +217,7 @@ if RTCPeerConnection is not None:
                     # Safe fallback to prevent complete WebRTC channel teardown if possible
                     # (Note: if from_ndarray itself is failing, this fallback might also fail,
                     # but we've successfully logged the error by this point)
-                    combined = np.zeros((1, 960 * 2), dtype='int16')
+                    combined = np.zeros((960, 2), dtype='int16')
                     frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
                     frame.sample_rate = 48000
                     frame.time_base = fractions.Fraction(1, 48000)
