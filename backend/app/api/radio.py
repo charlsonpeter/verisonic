@@ -122,6 +122,7 @@ if RTCPeerConnection is not None:
                 self._running = True
                 self._buffering = True
                 self._queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+                self._frames_sent = 0
                 
                 # Configurable buffering threshold (default: 1.5 seconds)
                 default_buffer = float(os.environ.get("WEBRTC_BUFFER_SEC", "1.5"))
@@ -140,36 +141,13 @@ if RTCPeerConnection is not None:
 
             async def recv(self):
                 try:
-                    import time
-                    
-                    # Ensure we pace the WebRTC packets to EXACTLY 50 frames per second (20ms)
-                    if getattr(self, '_start_time', None) is None:
-                        self._start_time = time.time()
-                        self._frames_sent = 0
-                    
-                    expected_time = self._start_time + (self._frames_sent * 0.020) # 20ms per frame
-                    now = time.time()
-                    wait_time = expected_time - now
-                    if wait_time > 0:
-                        await asyncio.sleep(wait_time)
-                    
-                    self._frames_sent += 1
-
-                    chunks_read = 0
-                    max_chunks_to_read = 20
-                    
-                    # Drain WebSocket queue into PyAV AudioFifo
-                    while self._queue.qsize() > 0 and chunks_read < max_chunks_to_read:
-                        try:
-                            chunk = self._queue.get_nowait()
-                            chunks_read += 1
-                        except asyncio.QueueEmpty:
-                            break
-                            
-                        try:
-                            packets = self._codec.parse(chunk)
-                            for packet in packets:
-                                try:
+                    # 1. Buffering state: block and wait for chunks until the FIFO has enough samples
+                    if self._buffering:
+                        while self._fifo.samples < self._buffering_threshold:
+                            chunk = await self._queue.get()
+                            try:
+                                packets = self._codec.parse(chunk)
+                                for packet in packets:
                                     for frame in self._codec.decode(packet):
                                         if self._frames_sent % 500 == 0:
                                             print(f"DEBUG Incoming: Layout={frame.layout.name}, rate={frame.sample_rate}", flush=True)
@@ -177,37 +155,12 @@ if RTCPeerConnection is not None:
                                         if resampled:
                                             for f in resampled:
                                                 self._fifo.write(f)
-                                except Exception as e:
-                                    print(f"WebRTC frame decode warning: {e}", flush=True)
-                        except Exception as e:
-                            print(f"Error parsing WebRTC chunk: {e}", flush=True)
+                            except Exception as e:
+                                print(f"Error decoding during WebRTC buffering: {e}", flush=True)
+                        self._buffering = False
 
-                    # Check buffering state
-                    if self._buffering:
-                        if self._fifo.samples < self._buffering_threshold:
-                            # Output silence frame while buffering
-                            combined = np.zeros((1, 960 * 2), dtype='int16')
-                            frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
-                            frame.sample_rate = 48000
-                            frame.time_base = fractions.Fraction(1, 48000)
-                            frame.pts = self._pts
-                            self._pts += 960
-                            return frame
-                        else:
-                            self._buffering = False
-
-                    # Read exactly 960 samples from the FIFO (20ms Opus frame)
-                    if self._fifo.samples >= 960:
-                        frame = self._fifo.read(960)
-                        # Log frame details periodically to confirm layout
-                        if self._frames_sent % 500 == 0:
-                            print(f"DEBUG WebRTC: Frame format={frame.format.name}, layout={frame.layout.name}, samples={frame.samples}, rate={frame.sample_rate}", flush=True)
-                        frame.pts = self._pts
-                        frame.time_base = fractions.Fraction(1, 48000)
-                        self._pts += 960
-                        return frame
-                    else:
-                        # Buffer ran dry: go back to buffering state and output silence
+                    # 2. Underflow protection: if buffer ran dry during active play
+                    if self._fifo.samples < 960:
                         self._buffering = True
                         combined = np.zeros((1, 960 * 2), dtype='int16')
                         frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
@@ -216,6 +169,17 @@ if RTCPeerConnection is not None:
                         frame.pts = self._pts
                         self._pts += 960
                         return frame
+
+                    # 3. Read exactly 960 samples from the FIFO (20ms Opus frame)
+                    frame = self._fifo.read(960)
+                    if self._frames_sent % 500 == 0:
+                        print(f"DEBUG WebRTC: Frame format={frame.format.name}, layout={frame.layout.name}, samples={frame.samples}, rate={frame.sample_rate}", flush=True)
+                    
+                    frame.pts = self._pts
+                    frame.time_base = fractions.Fraction(1, 48000)
+                    self._pts += 960
+                    self._frames_sent += 1
+                    return frame
                 except Exception as e:
                     import traceback
                     print(f"FATAL ERROR in recv(): {type(e)} {e}", flush=True)
