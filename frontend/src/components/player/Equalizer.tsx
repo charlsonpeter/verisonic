@@ -1,25 +1,39 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { useAudio } from '../../context/AudioContext';
+import { SpectrumAnalyzer } from './visualizer/SpectrumAnalyzer';
 
 export const Equalizer: React.FC = () => {
-  const { isPlaying, equalizerBars } = useAudio();
+  const { analyser } = useAudio();
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const analyzerInstanceRef = useRef<SpectrumAnalyzer | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    // Clean up previous instance
+    if (analyzerInstanceRef.current) {
+      analyzerInstanceRef.current.destroy();
+      analyzerInstanceRef.current = null;
+    }
+
+    // Instantiate new spectrum analyzer
+    analyzerInstanceRef.current = new SpectrumAnalyzer(canvas, analyser);
+
+    return () => {
+      if (analyzerInstanceRef.current) {
+        analyzerInstanceRef.current.destroy();
+        analyzerInstanceRef.current = null;
+      }
+    };
+  }, [analyser]);
 
   return (
     <div 
-      className="flex items-end gap-[3px] h-8 justify-center px-1"
-      title="Live Audio Spectrum Analyzer (VU Meter)"
+      className="h-10 w-44 md:w-56 overflow-hidden rounded-xl bg-slate-950/20 border border-white/5 shadow-inner"
+      title="Live Audio Spectrum Analyzer"
     >
-      {equalizerBars.map((val, idx) => (
-        <span 
-          key={idx} 
-          className={`w-[3px] rounded-full bg-gradient-to-t from-emerald-500 via-amber-400 to-rose-500 transition-all duration-75 ${
-            isPlaying ? '' : 'h-[3px]'
-          }`}
-          style={{ 
-            height: isPlaying ? `${Math.max(3, (val / 100) * 32)}px` : '3px',
-          }}
-        />
-      ))}
+      <canvas ref={canvasRef} className="w-full h-full block" />
     </div>
   );
 };

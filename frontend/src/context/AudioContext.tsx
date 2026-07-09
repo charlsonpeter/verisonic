@@ -80,6 +80,7 @@ interface AudioContextType {
   showPremiumModal: boolean;
   equalizerBars: number[];
   qualityLevelSetting: 'normal' | 'high' | 'hires' | 'lossless';
+  analyser: AnalyserNode | null;
 
   playTrack: (track: Track, isRadio?: boolean) => void | Promise<void>;
   playRadioStation: (station: RadioStation) => void;
@@ -132,6 +133,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [showPremiumModal, setShowPremiumModal] = useState<boolean>(false);
   const [qualityLevelSetting, setQualityLevelSetting] = useState<'normal' | 'high' | 'hires' | 'lossless'>('lossless');
   const [equalizerBars, setEqualizerBars] = useState<number[]>(new Array(20).fill(0));
+  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
 
   // Refs for HTMLAudioElement & HLS
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -454,12 +456,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!analyserRef.current) {
       try {
         const source = ctx.createMediaElementSource(audio);
-        const analyser = ctx.createAnalyser();
-        analyser.fftSize = 512; // 256 frequency bins
-        analyser.smoothingTimeConstant = 0.8;
-        source.connect(analyser);
-        analyser.connect(ctx.destination);
-        analyserRef.current = analyser;
+        const analyserNode = ctx.createAnalyser();
+        analyserNode.fftSize = 4096; // High resolution FFT Size
+        analyserNode.smoothingTimeConstant = 0.85;
+        analyserNode.minDecibels = -95;
+        analyserNode.maxDecibels = -15;
+        source.connect(analyserNode);
+        analyserNode.connect(ctx.destination);
+        analyserRef.current = analyserNode;
+        setAnalyser(analyserNode);
       } catch (e) {
         // CORS or already-connected element — fall back to random
         console.warn('AnalyserNode setup failed (likely CORS on radio stream):', e);
@@ -1104,6 +1109,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showPremiumModal,
       equalizerBars,
       qualityLevelSetting,
+      analyser,
 
       playTrack,
       playRadioStation,
