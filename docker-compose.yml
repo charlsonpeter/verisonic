@@ -58,6 +58,7 @@ services:
       - S3_BUCKET_NAME=verisonic-audio
       - S3_ENDPOINT_URL=http://localhost:9000
       - TZ=UTC
+      - WEBRTC_BUFFER_SEC=3
     depends_on:
       - db
       - redis

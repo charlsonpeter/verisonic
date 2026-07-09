@@ -1,4 +1,5 @@
 import datetime
+import os
 import json
 import urllib.request
 import urllib.parse
@@ -112,16 +113,21 @@ if RTCPeerConnection is not None:
             The inbound stream is MP3; we decode with PyAV and relay raw PCM."""
             kind = "audio"
 
-            def __init__(self, station_id: int):
+            def __init__(self, station_id: int, buffer_sec: Optional[float] = None):
                 super().__init__()
                 self.station_id = station_id
-                self._queue: asyncio.Queue = asyncio.Queue(maxsize=35)
                 self._pts = 0
                 self._sample_rate = 48000
                 self._channels = 2
                 self._running = True
                 self._buffering = True
-                self._queue = asyncio.Queue(maxsize=35)
+                self._queue: asyncio.Queue = asyncio.Queue(maxsize=35)
+                
+                # Configurable buffering threshold (default: 1.5 seconds)
+                default_buffer = float(os.environ.get("WEBRTC_BUFFER_SEC", "1.5"))
+                self._buffer_sec = buffer_sec if buffer_sec is not None else default_buffer
+                self._buffering_threshold = int(self._buffer_sec * 48000)
+
                 import av
                 self._codec = av.CodecContext.create('mp3', 'r')
                 self._codec.open()
@@ -131,8 +137,6 @@ if RTCPeerConnection is not None:
                     rate=48000
                 )
                 self._fifo = av.AudioFifo()
-                self._pts = 0
-                self._buffering = True
 
             async def recv(self):
                 try:
@@ -176,9 +180,9 @@ if RTCPeerConnection is not None:
                         except Exception as e:
                             print(f"Error parsing WebRTC chunk: {e}", flush=True)
 
-                    # Check buffering state (14400 samples = 0.3 seconds)
+                    # Check buffering state
                     if self._buffering:
-                        if self._fifo.samples < 14400:
+                        if self._fifo.samples < self._buffering_threshold:
                             # Output silence frame while buffering
                             combined = np.zeros((1, 960 * 2), dtype='int16')
                             frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
@@ -912,7 +916,7 @@ def regenerate_stream_key(
 
 
 @router.post("/{id}/webrtc/listener")
-async def webrtc_listener(id: int, params: dict, db: Session = Depends(get_db)):
+async def webrtc_listener(id: int, params: dict, buffer_sec: Optional[float] = None, db: Session = Depends(get_db)):
     """WebRTC listener signaling: creates a server-side relay track bridging the
     LiveStreamManager MP3 queue into a WebRTC audio stream for the browser."""
     if RTCPeerConnection is None:
@@ -942,7 +946,7 @@ async def webrtc_listener(id: int, params: dict, db: Session = Depends(get_db)):
     pc = RTCPeerConnection(configuration=config) if config else RTCPeerConnection()
 
     # Create a relay track that will receive MP3 chunks from LiveStreamManager
-    relay_track = AUDIO_RELAY_TRACK_CLASS(id)
+    relay_track = AUDIO_RELAY_TRACK_CLASS(id, buffer_sec)
     pc.addTrack(relay_track)
 
     await pc.setRemoteDescription(offer)
