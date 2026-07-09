@@ -924,6 +924,41 @@ def regenerate_stream_key(
     return serialize_station(station, db)
 
 
+def customize_sdp(sdp: str) -> str:
+    lines = sdp.split("\r\n")
+    opus_pt = None
+    
+    # 1. Find the payload type for opus (e.g., a=rtpmap:111 opus/48000/2)
+    for line in lines:
+        if "opus/48000" in line:
+            parts = line.split(":")
+            if len(parts) > 1:
+                pt_part = parts[1].split(" ")
+                if len(pt_part) > 0:
+                    opus_pt = pt_part[0]
+                    break
+                    
+    # 2. Add or modify the a=fmtp line for that payload type
+    if opus_pt:
+        fmtp_prefix = f"a=fmtp:{opus_pt}"
+        for i, line in enumerate(lines):
+            if line.startswith(fmtp_prefix):
+                # Append high-quality stereo parameters
+                if "stereo=1" not in line:
+                    lines[i] = line + ";stereo=1;sprop-stereo=1;maxaveragebitrate=256000"
+                elif "maxaveragebitrate" not in line:
+                    lines[i] = line + ";maxaveragebitrate=256000"
+                break
+        else:
+            # If no fmtp line exists, find the rtpmap line and insert the fmtp line after it
+            for i, line in enumerate(lines):
+                if line.startswith(f"a=rtpmap:{opus_pt}"):
+                    lines.insert(i + 1, f"a=fmtp:{opus_pt} minptime=10;useinbandfec=1;stereo=1;sprop-stereo=1;maxaveragebitrate=256000")
+                    break
+
+    return "\r\n".join(lines)
+
+
 @router.post("/{id}/webrtc/listener")
 async def webrtc_listener(id: int, params: dict, buffer_sec: Optional[float] = None, db: Session = Depends(get_db)):
     """WebRTC listener signaling: creates a server-side relay track bridging the
@@ -960,6 +995,11 @@ async def webrtc_listener(id: int, params: dict, buffer_sec: Optional[float] = N
 
     await pc.setRemoteDescription(offer)
     answer = await pc.createAnswer()
+    
+    # Munge the answer SDP to enable high-quality stereo Opus
+    munged_sdp = customize_sdp(answer.sdp)
+    answer = RTCSessionDescription(sdp=munged_sdp, type=answer.type)
+    
     await pc.setLocalDescription(answer)
 
     # Register so LiveStreamManager pushes chunks to this relay track
