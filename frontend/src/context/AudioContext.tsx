@@ -765,6 +765,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const togglePlay = () => {
     if (!audioRef.current) return;
     if (isPlaying) {
+      isPlayingRef.current = false; // Sync update to prevent onError from firing when unloading source
       if (activeRadioStation) {
         // Close WebSocket and WebRTC connections to stop incoming audio chunks
         if (websocketRef.current) {

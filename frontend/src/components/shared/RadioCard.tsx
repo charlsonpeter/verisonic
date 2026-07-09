@@ -34,7 +34,11 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
           showError("Station Offline", "This radio station is currently offline.");
           return;
         }
-        playRadioStation(station);
+        if (isCurrent) {
+          togglePlay();
+        } else {
+          playRadioStation(station);
+        }
       }}
       className={`glass-card rounded-3xl p-5 border transition duration-300 relative overflow-hidden group cursor-pointer ${
         station.is_online === false
