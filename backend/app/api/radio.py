@@ -169,16 +169,14 @@ if RTCPeerConnection is not None:
                         except Exception as e:
                             print(f"Error parsing WebRTC chunk: {e}", flush=True)
 
-                    # Limit latency: if buffer is too large, drop oldest samples to keep latency under 1.5s
-                    if len(self._audio_buffer) > 144000:
-                        self._audio_buffer = self._audio_buffer[-96000:]
+                    # (Removed artificial latency limiter. The maxsize=35 queue handles latency natively.)
 
                     # 2. Check if we need to buffer
                     if self._buffering:
                         # 96,000 elements corresponds to 48000 samples * 2 channels (1.0 second of audio)
                         if len(self._audio_buffer) < 96000:
                             # Output silence frame (960 samples, stereo packed = 1920 elements)
-                            combined = np.zeros((960, 2), dtype='int16')
+                            combined = np.zeros((1, 960 * 2), dtype='int16')
                             frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
                             frame.sample_rate = 48000
                             frame.time_base = fractions.Fraction(1, 48000)
@@ -193,7 +191,9 @@ if RTCPeerConnection is not None:
                         out_samples = self._audio_buffer[:1920]
                         self._audio_buffer = self._audio_buffer[1920:]
                         
-                        frame = AudioFrame.from_ndarray(out_samples.reshape(960, 2), format='s16', layout='stereo')
+                        # Ensure we make a true copy so PyAV doesn't hold a reference to a shifting buffer view
+                        out_samples_copy = np.array(out_samples, copy=True)
+                        frame = AudioFrame.from_ndarray(out_samples_copy.reshape(1, -1), format='s16', layout='stereo')
                         frame.sample_rate = 48000
                         frame.time_base = fractions.Fraction(1, 48000)
                         frame.pts = self._pts
@@ -202,7 +202,7 @@ if RTCPeerConnection is not None:
                     else:
                         # Buffer ran dry: go back to buffering state and output silence
                         self._buffering = True
-                        combined = np.zeros((960, 2), dtype='int16')
+                        combined = np.zeros((1, 960 * 2), dtype='int16')
                         frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
                         frame.sample_rate = 48000
                         frame.time_base = fractions.Fraction(1, 48000)
@@ -215,9 +215,7 @@ if RTCPeerConnection is not None:
                     print(traceback.format_exc(), flush=True)
                     
                     # Safe fallback to prevent complete WebRTC channel teardown if possible
-                    # (Note: if from_ndarray itself is failing, this fallback might also fail,
-                    # but we've successfully logged the error by this point)
-                    combined = np.zeros((960, 2), dtype='int16')
+                    combined = np.zeros((1, 960 * 2), dtype='int16')
                     frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
                     frame.sample_rate = 48000
                     frame.time_base = fractions.Fraction(1, 48000)
