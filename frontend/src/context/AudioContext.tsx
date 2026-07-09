@@ -301,11 +301,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           console.log("Synced initial playhead to live edge:", audio.currentTime);
           return;
         }
-
-        const latency = bufferedEnd - audio.currentTime;
-        if (latency > 3.5) {
-          audio.currentTime = Math.max(0, bufferedEnd - 1.5);
-        }
       }
 
       // Enforce guest limits here
