@@ -176,9 +176,9 @@ if RTCPeerConnection is not None:
                         except Exception as e:
                             print(f"Error parsing WebRTC chunk: {e}", flush=True)
 
-                    # Check buffering state (48000 samples = 1 second)
+                    # Check buffering state (14400 samples = 0.3 seconds)
                     if self._buffering:
-                        if self._fifo.samples < 48000:
+                        if self._fifo.samples < 14400:
                             # Output silence frame while buffering
                             combined = np.zeros((1, 960 * 2), dtype='int16')
                             frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
