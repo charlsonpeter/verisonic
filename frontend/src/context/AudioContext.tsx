@@ -770,16 +770,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       }
       
-      if (activeRadioStation && currentTrack) {
-        // Reconnect and load live stream fresh from live edge
-        const streamUrl = resolveStreamUrl(currentTrack.stream_url);
-        audioRef.current.src = streamUrl;
-        audioRef.current.load();
-        audioRef.current.play().catch(e => console.log("Live stream play blocked:", e));
+      if (activeRadioStation) {
+        // Force fully reloading the radio station stream fresh from the live head
+        playRadioStation(activeRadioStation);
       } else {
         audioRef.current.play().catch(() => {});
+        setIsPlaying(true);
       }
-      setIsPlaying(true);
     }
   };
 
