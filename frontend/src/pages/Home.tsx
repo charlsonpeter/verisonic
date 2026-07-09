@@ -14,14 +14,13 @@ interface HomeProps {
 
 export const Home: React.FC<HomeProps> = ({ onNavigate, onViewReport, onViewDetails }) => {
   const { playTrack, addToQueue, favorites, toggleFavorite } = useAudio();
-  const { currentUser } = useAuth();
+  const { currentUser, hasRadioStation } = useAuth();
   
   // States for Hero Slider
   const [activeSlide, setActiveSlide] = useState(0);
 
   // Mock full song library for Home feed
   const [allTracks, setAllTracks] = useState<Track[]>([]);
-  const [hasRadioStation, setHasRadioStation] = useState<boolean>(true);
 
   const popularArtists = Array.from(new Set(allTracks.map(t => t.artist_name))).map(name => {
     const tracksByArtist = allTracks.filter(t => t.artist_name === name);
@@ -54,23 +53,6 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewReport, onViewDeta
     loadTracks();
   }, []);
 
-  useEffect(() => {
-    if (currentUser?.role === 'radio_admin') {
-      const checkRadioStation = async () => {
-        try {
-          const res = await fetch('/api/radio');
-          if (res.ok) {
-            const data = await res.json();
-            const ownsStation = data.some((s: any) => s.owner_id === currentUser.id);
-            setHasRadioStation(ownsStation);
-          }
-        } catch (e) {
-          console.warn("Failed to check radio station status:", e);
-        }
-      };
-      checkRadioStation();
-    }
-  }, [currentUser]);
 
   const heroSlides = [
     { title: "24-bit Lossless CD Masters", desc: "Experience uncompressed acoustic waveforms validated by FFT spectral cutoff algorithms.", artist: "Sarah Jenkins & Orchestra", bg: "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?auto=format&fit=crop&q=80&w=800" },

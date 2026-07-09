@@ -10,7 +10,7 @@ const API_URL = '/api';
 
 export const Radio: React.FC = () => {
   const { playRadioStation, activeRadioStation } = useAudio();
-  const { token, currentUser } = useAuth();
+  const { token, currentUser, checkRadioStationStatus } = useAuth();
   
   // Radio states
   const [stations, setStations] = useState<RadioStation[]>([]);
@@ -446,6 +446,9 @@ export const Radio: React.FC = () => {
         setNewStationSocialTwitter('');
         setNewStationSocialInstagram('');
         fetchRadioStations();
+        if (checkRadioStationStatus) {
+          await checkRadioStationStatus();
+        }
       }
     } catch (e) {
       // Offline fallback: simulate station adding
@@ -491,6 +494,9 @@ export const Radio: React.FC = () => {
       setNewStationLanguages('');
       setNewStationSocialTwitter('');
       setNewStationSocialInstagram('');
+      if (checkRadioStationStatus) {
+        checkRadioStationStatus();
+      }
     } finally {
       setIsCreating(false);
     }
@@ -744,214 +750,6 @@ export const Radio: React.FC = () => {
             </div>
           )}
 
-          {/* Case 2: User is Admin -> show only Registration Form */}
-          {currentUser.role === 'admin' && !hasStation && (
-            <div className="max-w-4xl animate-fade-in">
-              <form onSubmit={handleCreateStation} className="glass-card p-6 rounded-3xl space-y-4 border border-rose-500/10 flex flex-col justify-between">
-                <div>
-                  <h3 className="text-xs font-bold text-rose-455 uppercase tracking-widest flex items-center gap-1 mb-4 font-sans">
-                    <Plus className="w-4 h-4" /> Register New Live Station Node
-                  </h3>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {/* Section 1: Core Station Info */}
-                    <div className="space-y-4">
-                      <h4 className="text-[10px] font-extrabold text-rose-400 uppercase tracking-widest border-b border-white/5 pb-1 font-sans">Core Info</h4>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Station Name *</label>
-                        <input 
-                          type="text" 
-                          placeholder="Station Name" 
-                          value={newStationName}
-                          onChange={(e) => setNewStationName(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                          required
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Description *</label>
-                        <input 
-                          type="text" 
-                          placeholder="Acoustic description" 
-                          value={newStationDesc}
-                          onChange={(e) => setNewStationDesc(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                          required
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Category</label>
-                        <input 
-                          type="text" 
-                          placeholder="e.g. Chillout, Pop, Classical" 
-                          value={newStationCategory}
-                          onChange={(e) => setNewStationCategory(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Licence</label>
-                        <input 
-                          type="text" 
-                          placeholder="License/Permit number" 
-                          value={newStationLicence}
-                          onChange={(e) => setNewStationLicence(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Frequency</label>
-                        <input 
-                          type="text" 
-                          placeholder="e.g. 98.1 FM, Web Only" 
-                          value={newStationBroadcastFrequency}
-                          onChange={(e) => setNewStationBroadcastFrequency(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Languages</label>
-                        <input 
-                          type="text" 
-                          placeholder="e.g. English, Spanish" 
-                          value={newStationLanguages}
-                          onChange={(e) => setNewStationLanguages(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Stream URL (Optional)</label>
-                        <input 
-                          type="text" 
-                          placeholder="Stream URL (Optional)" 
-                          value={newStationStreamUrl}
-                          onChange={(e) => setNewStationStreamUrl(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Section 2: Address Details */}
-                    <div className="space-y-4">
-                      <h4 className="text-[10px] font-extrabold text-rose-400 uppercase tracking-widest border-b border-white/5 pb-1 font-sans">Location Details</h4>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Street Address</label>
-                        <input 
-                          type="text" 
-                          placeholder="Street Address" 
-                          value={newStationStreetAddress}
-                          onChange={(e) => setNewStationStreetAddress(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">City</label>
-                        <input 
-                          type="text" 
-                          placeholder="City" 
-                          value={newStationCity}
-                          onChange={(e) => setNewStationCity(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">State/Province</label>
-                        <input 
-                          type="text" 
-                          placeholder="State/Province" 
-                          value={newStationStateProvince}
-                          onChange={(e) => setNewStationStateProvince(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Postal/Zip Code</label>
-                        <input 
-                          type="text" 
-                          placeholder="Postal Code" 
-                          value={newStationPostalCode}
-                          onChange={(e) => setNewStationPostalCode(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Country</label>
-                        <input 
-                          type="text" 
-                          placeholder="Country" 
-                          value={newStationCountry}
-                          onChange={(e) => setNewStationCountry(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Section 3: Contact & Socials */}
-                    <div className="space-y-4">
-                      <h4 className="text-[10px] font-extrabold text-rose-400 uppercase tracking-widest border-b border-white/5 pb-1 font-sans">Contact & Socials</h4>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Phone Number</label>
-                        <input 
-                          type="text" 
-                          placeholder="Phone Number" 
-                          value={newStationPhone}
-                          onChange={(e) => setNewStationPhone(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Contact Email</label>
-                        <input 
-                          type="email" 
-                          placeholder="Contact Email" 
-                          value={newStationEmail}
-                          onChange={(e) => setNewStationEmail(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Website URL</label>
-                        <input 
-                          type="text" 
-                          placeholder="Website URL" 
-                          value={newStationWebsite}
-                          onChange={(e) => setNewStationWebsite(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Twitter Handle</label>
-                        <input 
-                          type="text" 
-                          placeholder="@handle" 
-                          value={newStationSocialTwitter}
-                          onChange={(e) => setNewStationSocialTwitter(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Instagram Handle</label>
-                        <input 
-                          type="text" 
-                          placeholder="@handle" 
-                          value={newStationSocialInstagram}
-                          onChange={(e) => setNewStationSocialInstagram(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <button 
-                  type="submit" 
-                  disabled={isCreating}
-                  className="w-full bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 text-white text-xs font-bold py-3 px-5 rounded-xl shadow-lg transition duration-300 mt-6 uppercase tracking-wider cursor-pointer"
-                >
-                  {isCreating ? 'Provisioning...' : 'Provision Radio Node'}
-                </button>
-              </form>
-            </div>
-          )}
 
           {/* Case 3: User is Radio Admin and already has a station -> show custom Station Manager Dashboard */}
           {currentUser.role === 'radio_admin' && hasStation && (

@@ -29,6 +29,8 @@ interface AuthContextType {
   socialLogin: (provider: 'google' | 'apple') => Promise<boolean>;
   clearError: () => void;
   fetchCurrentUser: () => Promise<void>;
+  hasRadioStation: boolean;
+  checkRadioStationStatus: (user?: User | null) => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -43,6 +45,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [userMode, setUserMode] = useState<'admin' | 'listener'>(() => {
     return (localStorage.getItem('userMode') as 'admin' | 'listener') || 'admin';
   });
+  const [hasRadioStation, setHasRadioStation] = useState<boolean>(false);
 
   const switchUserMode = (mode: 'admin' | 'listener') => {
     localStorage.setItem('userMode', mode);
@@ -72,6 +75,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           subscription: data.role === 'admin' ? 'premium' : (data.subscription || 'free')
         };
         setCurrentUser(userWithSub);
+        if (userWithSub.role === 'radio_admin') {
+          await checkRadioStationStatus(userWithSub);
+        }
       } else {
         logout();
       }
@@ -81,7 +87,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (token === 'mock_admin_token') {
         setCurrentUser({ id: 1, email: 'admin@verisonic.com', full_name: 'Platform Administrator', role: 'admin', subscription: 'premium' });
       } else if (token === 'mock_radio_admin_token') {
-        setCurrentUser({ id: 4, email: 'radio_admin@verisonic.com', full_name: 'Radio Administrator', role: 'radio_admin', real_role: 'radio_admin', subscription: 'premium' });
+        const mockUser: User = { id: 4, email: 'radio_admin@verisonic.com', full_name: 'Radio Administrator', role: 'radio_admin', real_role: 'radio_admin', subscription: 'premium' };
+        setCurrentUser(mockUser);
+        checkRadioStationStatus(mockUser);
       } else if (token === 'mock_studio_admin_token') {
         setCurrentUser({ id: 5, email: 'studio_admin@verisonic.com', full_name: 'Studio Administrator', role: 'studio_admin', real_role: 'studio_admin', subscription: 'premium' });
       } else if (token === 'mock_listener_token') {
@@ -210,11 +218,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const checkRadioStationStatus = async (user?: User | null): Promise<boolean> => {
+    const activeUser = user !== undefined ? user : currentUser;
+    if (!activeUser || activeUser.role !== 'radio_admin') {
+      setHasRadioStation(false);
+      return false;
+    }
+    try {
+      const res = await fetch(`${API_URL}/radio`);
+      if (res.ok) {
+        const data = await res.json();
+        const ownsStation = data.some((s: any) => s.owner_id === activeUser.id);
+        setHasRadioStation(ownsStation);
+        return ownsStation;
+      }
+    } catch (e) {
+      console.warn("Failed to check radio station status:", e);
+    }
+    // Fallback for mock simulation token
+    if (activeUser.id === 4) {
+      setHasRadioStation(true);
+      return true;
+    }
+    setHasRadioStation(false);
+    return false;
+  };
+
   const logout = () => {
     localStorage.removeItem('token');
     setToken(null);
     setCurrentUser(null);
     setAuthError(null);
+    setHasRadioStation(false);
   };
 
   const clearError = () => setAuthError(null);
@@ -229,13 +264,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       authError,
       isPremium,
       userMode,
+      hasRadioStation,
       switchUserMode,
       login,
       register,
       logout,
       socialLogin,
       clearError,
-      fetchCurrentUser
+      fetchCurrentUser,
+      checkRadioStationStatus
     }}>
       {children}
     </AuthContext.Provider>

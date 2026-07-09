@@ -45,7 +45,7 @@ const API_URL = '/api';
 
 // Headless UI Router Core
 function DashboardContent() {
-  const { currentUser, token } = useAuth();
+  const { currentUser, token, hasRadioStation } = useAuth();
   const { playTrack, playQueue, addToQueue, favorites } = useAudio();
 
   // Route/Tab Switcher state
@@ -74,14 +74,14 @@ function DashboardContent() {
     }
   }, [token, activeTab]);
 
-  // Route protection redirect for Radio Admins
+  // Route protection redirect for Radio Admins who do NOT have a station yet
   useEffect(() => {
-    if (currentUser && currentUser.role === 'radio_admin') {
+    if (currentUser && currentUser.role === 'radio_admin' && !hasRadioStation) {
       if (activeTab !== 'radio' && activeTab !== 'contact' && activeTab !== 'settings' && activeTab !== 'profile' && activeTab !== 'station-profile' && activeTab !== 'studio-profile') {
         setActiveTab('radio');
       }
     }
-  }, [currentUser, activeTab]);
+  }, [currentUser, activeTab, hasRadioStation]);
 
   // Scroll main view container to top on tab change
   const mainRef = useRef<HTMLElement>(null);
