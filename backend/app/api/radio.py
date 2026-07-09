@@ -979,7 +979,9 @@ async def webrtc_listener(id: int, params: dict, buffer_sec: Optional[float] = N
     if not live_stream_manager.is_live(id):
         raise HTTPException(status_code=404, detail="Station is offline (no active broadcast)")
 
-    offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+    # Munge the remote offer to enable high-quality stereo Opus
+    munged_offer = customize_sdp(params["sdp"])
+    offer = RTCSessionDescription(sdp=munged_offer, type=params["type"])
     
     # Configure STUN servers to resolve the server's public IP address on AWS
     config = None
