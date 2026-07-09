@@ -339,6 +339,7 @@ class PyQtBroadcasterApp(QMainWindow):
         self.active_device_id = None
         self.selected_station_id = None
         self.user_stations = []
+        self.user_id = None
         
         # System Tray State
         self.quit_from_tray = False
@@ -446,6 +447,7 @@ class PyQtBroadcasterApp(QMainWindow):
         self.auth_token = None
         self.refresh_token = None
         self.saved_email = ""
+        self.user_id = None
         if os.path.exists(self.config_path):
             try:
                 os.remove(self.config_path)
@@ -456,8 +458,9 @@ class PyQtBroadcasterApp(QMainWindow):
         try:
             user_info, _ = api_request("/auth/me", method="GET", token=self.auth_token)
             role = user_info.get("role")
-            if role not in ["admin", "radio_admin"]:
+            if role != "radio_admin":
                 raise Exception("Access Denied: Only Radio Admins are allowed.")
+            self.user_id = user_info.get("id")
             self.saved_email = user_info.get("email", "")
             self.on_login_success()
         except Exception as e:
@@ -572,10 +575,11 @@ class PyQtBroadcasterApp(QMainWindow):
             # Verify admin credentials
             user_info, _ = api_request("/auth/me", method="GET", token=self.auth_token)
             role = user_info.get("role")
-            if role not in ["admin", "radio_admin"]:
+            if role != "radio_admin":
                 self.auth_token = None
-                raise Exception("Access Denied: Only Radio Admins and Administrators are allowed.")
+                raise Exception("Access Denied: Only Radio Admins are allowed.")
                 
+            self.user_id = user_info.get("id")
             self.save_config()
             self.on_login_success()
         except Exception as e:
@@ -753,6 +757,8 @@ class PyQtBroadcasterApp(QMainWindow):
         self.user_stations = []
         try:
             stations, _ = api_request("/radio", method="GET", token=self.auth_token)
+            if self.user_id:
+                stations = [st for st in stations if st.get("owner_id") == self.user_id]
             self.user_stations = stations
             
             if not stations:

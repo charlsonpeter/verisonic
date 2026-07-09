@@ -236,7 +236,7 @@ function DashboardContent() {
       case 'profile':
         return <UserProfile onViewReport={viewQualityReport} onViewDetails={handleDetailsView} />;
       case 'station-profile':
-        return <StationProfile />;
+        return <StationProfile onNavigate={setActiveTab} />;
       case 'studio-profile':
         return <StudioProfile />;
       case 'settings':

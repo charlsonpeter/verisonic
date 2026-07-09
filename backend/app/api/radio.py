@@ -476,11 +476,6 @@ def create_radio_station(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_radio_admin)
 ):
-    if current_user.role == "radio_admin":
-        existing_station = db.query(RadioStation).filter(RadioStation.owner_id == current_user.id).first()
-        if existing_station:
-            raise HTTPException(status_code=400, detail="Radio admin can only register one radio station")
-
     resolved_owner_id = current_user.id
     if current_user.role == "admin" and station_in.owner_id is not None:
         resolved_owner_id = station_in.owner_id
