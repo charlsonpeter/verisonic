@@ -226,7 +226,9 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
         {/* Media progress bar */}
         <div className="w-full flex items-center gap-3 text-[10px] text-slate-500 font-bold font-sans">
-          <span>{isRadioSync ? format24hTime(secondsSinceMidnight) : formatTime(currentTime)}</span>
+          <span className="w-14 text-right tabular-nums">
+            {isRadioSync ? format24hTime(secondsSinceMidnight) : formatTime(currentTime)}
+          </span>
           <input 
             type="range" 
             min="0"
@@ -236,7 +238,9 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             disabled={isRadioSync}
             className="w-full accent-rose-500 h-1 bg-slate-800 rounded-lg outline-none cursor-pointer audio-knob"
           />
-          <span>{isRadioSync ? "24:00:00" : formatTime(duration)}</span>
+          <span className="w-14 text-left tabular-nums">
+            {isRadioSync ? "24:00:00" : formatTime(duration)}
+          </span>
         </div>
       </div>
 
