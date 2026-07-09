@@ -80,7 +80,7 @@ interface AudioContextType {
   showPremiumModal: boolean;
   equalizerBars: number[];
   qualityLevelSetting: 'normal' | 'high' | 'hires' | 'lossless';
-  
+
   playTrack: (track: Track, isRadio?: boolean) => void | Promise<void>;
   playRadioStation: (station: RadioStation) => void;
   togglePlay: () => void;
@@ -113,7 +113,7 @@ const resolveStreamUrl = (url?: string): string => {
 
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { token, isPremium, userMode, currentUser } = useAuth();
-  
+
   // State variables
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [activeRadioStation, setActiveRadioStation] = useState<RadioStation | null>(null);
@@ -144,6 +144,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const hasSyncedLiveHeadRef = useRef(false);
+  const fadeIntervalRef = useRef<any>(null);
 
   // Track speed state in ref to avoid stale closure in audio event handlers
   const playbackSpeedRef = useRef<number>(1.0);
@@ -173,6 +174,47 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { isShuffleRef.current = isShuffle; }, [isShuffle]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+
+  const fadeVolume = (targetVolume: number, durationMs: number): Promise<void> => {
+    return new Promise((resolve) => {
+      if (!audioRef.current) {
+        resolve();
+        return;
+      }
+
+      if (fadeIntervalRef.current) {
+        clearInterval(fadeIntervalRef.current);
+        fadeIntervalRef.current = null;
+      }
+
+      const audio = audioRef.current;
+      const startVolume = audio.volume;
+      const volumeDiff = targetVolume - startVolume;
+      if (Math.abs(volumeDiff) < 0.01) {
+        audio.volume = targetVolume;
+        resolve();
+        return;
+      }
+
+      const stepTime = 16;
+      const steps = durationMs / stepTime;
+      const volumeStep = volumeDiff / steps;
+      let currentStep = 0;
+
+      fadeIntervalRef.current = setInterval(() => {
+        currentStep++;
+        const nextVolume = startVolume + (volumeStep * currentStep);
+        audio.volume = Math.max(0, Math.min(1, nextVolume));
+
+        if (currentStep >= steps || Math.abs(audio.volume - targetVolume) < 0.01) {
+          audio.volume = targetVolume;
+          clearInterval(fadeIntervalRef.current);
+          fadeIntervalRef.current = null;
+          resolve();
+        }
+      }, stepTime);
+    });
+  };
 
   // Stop playback and reset audio states when user logs out
   useEffect(() => {
@@ -289,11 +331,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const onPause = () => setIsPlaying(false);
     const onTimeUpdate = () => {
       setCurrentTime(audio.currentTime);
-      
+
       // Eliminate browser buffering latency on live broadcasts by catching up to the live edge
       if (activeRadioStationRef.current && !audio.paused && audio.buffered.length > 0) {
         const bufferedEnd = audio.buffered.end(audio.buffered.length - 1);
-        
+
         // Initial skip of the server-side history buffer to play the absolute live head instantly
         if (!hasSyncedLiveHeadRef.current) {
           hasSyncedLiveHeadRef.current = true;
@@ -405,7 +447,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // Resume if suspended (browser autoplay policy)
     if (ctx.state === 'suspended') {
-      ctx.resume().catch(() => {});
+      ctx.resume().catch(() => { });
     }
 
     // Create analyser only once per audio element
@@ -465,7 +507,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (repeatModeRef.current === 'one') {
       if (audioRef.current) {
         audioRef.current.currentTime = 0;
-        audioRef.current.play().catch(() => {});
+        audioRef.current.play().catch(() => { });
       }
     } else {
       const queue = playQueueRef.current;
@@ -502,7 +544,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       websocketRef.current = null;
     }
     audioRef.current.srcObject = null;
-    
+
     // Clear live radio station status if playing normal track
     if (!isRadio) {
       setActiveRadioStation(null);
@@ -524,7 +566,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // Determine correct audio stream path (checking FLAC/Lossless settings)
     let streamUrl = resolveStreamUrl(trackToPlay.hls_playlist_path || trackToPlay.mp3_320_path || trackToPlay.stream_url);
-    
+
     if (!streamUrl) {
       console.warn("No stream URL available for track:", trackToPlay.id);
       return;
@@ -560,21 +602,38 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           if (audioRef.current) {
             audioRef.current.playbackRate = playbackSpeedRef.current;
+            audioRef.current.volume = 0; // Start at 0 for fade-in
+            audioRef.current.play()
+              .then(() => {
+                const target = isMutedRef.current ? 0 : volumeRef.current;
+                fadeVolume(target, 300);
+              })
+              .catch(e => console.log("Autoplay blocked: ", e));
           }
-          audioRef.current?.play().catch(e => console.log("Autoplay blocked: ", e));
         });
       } else if (audioRef.current.canPlayType('application/vnd.apple.mpegurl')) {
         audioRef.current.src = streamUrl;
         audioRef.current.playbackRate = playbackSpeedRef.current;
+        audioRef.current.volume = 0; // Start at 0 for fade-in
         audioRef.current.load();
-        audioRef.current.play().catch(e => console.log("Autoplay blocked: ", e));
+        audioRef.current.play()
+          .then(() => {
+            const target = isMutedRef.current ? 0 : volumeRef.current;
+            fadeVolume(target, 300);
+          })
+          .catch(e => console.log("Autoplay blocked: ", e));
       }
     } else {
       audioRef.current.src = streamUrl;
       audioRef.current.playbackRate = playbackSpeedRef.current;
-      audioRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
+      audioRef.current.volume = 0; // Start at 0 for fade-in
       audioRef.current.load();
-      audioRef.current.play().catch(e => console.log("Autoplay blocked: ", e));
+      audioRef.current.play()
+        .then(() => {
+          const target = isMutedRef.current ? 0 : volumeRef.current;
+          fadeVolume(target, 300);
+        })
+        .catch(e => console.log("Autoplay blocked: ", e));
     }
 
     setIsPlaying(true);
@@ -613,7 +672,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const res = await fetch(`${API_URL}/radio/${station.id}/stream`);
       if (res.ok) {
         const data = await res.json();
-        
+
         const virtualTrack: Track = {
           id: data.track_id || (station.id * 100),
           title: data.title || data.track_title || station.current_track_title || "Synchronized Broadcast",
@@ -621,7 +680,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           duration: data.duration !== null && data.duration !== undefined ? data.duration : 0,
           stream_url: data.stream_url || station.stream_url
         };
-        
+
         if (data.is_websocket) {
           let fallbackTimeout: any = null;
           let isWsConnected = false;
@@ -637,10 +696,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
           const upgradeToWebSocketStream = () => {
             try {
-              const wsBase = API_URL.startsWith('https') 
-                ? API_URL.replace('https://', 'wss://') 
+              const wsBase = API_URL.startsWith('https')
+                ? API_URL.replace('https://', 'wss://')
                 : API_URL.replace('http://', 'ws://');
-              
+
               const wsUrl = `${wsBase}/radio/${station.id}/stream/ws/listener`;
               const ws = new WebSocket(wsUrl);
               websocketRef.current = ws;
@@ -668,7 +727,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                   sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
                   sourceBuffer.addEventListener('updateend', () => {
                     appendNext();
-                    
+
                     if (!hasStartedPlaying && sourceBuffer && sourceBuffer.buffered.length > 0) {
                       const start = sourceBuffer.buffered.start(0);
                       const end = sourceBuffer.buffered.end(0);
@@ -684,8 +743,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                             console.warn("Failed to seek MSE playhead, playing from start:", seekError);
                           }
 
+                          audioRef.current.volume = 0; // Start at 0 for fade-in
                           audioRef.current.play()
-                            .then(() => console.log('MSE Jitter buffer filled. Started playing.'))
+                            .then(() => {
+                              console.log('MSE Jitter buffer filled. Started playing.');
+                              const target = isMutedRef.current ? 0 : volumeRef.current;
+                              fadeVolume(target, 300);
+                            })
                             .catch(err => console.error('WebSocket playback play error:', err));
                         }
                       }
@@ -702,7 +766,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 isWsConnected = true;
                 clearTimeout(fallbackTimeout);
                 console.log('WebSocket listener connected to live stream');
-                
+
                 // Clear any existing source and bind the MediaSource
                 if (audioRef.current) {
                   audioRef.current.pause();
@@ -746,7 +810,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                     const fallbackUrl = resolveStreamUrl(virtualTrack.stream_url);
                     audioRef.current.src = fallbackUrl;
                     audioRef.current.load();
-                    audioRef.current.play().catch(() => {});
+                    audioRef.current.play().catch(() => { });
                   } else {
                     startProgressiveFallback();
                   }
@@ -793,24 +857,40 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!audioRef.current) return;
     if (isPlaying) {
       isPlayingRef.current = false; // Sync update to prevent onError from firing when unloading source
-      if (activeRadioStation) {
-        // Close WebSocket and WebRTC connections to stop incoming audio chunks
-        if (websocketRef.current) {
-          websocketRef.current.close();
-          websocketRef.current = null;
-        }
-        if (webrtcPCRef.current) {
-          webrtcPCRef.current.close();
-          webrtcPCRef.current = null;
-        }
-        // Unload live audio source to stop buffering/downloading
-        audioRef.current.pause();
-        audioRef.current.src = "";
-        audioRef.current.load();
-      } else {
-        audioRef.current.pause();
-      }
       setIsPlaying(false);
+
+      // Fade out audio before pausing
+      fadeVolume(0, 300).then(() => {
+        // Double check isPlaying state hasn't been toggled back to true in the meantime
+        if (isPlayingRef.current) return;
+
+        if (activeRadioStationRef.current) {
+          // Close WebSocket and WebRTC connections to stop incoming audio chunks
+          if (websocketRef.current) {
+            websocketRef.current.close();
+            websocketRef.current = null;
+          }
+          if (webrtcPCRef.current) {
+            webrtcPCRef.current.close();
+            webrtcPCRef.current = null;
+          }
+          // Unload live audio source to stop buffering/downloading
+          if (audioRef.current) {
+            audioRef.current.pause();
+            audioRef.current.src = "";
+            audioRef.current.load();
+          }
+        } else {
+          if (audioRef.current) {
+            audioRef.current.pause();
+          }
+        }
+
+        // Restore volume for next play
+        if (audioRef.current) {
+          audioRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
+        }
+      });
     } else {
       // Trigger checkout modal if already blocked at guest threshold
       if (!isPremium) {
@@ -822,13 +902,19 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           return;
         }
       }
-      
+
       if (activeRadioStation) {
         console.log("Radio resumed. Force fully reloading the stream fresh from the live head.");
         playRadioStation(activeRadioStation, true);
       } else {
         console.log("Normal track resumed.");
-        audioRef.current.play().catch(() => {});
+        if (audioRef.current) {
+          audioRef.current.volume = 0; // Start at 0 for fade-in
+          audioRef.current.play().then(() => {
+            const target = isMutedRef.current ? 0 : volumeRef.current;
+            fadeVolume(target, 300);
+          }).catch(() => { });
+        }
         setIsPlaying(true);
       }
     }
@@ -844,6 +930,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const level = Math.max(0, Math.min(1, vol));
     setVolume(level);
     if (audioRef.current) {
+      if (fadeIntervalRef.current) {
+        clearInterval(fadeIntervalRef.current);
+        fadeIntervalRef.current = null;
+      }
       audioRef.current.volume = isMuted ? 0 : level;
     }
     if (level > 0 && isMuted) {
@@ -854,6 +944,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const toggleMute = () => {
     setIsMuted(!isMuted);
     if (audioRef.current) {
+      if (fadeIntervalRef.current) {
+        clearInterval(fadeIntervalRef.current);
+        fadeIntervalRef.current = null;
+      }
       audioRef.current.volume = !isMuted ? 0 : volume;
     }
   };
@@ -869,7 +963,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const toggleShuffle = () => setIsShuffle(!isShuffle);
 
   const toggleFavorite = (trackId: number) => {
-    setFavorites(prev => 
+    setFavorites(prev =>
       prev.includes(trackId) ? prev.filter(id => id !== trackId) : [...prev, trackId]
     );
   };
@@ -904,7 +998,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
     let nextIndex = index + 1;
-    
+
     if (isShuffleRef.current) {
       nextIndex = Math.floor(Math.random() * queue.length);
     } else if (nextIndex >= queue.length) {
@@ -914,7 +1008,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return; // Playback finished
       }
     }
-    
+
     setCurrentQueueIndex(nextIndex);
     playTrack(queue[nextIndex]);
   };
@@ -924,7 +1018,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const index = currentQueueIndexRef.current;
     if (queue.length === 0) return;
     let prevIndex = index - 1;
-    
+
     if (prevIndex < 0) {
       if (repeatModeRef.current === 'all') {
         prevIndex = queue.length - 1;
@@ -932,7 +1026,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         prevIndex = 0; // Lock to first track
       }
     }
-    
+
     setCurrentQueueIndex(prevIndex);
     playTrack(queue[prevIndex]);
   };
@@ -941,7 +1035,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const newQueue = [...playQueue];
     const [removed] = newQueue.splice(startIndex, 1);
     newQueue.splice(endIndex, 0, removed);
-    
+
     let newIndex = currentQueueIndex;
     if (currentQueueIndex !== -1) {
       if (currentQueueIndex === startIndex) {
@@ -952,7 +1046,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         newIndex = currentQueueIndex + 1;
       }
     }
-    
+
     setPlayQueue(newQueue);
     setCurrentQueueIndex(newIndex);
   };
@@ -981,7 +1075,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showPremiumModal,
       equalizerBars,
       qualityLevelSetting,
-      
+
       playTrack,
       playRadioStation,
       togglePlay,
