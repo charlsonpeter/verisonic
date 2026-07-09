@@ -766,6 +766,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!audioRef.current) return;
     if (isPlaying) {
       if (activeRadioStation) {
+        // Close WebSocket and WebRTC connections to stop incoming audio chunks
+        if (websocketRef.current) {
+          websocketRef.current.close();
+          websocketRef.current = null;
+        }
+        if (webrtcPCRef.current) {
+          webrtcPCRef.current.close();
+          webrtcPCRef.current = null;
+        }
         // Unload live audio source to stop buffering/downloading
         audioRef.current.pause();
         audioRef.current.src = "";
