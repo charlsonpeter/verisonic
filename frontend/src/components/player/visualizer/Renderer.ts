@@ -68,11 +68,7 @@ export class Renderer {
 
       // Draw Main Visualizer Bar
       this.ctx.beginPath();
-      
-      // Use roundRect (supported natively by ES2022 Canvas2D)
-      // Radius matches the rounded pill design (fully rounded top caps)
-      const radius = Math.min(barWidth / 2, 4);
-      this.ctx.roundRect(x, y, barWidth, barHeight, [radius, radius, 0, 0]);
+      this.ctx.rect(x, y, barWidth, barHeight);
       
       this.ctx.fillStyle = gradient;
       
@@ -87,8 +83,8 @@ export class Renderer {
         const peakY = Math.max(0, height - (peak * maxBarHeight) - 3);
         
         this.ctx.beginPath();
-        // Peak cap is a small horizontal segment
-        this.ctx.roundRect(x, peakY, barWidth, 2, 1);
+        // Peak cap is a sharp horizontal segment
+        this.ctx.rect(x, peakY, barWidth, 2);
         
         // Color peak cap using the top pink gradient shade
         this.ctx.fillStyle = '#F472B6';
