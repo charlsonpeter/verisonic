@@ -518,6 +518,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       // Append cache buster to force browsers to bypass cache and pull live head from the network
       const separator = streamUrl.includes('?') ? '&' : '?';
       streamUrl = `${streamUrl}${separator}nocache=${Date.now()}`;
+      console.log("Loading live radio stream URL with cache buster:", streamUrl);
+    } else {
+      console.log("Loading standard music library track URL:", streamUrl);
     }
 
     // Reset details
@@ -777,9 +780,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       
       if (activeRadioStation) {
-        // Force fully reloading the radio station stream fresh from the live head
+        console.log("Radio resumed. Force fully reloading the stream fresh from the live head.");
         playRadioStation(activeRadioStation);
       } else {
+        console.log("Normal track resumed.");
         audioRef.current.play().catch(() => {});
         setIsPlaying(true);
       }
