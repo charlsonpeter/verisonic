@@ -106,6 +106,24 @@ def startup_seeder():
             except Exception:
                 db.rollback()
 
+        # SQL migration for artists is_active column
+        try:
+            db.execute(text("ALTER TABLE artists ADD COLUMN is_active BOOLEAN DEFAULT TRUE;"))
+            db.commit()
+            print("Migration: Added column is_active to artists successfully.")
+        except Exception:
+            db.rollback()
+
+        # SQL migration for radio_stations and artists new columns
+        for table in ["radio_stations", "artists"]:
+            for col, col_type in [("disabled_reason", "VARCHAR"), ("reactivation_reason", "VARCHAR"), ("reactivation_requested", "BOOLEAN DEFAULT FALSE")]:
+                try:
+                    db.execute(text(f"ALTER TABLE {table} ADD COLUMN {col} {col_type};"))
+                    db.commit()
+                    print(f"Migration: Added column {col} to {table} successfully.")
+                except Exception:
+                    db.rollback()
+
         # 1. Seed Admin account if empty
         admin_user = db.query(User).filter(User.role == "admin").first()
         if not admin_user:

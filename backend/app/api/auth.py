@@ -6,7 +6,7 @@ from typing import List, Optional
 
 from app.db.session import get_db
 from app.models import User, Artist
-from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, Token, UserResponse, TokenPayload, ArtistCreate, ArtistResponse
+from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, Token, UserResponse, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, RequestReactivationSchema
 from app.core.security import verify_password, get_password_hash, create_access_token, create_refresh_token, ALGORITHM
 from app.core.config import settings
 
@@ -362,3 +362,67 @@ def refresh_token(
         "token_type": "bearer",
         "refresh_token": create_refresh_token(subject=user.id)
     }
+
+@router.get("/admin/studios", response_model=List[ArtistResponse])
+def get_studios_admin(
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Admin studio (artist) management: list all studios.
+    """
+    return db.query(Artist).all()
+
+@router.put("/admin/studios/{artist_id}", response_model=ArtistResponse)
+def update_studio_admin(
+    artist_id: int,
+    artist_in: ArtistUpdate,
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Admin studio management: update a studio.
+    """
+    artist = db.query(Artist).filter(Artist.id == artist_id).first()
+    if not artist:
+        raise HTTPException(status_code=404, detail="Studio/Artist not found")
+        
+    if artist_in.stage_name is not None:
+        artist.stage_name = artist_in.stage_name
+    if artist_in.bio is not None:
+        artist.bio = artist_in.bio
+    if artist_in.is_active is not None:
+        artist.is_active = artist_in.is_active
+        if artist.is_active:
+            artist.disabled_reason = None
+            artist.reactivation_reason = None
+            artist.reactivation_requested = False
+            
+    if artist_in.disabled_reason is not None:
+        artist.disabled_reason = artist_in.disabled_reason
+    if artist_in.reactivation_reason is not None:
+        artist.reactivation_reason = artist_in.reactivation_reason
+    if artist_in.reactivation_requested is not None:
+        artist.reactivation_requested = artist_in.reactivation_requested
+        
+    db.commit()
+    db.refresh(artist)
+    return artist
+
+@router.post("/request-reactivation", response_model=ArtistResponse)
+def request_studio_reactivation(
+    reason_in: RequestReactivationSchema,
+    current_user: User = Depends(get_current_studio_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Studio admin appeal: request reactivation of a disabled studio profile.
+    """
+    artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+    if not artist:
+        raise HTTPException(status_code=404, detail="Studio profile not found")
+    artist.reactivation_reason = reason_in.reason
+    artist.reactivation_requested = True
+    db.commit()
+    db.refresh(artist)
+    return artist

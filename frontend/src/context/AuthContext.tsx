@@ -12,6 +12,10 @@ export interface User {
     user_id: number;
     stage_name: string;
     bio: string | null;
+    is_active?: boolean;
+    disabled_reason?: string | null;
+    reactivation_reason?: string | null;
+    reactivation_requested?: boolean;
   } | null;
 }
 
@@ -75,6 +79,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           subscription: data.role === 'admin' ? 'premium' : (data.subscription || 'free')
         };
         setCurrentUser(userWithSub);
+        if (userWithSub.role === 'admin') {
+          localStorage.setItem('userMode', 'admin');
+          setUserMode('admin');
+        }
         if (userWithSub.role === 'radio_admin') {
           await checkRadioStationStatus(userWithSub);
         }
@@ -86,6 +94,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Fallback: decode basic JWT-like token or load mock user
       if (token === 'mock_admin_token') {
         setCurrentUser({ id: 1, email: 'admin@verisonic.com', full_name: 'Platform Administrator', role: 'admin', subscription: 'premium' });
+        localStorage.setItem('userMode', 'admin');
+        setUserMode('admin');
       } else if (token === 'mock_radio_admin_token') {
         const mockUser: User = { id: 4, email: 'radio_admin@verisonic.com', full_name: 'Radio Administrator', role: 'radio_admin', real_role: 'radio_admin', subscription: 'premium' };
         setCurrentUser(mockUser);

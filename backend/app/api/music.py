@@ -470,8 +470,8 @@ def get_autocomplete_suggestions(
     Returns unique existing values for autocomplete suggestions.
     """
     # Fetch distinct artists (both stage names and overrides)
-    stage_names = db.query(Artist.stage_name).distinct().all()
-    override_names = db.query(Track.artist_name_override).filter(Track.artist_name_override != None).distinct().all()
+    stage_names = db.query(Artist.stage_name).filter(Artist.is_active == True).distinct().all()
+    override_names = db.query(Track.artist_name_override).join(Artist, Track.artist_id == Artist.id).filter(Track.artist_name_override != None, Artist.is_active == True).distinct().all()
     artists = sorted(list(set(
         [r[0] for r in stage_names if r[0]] + 
         [r[0] for r in override_names if r[0]]
@@ -522,13 +522,15 @@ def list_tracks(
     query = db.query(Track)
     
     if approved_only:
-        query = query.filter(Track.approved == True)
+        query = query.join(Artist, Track.artist_id == Artist.id).filter(Track.approved == True, Artist.is_active == True)
         
     if search:
         search_pattern = f"%{search}%"
-        # Join tables for search
-        query = query.join(Artist, Track.artist_id == Artist.id)\
-                     .outerjoin(Album, Track.album_id == Album.id)\
+        # Join tables for search if not already joined above
+        if not approved_only:
+            query = query.join(Artist, Track.artist_id == Artist.id)
+            
+        query = query.outerjoin(Album, Track.album_id == Album.id)\
                      .filter(
                          (Track.title.ilike(search_pattern)) | 
                          (Artist.stage_name.ilike(search_pattern)) | 
@@ -570,6 +572,10 @@ def get_track(
     track = db.query(Track).filter(Track.id == id).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
+        
+    if track.artist and not track.artist.is_active and (not current_user or current_user.role != "admin"):
+        raise HTTPException(status_code=403, detail="Track is currently unavailable (Studio is disabled)")
+        
     return serialize_track(track, db)
 
 @router.delete("/{id}", status_code=status.HTTP_200_OK)

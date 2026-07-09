@@ -535,6 +535,11 @@ def update_radio_station(
     if current_user.role != "admin" and station.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorized to modify this station")
         
+    # Check if radio admin is trying to bypass deactivation or alter disabled_reason directly
+    if current_user.role != "admin":
+        if station_in.is_active is not None or station_in.disabled_reason is not None:
+            raise HTTPException(status_code=403, detail="Only platform admins can change active status or edit disable reason.")
+        
     if station_in.name is not None:
         station.name = station_in.name
     if station_in.description is not None:
@@ -591,6 +596,18 @@ def update_radio_station(
         station.social_instagram = station_in.social_instagram
     if station_in.programs_list is not None:
         station.programs_list = station_in.programs_list
+    if station_in.is_active is not None:
+        station.is_active = station_in.is_active
+        if station.is_active:
+            station.disabled_reason = None
+            station.reactivation_reason = None
+            station.reactivation_requested = False
+    if station_in.disabled_reason is not None:
+        station.disabled_reason = station_in.disabled_reason
+    if station_in.reactivation_reason is not None:
+        station.reactivation_reason = station_in.reactivation_reason
+    if station_in.reactivation_requested is not None:
+        station.reactivation_requested = station_in.reactivation_requested
         
     db.commit()
     db.refresh(station)
@@ -601,8 +618,10 @@ def list_radio_stations(
     db: Session = Depends(get_db),
     current_user = Depends(get_optional_current_user)
 ):
-    if current_user and current_user.role == "radio_admin":
-        stations = db.query(RadioStation).filter(RadioStation.owner_id == current_user.id, RadioStation.is_active == True).all()
+    if current_user and current_user.role == "admin":
+        stations = db.query(RadioStation).all()
+    elif current_user and current_user.role == "radio_admin":
+        stations = db.query(RadioStation).filter(RadioStation.owner_id == current_user.id).all()
     else:
         stations = db.query(RadioStation).filter(RadioStation.is_active == True).all()
     return [serialize_station(s, db) for s in stations]
@@ -858,6 +877,9 @@ async def get_live_audio_stream(
 
         if current_user and current_user.role == "radio_admin" and station.owner_id != current_user.id:
             raise HTTPException(status_code=403, detail="Radio admins can only access their own radio station")
+            
+        if not station.is_active and (not current_user or current_user.role != "admin"):
+            raise HTTPException(status_code=403, detail="Radio station is disabled")
     finally:
         db.close()
 

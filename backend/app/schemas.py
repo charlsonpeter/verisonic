@@ -40,9 +40,21 @@ class ArtistResponse(BaseModel):
     user_id: int
     stage_name: str
     bio: Optional[str] = None
+    is_active: bool
+    disabled_reason: Optional[str] = None
+    reactivation_reason: Optional[str] = None
+    reactivation_requested: Optional[bool] = None
 
     class Config:
         from_attributes = True
+
+class ArtistUpdate(BaseModel):
+    stage_name: Optional[str] = None
+    bio: Optional[str] = None
+    is_active: Optional[bool] = None
+    disabled_reason: Optional[str] = None
+    reactivation_reason: Optional[str] = None
+    reactivation_requested: Optional[bool] = None
 
 class UserResponse(BaseModel):
     id: int
@@ -195,6 +207,10 @@ class RadioStationUpdate(BaseModel):
     social_instagram: Optional[str] = None
     programs_list: Optional[str] = None
     timezone: Optional[str] = None
+    is_active: Optional[bool] = None
+    disabled_reason: Optional[str] = None
+    reactivation_reason: Optional[str] = None
+    reactivation_requested: Optional[bool] = None
 
 class RadioStationResponse(BaseModel):
     id: int
@@ -232,12 +248,18 @@ class RadioStationResponse(BaseModel):
     social_instagram: Optional[str] = None
     programs_list: Optional[str] = None
     timezone: Optional[str] = None
+    disabled_reason: Optional[str] = None
+    reactivation_reason: Optional[str] = None
+    reactivation_requested: Optional[bool] = None
 
     class Config:
         from_attributes = True
 
 class RadioScheduleCreate(BaseModel):
     track_id: int
+
+class RequestReactivationSchema(BaseModel):
+    reason: str
 
 class RadioScheduleResponse(BaseModel):
     id: int
