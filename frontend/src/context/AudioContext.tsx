@@ -131,7 +131,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [currentQueueIndex, setCurrentQueueIndex] = useState<number>(-1);
   const [showPremiumModal, setShowPremiumModal] = useState<boolean>(false);
   const [qualityLevelSetting, setQualityLevelSetting] = useState<'normal' | 'high' | 'hires' | 'lossless'>('lossless');
-  const [equalizerBars, setEqualizerBars] = useState<number[]>(new Array(10).fill(4));
+  const [equalizerBars, setEqualizerBars] = useState<number[]>(new Array(20).fill(0));
 
   // Refs for HTMLAudioElement & HLS
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -414,14 +414,14 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   // Real VU meter — driven by Web Audio API AnalyserNode
   useEffect(() => {
-    const NUM_BARS = 10;
+    const NUM_BARS = 20;
 
     const stopAnalyser = () => {
       if (animFrameRef.current !== null) {
         cancelAnimationFrame(animFrameRef.current);
         animFrameRef.current = null;
       }
-      setEqualizerBars(new Array(NUM_BARS).fill(4));
+      setEqualizerBars(new Array(NUM_BARS).fill(0));
     };
 
     if (!isPlaying) {
@@ -464,11 +464,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         // CORS or already-connected element — fall back to random
         console.warn('AnalyserNode setup failed (likely CORS on radio stream):', e);
         equalizerIntervalRef.current = setInterval(() => {
-          setEqualizerBars(prev => prev.map(() => Math.floor(Math.random() * 20) + 4));
+          setEqualizerBars(prev => prev.map(() => Math.floor(Math.random() * 80) + 10));
         }, 120);
         return () => {
           if (equalizerIntervalRef.current) clearInterval(equalizerIntervalRef.current);
-          setEqualizerBars(new Array(NUM_BARS).fill(4));
+          setEqualizerBars(new Array(NUM_BARS).fill(0));
         };
       }
     }
@@ -479,11 +479,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const tick = () => {
       analyser.getByteFrequencyData(dataArray);
 
-      // Map the frequency bins to NUM_BARS evenly spaced bars (4–24px)
+      // Map the frequency bins to 20 bands (0 to 100 level scale)
       const step = Math.floor(dataArray.length / NUM_BARS);
       const bars = Array.from({ length: NUM_BARS }, (_, i) => {
         const bin = dataArray[i * step] ?? 0;
-        return Math.max(4, Math.round((bin / 255) * 24));
+        return Math.min(100, Math.round((bin / 255) * 100));
       });
       setEqualizerBars(bars);
 

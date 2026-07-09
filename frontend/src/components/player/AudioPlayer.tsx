@@ -241,7 +241,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       </div>
 
       {/* Volume / Auxiliary layout controls */}
-      <div className="hidden md:flex items-center gap-6 w-80 justify-end">
+      <div className="hidden md:flex items-center gap-5 justify-end flex-1 max-w-[420px]">
         {/* Equalizer animation */}
         <Equalizer />
 

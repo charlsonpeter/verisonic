@@ -12,7 +12,9 @@
   - [x] Update `get_station_stream_sync` and `serialize_station` to route listeners to the live stream
 - [x] Web Application Frontend
   - [x] Update `frontend/src/pages/Radio.tsx` to display connection credentials (URL & Stream Key)
-  - [x] Add copy and regenerate key features in React interface
+  - [x] Fix TypeScript compiler strict mode errors and resolve unclosed braces
+- [x] Redesign player audio visualizer (Equalizer.tsx) to match the PyQt segmented LED VU meter
+
 - [x] Desktop Broadcaster Application
   - [x] Create `verisonic_broadcaster.py` desktop software with Tkinter GUI
   - [x] Add audio input device querying, WebSocket streaming thread, and fallback PCM/MP3 modes
