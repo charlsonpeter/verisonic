@@ -68,6 +68,33 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
     fetchStations();
   }, [currentUser]);
 
+  // Automatically refresh stations list if any connection key is expired (to trigger auto-regeneration on the backend)
+  useEffect(() => {
+    const checkExpiry = () => {
+      let hasExpiredKey = false;
+      myStations.forEach(station => {
+        if (station.stream_key) {
+          const parts = station.stream_key.split('_');
+          if (parts.length >= 4) {
+            const timestamp = parseInt(parts[parts.length - 1], 10);
+            const now = Math.floor(Date.now() / 1000);
+            if (now - timestamp >= 300) { // 5 minutes expiry
+              hasExpiredKey = true;
+            }
+          }
+        }
+      });
+      if (hasExpiredKey) {
+        console.log("Detected expired stream key, auto-refreshing/regenerating key on server...");
+        fetchStations();
+      }
+    };
+
+    // Check key expiration every 5 seconds
+    const interval = setInterval(checkExpiry, 5000);
+    return () => clearInterval(interval);
+  }, [myStations]);
+
   const handleEditClick = (station: any) => {
     setEditingStationId(station.id);
     setFormValues({
@@ -215,13 +242,6 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
   };
 
   const handleRegenerateKey = async (stationId: number) => {
-    const confirm = await showConfirm(
-      'Are you sure?',
-      'This will invalidate the current connection key. The desktop broadcaster will be disconnected if it is streaming, and you will need to paste the new key into the broadcaster app.',
-      'Yes, Regenerate'
-    );
-    if (!confirm) return;
-
     setIsRegeneratingKey(prev => ({ ...prev, [stationId]: true }));
     try {
       const res = await fetch(`/api/radio/${stationId}/regenerate-key`, {
