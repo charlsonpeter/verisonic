@@ -85,8 +85,8 @@ export class SpectrumAnalyzer {
     if (this.analyser) {
       try {
         // Fetch float frequency data directly in decibels
-        this.analyser.getFloatFrequencyData(this.floatDataArray);
-        this.calculator.calculateBands(this.floatDataArray, this.rawBandsArray);
+        this.analyser.getFloatFrequencyData(this.floatDataArray as any);
+        this.calculator.calculateBands(this.floatDataArray as any, this.rawBandsArray);
       } catch (e) {
         // Fallback to mock data if Analyser throws due to connection issues or CORS
         this.generateMockBands(timestamp);
