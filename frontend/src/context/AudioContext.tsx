@@ -30,8 +30,8 @@ export interface Track {
 export interface RadioStation {
   id: number;
   name: string;
-  description: string;
-  cover_art_url: string;
+  description?: string;
+  cover_art_url?: string;
   stream_url: string;
   current_track_title?: string;
   current_track_artist?: string;
@@ -40,6 +40,9 @@ export interface RadioStation {
   owner_id?: number;
   stream_key?: string;
   is_online?: boolean;
+  is_active?: boolean;
+  current_program_title?: string;
+  rj_name?: string;
   licence?: string;
   street_address?: string;
   city?: string;
@@ -135,8 +138,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const hlsRef = useRef<Hls | null>(null);
   const webrtcPCRef = useRef<RTCPeerConnection | null>(null);
   const websocketRef = useRef<WebSocket | null>(null);
-  const previewTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const equalizerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const previewTimerRef = useRef<any>(null);
+  const equalizerIntervalRef = useRef<any>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
@@ -622,7 +625,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                   const chunk = queue.shift();
                   if (chunk) {
                     try {
-                      sourceBuffer.appendBuffer(chunk);
+                      sourceBuffer.appendBuffer(chunk as any);
                     } catch (e) {
                       console.error('Error appending chunk to SourceBuffer:', e);
                     }

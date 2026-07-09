@@ -184,7 +184,6 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
     const confirm = await showConfirm(
       'Are you sure?',
       'This will invalidate the current connection key. The desktop broadcaster will be disconnected if it is streaming, and you will need to paste the new key into the broadcaster app.',
-      'warning',
       'Yes, Regenerate'
     );
     if (!confirm) return;

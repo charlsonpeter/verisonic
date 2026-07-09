@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Mail, MessageSquare, Send, Sparkles, CheckCircle2, ShieldCheck, Radio, Music } from 'lucide-react';
+import { Mail, MessageSquare, Send, Sparkles, CheckCircle2, ShieldCheck, Radio, Music, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 export const Contact: React.FC = () => {

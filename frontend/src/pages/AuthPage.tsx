@@ -16,7 +16,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [role, setRole] = useState<'listener' | 'artist' | 'admin'>('listener');
+  const [role, setRole] = useState<'listener' | 'studio_admin' | 'radio_admin' | 'admin'>('listener');
 
   // UI state
   const [isLoading, setIsLoading] = useState(false);
