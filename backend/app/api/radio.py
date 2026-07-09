@@ -121,7 +121,7 @@ if RTCPeerConnection is not None:
                 self._channels = 2
                 self._running = True
                 self._buffering = True
-                self._queue: asyncio.Queue = asyncio.Queue(maxsize=35)
+                self._queue: asyncio.Queue = asyncio.Queue(maxsize=100)
                 
                 # Configurable buffering threshold (default: 1.5 seconds)
                 default_buffer = float(os.environ.get("WEBRTC_BUFFER_SEC", "1.5"))
@@ -250,6 +250,15 @@ class WebRTCManager:
         self.listeners[station_id].add(pc)
         self.relay_tracks[station_id].add(track)
         print(f"DEBUG: WebRTC listener registered. Initial connectionState: {pc.connectionState}", flush=True)
+
+        # Pre-populate the WebRTC track's queue with history chunks to fill the buffer instantly
+        history = live_stream_manager.history.get(station_id)
+        if history:
+            for chunk in history:
+                try:
+                    track._queue.put_nowait(chunk)
+                except asyncio.QueueFull:
+                    break
 
         @pc.on("connectionstatechange")
         def on_state_change():
