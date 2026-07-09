@@ -174,10 +174,44 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
     }
   };
 
+  const fallbackCopyText = (text: string, onSuccess: () => void) => {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.top = "0";
+    textArea.style.left = "0";
+    textArea.style.position = "fixed";
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      const successful = document.execCommand('copy');
+      if (successful) {
+        onSuccess();
+      } else {
+        console.error("Fallback copy failed");
+      }
+    } catch (err) {
+      console.error("Fallback copy threw exception:", err);
+    }
+    document.body.removeChild(textArea);
+  };
+
   const handleCopy = (text: string, id: number) => {
-    navigator.clipboard.writeText(text);
-    setCopiedKeyMap(prev => ({ ...prev, [id]: true }));
-    setTimeout(() => setCopiedKeyMap(prev => ({ ...prev, [id]: false })), 2000);
+    const onSuccess = () => {
+      setCopiedKeyMap(prev => ({ ...prev, [id]: true }));
+      setTimeout(() => setCopiedKeyMap(prev => ({ ...prev, [id]: false })), 2000);
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text)
+        .then(onSuccess)
+        .catch(err => {
+          console.warn("Clipboard API failed, trying fallback:", err);
+          fallbackCopyText(text, onSuccess);
+        });
+    } else {
+      fallbackCopyText(text, onSuccess);
+    }
   };
 
   const handleRegenerateKey = async (stationId: number) => {
