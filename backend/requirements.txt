@@ -19,3 +19,4 @@ soundfile>=0.12.1
 email-validator>=2.0.0
 websockets>=11.0
 aiortc>=1.6.0
+av>=10.0.0
