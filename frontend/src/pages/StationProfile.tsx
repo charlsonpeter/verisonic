@@ -64,6 +64,23 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
     }
   };
 
+  const fetchStationsSilently = async () => {
+    const userRole = currentUser?.real_role || currentUser?.role;
+    if (userRole !== 'radio_admin' && userRole !== 'admin') {
+      return;
+    }
+    try {
+      const res = await fetch('/api/radio');
+      if (res.ok) {
+        const data = await res.json();
+        const owns = data.filter((s: any) => s.owner_id === currentUser?.id);
+        setMyStations(owns);
+      }
+    } catch (e) {
+      console.error("Failed to silently fetch stations:", e);
+    }
+  };
+
   useEffect(() => {
     fetchStations();
   }, [currentUser]);
@@ -85,8 +102,8 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
         }
       });
       if (hasExpiredKey) {
-        console.log("Detected expired stream key, auto-refreshing/regenerating key on server...");
-        fetchStations();
+        console.log("Detected expired stream key, silently auto-refreshing/regenerating key on server...");
+        fetchStationsSilently();
       }
     };
 
@@ -251,7 +268,8 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
         }
       });
       if (res.ok) {
-        await fetchStations();
+        const updatedStation = await res.json();
+        setMyStations(prev => prev.map(s => s.id === stationId ? updatedStation : s));
       } else {
         const err = await res.json();
         showError('Error', err.detail || 'Failed to regenerate key.');

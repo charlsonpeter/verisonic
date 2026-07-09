@@ -60,7 +60,8 @@ export const Settings: React.FC = () => {
         }
       });
       if (res.ok) {
-        fetchUserStation();
+        const updatedStation = await res.json();
+        setStation(updatedStation);
       }
     } catch (e) {
       console.error("Failed to regenerate stream key:", e);
