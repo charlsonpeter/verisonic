@@ -103,7 +103,11 @@ def generate_presigned_url(key: str, expires_in: int = 3600) -> str:
         endpoint = settings.S3_ENDPOINT_URL or "http://localhost:9000"
         url = f"{endpoint}/{settings.S3_BUCKET_NAME}/{key}"
         if "minio:9000" in url:
-            url = url.replace("http://minio:9000", "http://localhost/storage")
+            url = url.replace("http://minio:9000", "/storage")
+        elif "localhost:9000" in url:
+            url = url.replace("http://localhost:9000", "/storage")
+        elif "localhost/storage" in url:
+            url = url.replace("http://localhost/storage", "/storage")
         return url
 
     try:
@@ -112,9 +116,12 @@ def generate_presigned_url(key: str, expires_in: int = 3600) -> str:
             Params={"Bucket": settings.S3_BUCKET_NAME, "Key": key},
             ExpiresIn=expires_in
         )
-        # For development, replace docker container hostname with host machine hostname if needed
-        if settings.S3_ENDPOINT_URL and "minio:9000" in url:
-            url = url.replace("http://minio:9000", "http://localhost/storage")
+        if "minio:9000" in url:
+            url = url.replace("http://minio:9000", "/storage")
+        elif "localhost:9000" in url:
+            url = url.replace("http://localhost:9000", "/storage")
+        elif "localhost/storage" in url:
+            url = url.replace("http://localhost/storage", "/storage")
         return url
     except Exception as e:
         logger.error(f"Error generating presigned URL: {e}")
