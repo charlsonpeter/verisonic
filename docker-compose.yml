@@ -97,9 +97,6 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: verisonic_frontend
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
     ports:
       - "5173:5173"
     environment:
