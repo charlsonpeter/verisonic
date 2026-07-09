@@ -18,7 +18,7 @@ export const Settings: React.FC = () => {
   const [copiedKey, setCopiedKey] = useState(false);
 
   const fetchUserStation = async () => {
-    if (currentUser?.role !== 'radio_admin' && currentUser?.role !== 'admin') return;
+    if (currentUser?.role !== 'radio_admin') return;
     try {
       const res = await fetch('/api/radio');
       if (res.ok) {
@@ -223,7 +223,7 @@ export const Settings: React.FC = () => {
     { name: "Built-in Speakers", type: "Local Core Audio", status: "Standby", icon: Laptop }
   ];
 
-  const isBroadcasterAdmin = currentUser && ['admin', 'radio_admin'].includes(currentUser.real_role || currentUser.role);
+  const isBroadcasterAdmin = currentUser && (currentUser.real_role || currentUser.role) === 'radio_admin';
   const showAdminSettings = userMode === 'admin' && isBroadcasterAdmin;
 
   return (

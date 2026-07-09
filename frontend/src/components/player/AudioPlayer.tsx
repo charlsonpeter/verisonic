@@ -31,7 +31,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   } = useAudio();
 
   const { userMode, currentUser } = useAuth();
-  const isAdminMode = !!(userMode === 'admin' && currentUser && ['admin', 'radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role));
+  const isAdminMode = !!(userMode === 'admin' && currentUser && ['radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role));
   const isOffline = !!(activeRadioStation && (activeRadioStation.is_online === false || activeRadioStation.is_active === false));
 
   const getRadioDisplayInfo = () => {

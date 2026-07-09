@@ -132,7 +132,7 @@ export const Header: React.FC<HeaderProps> = ({
         )}
 
         {/* Mode Switcher */}
-        {currentUser && ['admin', 'radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role) && (
+        {currentUser && ['radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role) && (
           <div className="hidden sm:flex items-center select-none font-sans">
             <button
               onClick={() => {
@@ -196,7 +196,7 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
 
                 {/* Mobile User Mode Switcher inside dropdown */}
-                {currentUser && ['admin', 'radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role) && (
+                {currentUser && ['radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role) && (
                   <div className="sm:hidden p-2 border-b border-white/3 mb-1 flex items-center justify-between font-sans select-none">
                     <span className="text-[8px] text-slate-550 font-bold uppercase tracking-wider block">Active Mode</span>
                     <button

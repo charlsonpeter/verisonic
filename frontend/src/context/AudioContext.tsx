@@ -252,7 +252,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Stop library music/other stations playback when switching to Admin Mode for Radio Admins
   // Pre-load station or stop other feeds when switching to Admin Mode
   useEffect(() => {
-    if (userMode === 'admin' && currentUser && ['admin', 'radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role)) {
+    if (userMode === 'admin' && currentUser && ['radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role)) {
       // Instantly pause and reset any running playback to prevent leakage
       if (audioRef.current) {
         audioRef.current.pause();

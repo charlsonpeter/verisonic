@@ -58,7 +58,7 @@ def get_current_user(
 
     # Store original database role before override
     user._real_role = user.role
-    if x_user_mode == "listener" and user.role in ["admin", "radio_admin", "studio_admin"]:
+    if x_user_mode == "listener" and user.role in ["radio_admin", "studio_admin"]:
         user.__dict__["role"] = "listener"
 
     return user
@@ -79,7 +79,7 @@ def get_optional_current_user(
         user = db.query(User).filter(User.id == int(user_id)).first()
         if user:
             user._real_role = user.role
-            if x_user_mode == "listener" and user.role in ["admin", "radio_admin", "studio_admin"]:
+            if x_user_mode == "listener" and user.role in ["radio_admin", "studio_admin"]:
                 user.__dict__["role"] = "listener"
         return user
     except Exception:

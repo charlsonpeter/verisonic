@@ -846,7 +846,7 @@ async def get_live_audio_stream(
                 user = db.query(User).filter(User.id == user_id).first()
                 if user:
                     user._real_role = user.role
-                    if x_user_mode == "listener" and user.role in ["admin", "radio_admin", "studio_admin"]:
+                    if x_user_mode == "listener" and user.role in ["radio_admin", "studio_admin"]:
                         user.__dict__["role"] = "listener"
                     current_user = user
             except Exception:
