@@ -30,7 +30,7 @@ export const Equalizer: React.FC = () => {
 
   return (
     <div 
-      className="h-10 w-44 md:w-56 overflow-hidden"
+      className="h-10 w-28 md:w-36 overflow-hidden"
       title="Live Audio Spectrum Analyzer"
     >
       <canvas ref={canvasRef} className="w-full h-full block" />

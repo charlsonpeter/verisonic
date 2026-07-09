@@ -59,9 +59,9 @@ export class SpectrumAnalyzer {
   }
 
   private getBarCountForWidth(width: number): number {
-    if (width >= 1024) return 80;
-    if (width >= 768) return 64;
-    return 40;
+    if (width >= 1024) return 50;
+    if (width >= 768) return 40;
+    return 24;
   }
 
   private handleResize = () => {
