@@ -188,6 +188,9 @@ if RTCPeerConnection is not None:
                         # Resample to 48000Hz s16 packed format
                         resampled = self._resampler.resample(raw_frame)
                         if resampled:
+                            for f in resampled:
+                                f.sample_rate = 48000
+                                f.time_base = fractions.Fraction(1, 48000)
                             self._resampled_queue.extend(resampled)
                     else:
                         # Fallback silence frame directly at 48000Hz packed layout (1, samples * 2)
