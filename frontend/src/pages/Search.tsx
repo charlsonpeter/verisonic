@@ -47,7 +47,7 @@ export const Search: React.FC<SearchProps> = ({
           const filtered = radioData.filter(
             (r: RadioStation) => 
               r.name.toLowerCase().includes(query) || 
-              r.description.toLowerCase().includes(query)
+              (r.description || '').toLowerCase().includes(query)
           );
           setFilteredRadio(filtered);
         }
