@@ -154,6 +154,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const currentTrackRef = useRef(currentTrack);
   const isPremiumRef = useRef(isPremium);
   const activeRadioStationRef = useRef(activeRadioStation);
+  const isPlayingRef = useRef(isPlaying);
   const repeatModeRef = useRef(repeatMode);
   const playQueueRef = useRef(playQueue);
   const currentQueueIndexRef = useRef(currentQueueIndex);
@@ -164,6 +165,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { currentTrackRef.current = currentTrack; }, [currentTrack]);
   useEffect(() => { isPremiumRef.current = isPremium; }, [isPremium]);
   useEffect(() => { activeRadioStationRef.current = activeRadioStation; }, [activeRadioStation]);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { repeatModeRef.current = repeatMode; }, [repeatMode]);
   useEffect(() => { playQueueRef.current = playQueue; }, [playQueue]);
   useEffect(() => { currentQueueIndexRef.current = currentQueueIndex; }, [currentQueueIndex]);
@@ -318,6 +320,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       // Ignore errors if we are currently playing via WebRTC (srcObject is active)
       if (audioRef.current && audioRef.current.srcObject) {
         console.log("Ignoring audio error because WebRTC srcObject is active");
+        return;
+      }
+      // Also ignore errors if we explicitly paused/stopped the stream (isPlaying is false)
+      if (!isPlayingRef.current) {
+        console.log("Ignoring audio error because stream was explicitly unloaded");
         return;
       }
       if (activeRadioStationRef.current) {
