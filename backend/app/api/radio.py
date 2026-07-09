@@ -115,7 +115,7 @@ if RTCPeerConnection is not None:
             def __init__(self, station_id: int):
                 super().__init__()
                 self.station_id = station_id
-                self._queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+                self._queue: asyncio.Queue = asyncio.Queue(maxsize=4)
                 self._pts = 0
                 self._sample_rate = 48000
                 self._channels = 2
@@ -264,7 +264,11 @@ class WebRTCManager:
             try:
                 track._queue.put_nowait(chunk)
             except asyncio.QueueFull:
-                pass
+                try:
+                    track._queue.get_nowait()
+                    track._queue.put_nowait(chunk)
+                except Exception:
+                    pass
 
 
 webrtc_manager = WebRTCManager()
