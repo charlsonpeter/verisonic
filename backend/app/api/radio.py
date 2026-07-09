@@ -115,11 +115,12 @@ if RTCPeerConnection is not None:
             def __init__(self, station_id: int):
                 super().__init__()
                 self.station_id = station_id
-                self._queue: asyncio.Queue = asyncio.Queue(maxsize=4)
+                self._queue: asyncio.Queue = asyncio.Queue(maxsize=35)
                 self._pts = 0
                 self._sample_rate = 48000
                 self._channels = 2
                 self._running = True
+                self._buffering = True
                 
                 # Persistent codec context for streaming MP3 decoding
                 import av
@@ -142,13 +143,34 @@ if RTCPeerConnection is not None:
                     self._pts += frame.samples
                     return frame
 
-                # Otherwise, fetch and process the next chunk from the queue
-                while True:
-                    try:
-                        chunk = self._queue.get_nowait()
-                        break
-                    except asyncio.QueueEmpty:
-                        await asyncio.sleep(0.005)
+                # If we are buffering, wait until queue is filled to 22 chunks (~1 second of audio)
+                if self._buffering:
+                    if self._queue.qsize() < 22:
+                        import numpy as np_inner
+                        combined = np_inner.zeros((1, 960 * 2), dtype='int16')
+                        frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
+                        frame.sample_rate = 48000
+                        frame.time_base = fractions.Fraction(1, 48000)
+                        frame.pts = self._pts
+                        self._pts += frame.samples
+                        return frame
+                    else:
+                        self._buffering = False
+
+                # Otherwise, fetch the next chunk from the queue (non-blocking)
+                try:
+                    chunk = self._queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    # Queue ran dry: re-enter buffering mode, play silence
+                    self._buffering = True
+                    import numpy as np_inner
+                    combined = np_inner.zeros((1, 960 * 2), dtype='int16')
+                    frame = AudioFrame.from_ndarray(combined, format='s16', layout='stereo')
+                    frame.sample_rate = 48000
+                    frame.time_base = fractions.Fraction(1, 48000)
+                    frame.pts = self._pts
+                    self._pts += frame.samples
+                    return frame
 
                 try:
                     pcm_frames = []
