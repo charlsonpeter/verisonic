@@ -57,8 +57,8 @@ def list_playlists(
     current_user = Depends(get_current_user)
 ):
     playlists = db.query(Playlist).filter(
-        (Playlist.user_id == current_user.id) | (Playlist.is_public == True)
-    ).all()
+        Playlist.user_id == current_user.id
+    ).order_by(Playlist.created_at.desc()).all()
     
     response = []
     for p in playlists:
@@ -70,9 +70,9 @@ def get_playlist(id: int, db: Session = Depends(get_db), current_user = Depends(
     p = db.query(Playlist).filter(Playlist.id == id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Playlist not found")
-        
-    if not p.is_public and p.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Playlist is private")
+
+    if p.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Playlist not found or you are not the owner")
         
     tracks = [serialize_track(pt.track, db) for pt in playlist_tracks_ordered(p)]
     return {
@@ -100,7 +100,14 @@ def add_track_to_playlist(
         raise HTTPException(status_code=404, detail="Track not found")
     if not track.approved:
         raise HTTPException(status_code=400, detail="Cannot add unapproved track to playlist")
-        
+
+    existing = db.query(PlaylistTrack).filter(
+        PlaylistTrack.playlist_id == playlist.id,
+        PlaylistTrack.track_id == track.id,
+    ).first()
+    if existing:
+        return serialize_playlist(playlist, db)
+
     # Calculate position
     max_pos = 0
     for pt in playlist.playlist_tracks:

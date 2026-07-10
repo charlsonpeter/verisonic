@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float, Table
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float, Table, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.db.base_class import Base
 
@@ -116,7 +116,7 @@ class Playlist(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    is_public = Column(Boolean, default=True)
+    is_public = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     user = relationship("User", back_populates="playlists")
@@ -124,6 +124,9 @@ class Playlist(Base):
 
 class PlaylistTrack(Base):
     __tablename__ = "playlist_tracks"
+    __table_args__ = (
+        UniqueConstraint("playlist_id", "track_id", name="uq_playlist_tracks_playlist_track"),
+    )
     id = Column(Integer, primary_key=True, index=True)
     playlist_id = Column(Integer, ForeignKey("playlists.id", ondelete="CASCADE"), nullable=False)
     track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False)
@@ -198,6 +201,9 @@ class ListeningHistory(Base):
 
 class Favorite(Base):
     __tablename__ = "favorites"
+    __table_args__ = (
+        UniqueConstraint("user_id", "track_id", name="uq_favorites_user_track"),
+    )
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False)

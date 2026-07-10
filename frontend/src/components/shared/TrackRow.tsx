@@ -12,10 +12,11 @@ interface TrackRowProps {
 }
 
 export const TrackRow: React.FC<TrackRowProps> = ({ track, index, onViewReport, onViewDetails, onRemove }) => {
-  const { playTrack, addToQueue, toggleFavorite, favorites, currentTrack, isPlaying } = useAudio();
+  const { playTrack, addToQueue, toggleFavorite, favorites, currentTrack, isPlaying, playQueue } = useAudio();
 
   const isCurrent = currentTrack?.id === track.id;
   const isFav = favorites.includes(track.id);
+  const isInQueue = playQueue.some(t => t.id === track.id);
 
   const formatDuration = (secs: number) => {
     if (!secs) return '0:00';
@@ -87,10 +88,13 @@ export const TrackRow: React.FC<TrackRowProps> = ({ track, index, onViewReport, 
           <button
             onClick={(e) => {
               e.stopPropagation();
-              addToQueue(track);
+              if (!isInQueue) addToQueue(track);
             }}
-            className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-500 hover:text-rose-400 transition"
-            title="Add to Queue"
+            disabled={isInQueue}
+            className={`p-1.5 rounded-lg hover:bg-slate-800 text-slate-500 hover:text-rose-400 transition ${
+              isInQueue ? 'opacity-40 cursor-default hover:text-slate-500' : ''
+            }`}
+            title={isInQueue ? 'Already in queue' : 'Add to Queue'}
           >
             <Plus className="w-3.5 h-3.5" />
           </button>

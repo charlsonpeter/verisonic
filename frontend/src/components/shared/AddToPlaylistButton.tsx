@@ -50,10 +50,15 @@ export const AddToPlaylistButton: React.FC<AddToPlaylistButtonProps> = ({ track 
   };
 
   useEffect(() => {
+    setPlaylists([]);
+    setOpen(false);
+  }, [token]);
+
+  useEffect(() => {
     if (open && !disabled) {
       loadPlaylists();
     }
-  }, [open, disabled]);
+  }, [open, disabled, token]);
 
   useEffect(() => {
     if (!open) return;
@@ -102,7 +107,7 @@ export const AddToPlaylistButton: React.FC<AddToPlaylistButtonProps> = ({ track 
       const createRes = await fetch('/api/playlist', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ name, is_public: true }),
+        body: JSON.stringify({ name, is_public: false }),
       });
       if (!createRes.ok) {
         const data = await createRes.json().catch(() => ({}));

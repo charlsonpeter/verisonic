@@ -539,7 +539,7 @@ function DashboardContent() {
           />
         )}
         
-        <main ref={mainRef} className={`flex-1 overflow-y-auto pb-36 ${activeTab === 'landing' ? 'px-0 py-0' : 'px-6 md:px-8 py-8'}`}>
+        <main ref={mainRef} className={`flex-1 overflow-y-auto pb-36 ${activeTab === 'landing' ? 'px-0 py-0' : 'px-6 md:px-8'}`}>
           <div key={activeTab} className="animate-page-entry w-full">
             {renderTabContent()}
           </div>

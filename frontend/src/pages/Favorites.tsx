@@ -1,5 +1,6 @@
 import React from 'react';
-import { Heart } from 'lucide-react';
+import { Heart, Disc } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 import { useAudio, Track } from '../context/AudioContext';
 import { TrackRow } from '../components/shared/TrackRow';
 
@@ -9,18 +10,26 @@ interface FavoritesProps {
 }
 
 export const Favorites: React.FC<FavoritesProps> = ({ onViewReport, onViewDetails }) => {
+  const { token } = useAuth();
   const { favorites } = useAudio();
   const [favoriteTracks, setFavoriteTracks] = React.useState<Track[]>([]);
   const [isLoading, setIsLoading] = React.useState(true);
 
   React.useEffect(() => {
+    if (!token) {
+      setFavoriteTracks([]);
+      setIsLoading(false);
+      return;
+    }
+
     const loadFavoriteTracks = async () => {
       setIsLoading(true);
       try {
-        const res = await fetch('/api/music?approved_only=true');
+        const res = await fetch('/api/favorites', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
         if (res.ok) {
-          const data = await res.json();
-          setFavoriteTracks(data.filter((t: Track) => favorites.includes(t.id)));
+          setFavoriteTracks(await res.json());
         } else {
           setFavoriteTracks([]);
         }
@@ -31,8 +40,19 @@ export const Favorites: React.FC<FavoritesProps> = ({ onViewReport, onViewDetail
         setIsLoading(false);
       }
     };
+
     loadFavoriteTracks();
-  }, [favorites]);
+  }, [token, favorites]);
+
+  if (!token) {
+    return (
+      <div className="text-center py-20 bg-slate-900/10 border border-dashed border-white/5 rounded-3xl p-8 max-w-xl mx-auto">
+        <Disc className="w-12 h-12 text-slate-650 mx-auto mb-4" />
+        <h4 className="text-sm font-bold text-slate-350">Sign in required</h4>
+        <p className="text-xs text-slate-500 mt-1">Log in to view and manage your favorites.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 w-full">

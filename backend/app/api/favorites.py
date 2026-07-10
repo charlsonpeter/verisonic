@@ -15,8 +15,6 @@ def list_favorites(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    if current_user.role == "radio_admin":
-        raise HTTPException(status_code=403, detail="Radio admins cannot access favorites.")
     favorites = (
         db.query(Favorite)
         .filter(Favorite.user_id == current_user.id)
@@ -42,8 +40,6 @@ def add_favorite(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    if current_user.role == "radio_admin":
-        raise HTTPException(status_code=403, detail="Radio admins cannot access favorites.")
     track = db.query(Track).filter(Track.id == track_id, Track.approved == True).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")

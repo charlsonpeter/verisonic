@@ -180,8 +180,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
 
   useEffect(() => {
+    setFavorites([]);
     if (!token) {
-      setFavorites([]);
       return;
     }
     (async () => {
@@ -1105,27 +1105,38 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const toggleShuffle = () => setIsShuffle(!isShuffle);
 
   const toggleFavorite = async (trackId: number) => {
+    if (!token) return;
     const isFav = favorites.includes(trackId);
     setFavorites(prev =>
       isFav ? prev.filter(id => id !== trackId) : [...prev, trackId]
     );
-    if (!token) return;
     try {
-      await fetch(`${API_URL}/favorites/${trackId}`, {
+      const res = await fetch(`${API_URL}/favorites/${trackId}`, {
         method: isFav ? 'DELETE' : 'POST',
         headers: { Authorization: `Bearer ${token}` }
       });
+      if (!res.ok) {
+        setFavorites(prev =>
+          isFav ? [...prev, trackId] : prev.filter(id => id !== trackId)
+        );
+      }
     } catch (e) {
+      setFavorites(prev =>
+        isFav ? [...prev, trackId] : prev.filter(id => id !== trackId)
+      );
       console.warn('Failed to sync favorite:', e);
     }
   };
 
   const addToQueue = (track: Track) => {
-    setPlayQueue(prev => [...prev, track]);
-    if (playQueue.length === 0) {
-      setCurrentQueueIndex(0);
-      playTrack(track);
-    }
+    setPlayQueue(prev => {
+      if (prev.some(t => t.id === track.id)) return prev;
+      if (prev.length === 0) {
+        setCurrentQueueIndex(0);
+        playTrack(track);
+      }
+      return [...prev, track];
+    });
   };
 
   const removeFromQueue = (trackId: number) => {

@@ -68,6 +68,18 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
     fetchPlaylists();
   }, [fetchPlaylists]);
 
+  useEffect(() => {
+    setPlaylists([]);
+    setSelectedId(null);
+    setMobileTracksOpen(false);
+  }, [token]);
+
+  useEffect(() => {
+    if (mobileTracksOpen) {
+      document.querySelector('main')?.scrollTo({ top: 0 });
+    }
+  }, [mobileTracksOpen]);
+
   const selected = playlists.find(p => p.id === selectedId) || null;
 
   const updatePlaylistTracks = (playlistId: number, tracks: Track[]) => {
@@ -88,7 +100,7 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
       const res = await fetch('/api/playlist', {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ name, is_public: true }),
+        body: JSON.stringify({ name, is_public: false }),
       });
       if (res.ok) {
         const created: PlaylistData = await res.json();
@@ -211,6 +223,87 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
     ? formatDuration(selected.tracks.reduce((a, t) => a + (t.duration || 0), 0))
     : '';
 
+  const renderSelectedTracks = () => {
+    if (!selected) return null;
+
+    return (
+      <>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-slate-400 font-bold min-w-0">
+            {selected.tracks.length} songs
+            {selected.tracks.length > 0 && <> · {totalDuration}</>}
+          </p>
+          <div className="flex gap-2 flex-shrink-0">
+            <button
+              type="button"
+              onClick={handlePlayAll}
+              disabled={selected.tracks.length === 0}
+              className="p-2.5 lg:px-5 lg:py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 transition"
+              aria-label="Play all"
+              title="Play all"
+            >
+              <Play className="w-4 h-4 fill-current" />
+              <span className="hidden lg:inline">Play All</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleDeletePlaylist}
+              className="p-2.5 bg-slate-900 hover:bg-rose-950/40 border border-white/5 text-slate-400 hover:text-rose-400 rounded-xl transition"
+              title="Delete playlist"
+              aria-label="Delete playlist"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {selected.tracks.length === 0 ? (
+          <div className="text-center py-12 bg-slate-900/10 border border-dashed border-white/5 rounded-2xl">
+            <p className="text-xs text-slate-500">No tracks yet. Use the folder icon on any track to add it here.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {selected.tracks.map((track, idx) => (
+              <div
+                key={track.id}
+                onDragOver={handleDragOver}
+                onDragEnter={() => handleDragEnter(idx)}
+                onDragLeave={() => setDragOverIndex(null)}
+                onDrop={(e) => handleDrop(e, idx)}
+                className={`flex items-stretch gap-1 rounded-2xl transition-colors ${
+                  dragOverIndex === idx ? 'bg-rose-600/5 ring-1 ring-rose-500/30' : ''
+                }`}
+              >
+                <div className="flex-1 min-w-0">
+                  <TrackRow
+                    track={track}
+                    index={idx}
+                    onViewReport={onViewReport}
+                    onViewDetails={onViewDetails}
+                    onRemove={() => handleRemoveTrack(track.id)}
+                  />
+                </div>
+                <div
+                  draggable
+                  onDragStart={(e) => handleDragStart(e, idx)}
+                  onDragEnd={() => {
+                    setDraggedIndex(null);
+                    setDragOverIndex(null);
+                  }}
+                  className="flex items-center px-1 text-slate-600 hover:text-slate-400 cursor-grab active:cursor-grabbing flex-shrink-0 self-center"
+                  title="Drag to reorder"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <GripVertical className="w-4 h-4" />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </>
+    );
+  };
+
   if (isStaffInAdminMode) {
     return (
       <div className="text-center py-20 bg-slate-900/10 border border-dashed border-white/5 rounded-3xl p-8 max-w-xl mx-auto">
@@ -234,17 +327,43 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
   const showTracksOnMobile = selected && mobileTracksOpen;
 
   return (
-    <div className="space-y-6 w-full">
-      <div className={showTracksOnMobile ? 'hidden lg:block' : ''}>
-        <h2 className="text-2xl font-extrabold text-white flex items-center gap-2">
-          <FolderHeart className="w-6 h-6 text-rose-400" /> Playlists
-        </h2>
-        <p className="text-xs text-slate-400 mt-1">Create collections and add tracks from the library using the folder icon on any track.</p>
-      </div>
+    <div className="w-full">
+      {/* Mobile track screen — no hidden playlist header sibling */}
+      {showTracksOnMobile && selected && (
+        <div className="lg:hidden space-y-4">
+          <div className="sticky top-0 z-20 -mx-6 px-6 py-3 bg-slate-950/95 backdrop-blur-md border-b border-white/5 flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setMobileTracksOpen(false)}
+              className="p-2 rounded-xl bg-slate-900 border border-white/5 text-slate-300 hover:text-white transition flex-shrink-0"
+              aria-label="Back to playlists"
+            >
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <h1 className="text-base font-extrabold text-white truncate flex-1">{selected.name}</h1>
+          </div>
+          <div className="space-y-4 px-0">
+            {renderSelectedTracks()}
+          </div>
+        </div>
+      )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Playlist list */}
-        <div className={`lg:col-span-4 space-y-4 ${showTracksOnMobile ? 'hidden lg:block' : 'block'}`}>
+      {/* Playlist list (mobile) + side-by-side layout (desktop) */}
+      <div
+        className={`space-y-4 md:space-y-6 ${
+          showTracksOnMobile ? 'max-md:hidden' : ''
+        }`}
+      >
+        <div>
+          <h2 className="text-2xl font-extrabold text-white flex items-center gap-2">
+            <FolderHeart className="w-6 h-6 text-rose-400" /> Playlists
+          </h2>
+          <p className="text-xs text-slate-400 mt-1">Create collections and add tracks from the library using the folder icon on any track.</p>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-6">
+          {/* Playlist list */}
+          <div className="lg:col-span-4 space-y-4">
           <form onSubmit={handleCreate} className="flex gap-2">
             <input
               type="text"
@@ -291,16 +410,8 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
           </div>
         </div>
 
-        {/* Selected playlist tracks */}
-        <div
-          className={`lg:col-span-8 ${
-            !selected
-              ? 'hidden lg:block'
-              : showTracksOnMobile
-                ? 'block'
-                : 'hidden lg:block'
-          }`}
-        >
+        {/* Selected playlist tracks (desktop only) */}
+        <div className="hidden lg:block lg:col-span-8">
           {!selected ? (
             <div className="text-center py-16 bg-slate-900/10 border border-dashed border-white/5 rounded-3xl">
               <FolderHeart className="w-10 h-10 text-slate-600 mx-auto mb-3" />
@@ -308,91 +419,12 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
             </div>
           ) : (
             <div className="space-y-4">
-              {/* Mobile fixed header */}
-              <div className="lg:hidden sticky top-0 z-20 -mx-1 px-1 py-3 bg-slate-950/95 backdrop-blur-md border-b border-white/5 flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setMobileTracksOpen(false)}
-                  className="p-2 rounded-xl bg-slate-900 border border-white/5 text-slate-300 hover:text-white transition flex-shrink-0"
-                  aria-label="Back to playlists"
-                >
-                  <ChevronLeft className="w-5 h-5" />
-                </button>
-                <h1 className="text-base font-extrabold text-white truncate flex-1">{selected.name}</h1>
-              </div>
-
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <p className="text-xs text-slate-400 font-bold">
-                  {selected.tracks.length} songs
-                  {selected.tracks.length > 0 && <> · {totalDuration}</>}
-                </p>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={handlePlayAll}
-                    disabled={selected.tracks.length === 0}
-                    className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 transition"
-                  >
-                    <Play className="w-4 h-4 fill-current" /> Play All
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDeletePlaylist}
-                    className="p-2.5 bg-slate-900 hover:bg-rose-950/40 border border-white/5 text-slate-400 hover:text-rose-400 rounded-xl transition"
-                    title="Delete playlist"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {selected.tracks.length === 0 ? (
-                <div className="text-center py-12 bg-slate-900/10 border border-dashed border-white/5 rounded-2xl">
-                  <p className="text-xs text-slate-500">No tracks yet. Use the folder icon on any track to add it here.</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {selected.tracks.map((track, idx) => (
-                    <div
-                      key={track.id}
-                      onDragOver={handleDragOver}
-                      onDragEnter={() => handleDragEnter(idx)}
-                      onDragLeave={() => setDragOverIndex(null)}
-                      onDrop={(e) => handleDrop(e, idx)}
-                      className={`flex items-stretch gap-1 rounded-2xl transition-colors ${
-                        dragOverIndex === idx ? 'bg-rose-600/5 ring-1 ring-rose-500/30' : ''
-                      }`}
-                    >
-                      <div
-                        draggable
-                        onDragStart={(e) => handleDragStart(e, idx)}
-                        onDragEnd={() => {
-                          setDraggedIndex(null);
-                          setDragOverIndex(null);
-                        }}
-                        className="flex items-center px-1 text-slate-600 hover:text-slate-400 cursor-grab active:cursor-grabbing flex-shrink-0"
-                        title="Drag to reorder"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <GripVertical className="w-4 h-4" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <TrackRow
-                          track={track}
-                          index={idx}
-                          onViewReport={onViewReport}
-                          onViewDetails={onViewDetails}
-                          onRemove={() => handleRemoveTrack(track.id)}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              {renderSelectedTracks()}
             </div>
           )}
         </div>
       </div>
+    </div>
     </div>
   );
 };

@@ -147,7 +147,7 @@ class AudioAnalysisReportResponse(BaseModel):
 # --- Playlist Schemas ---
 class PlaylistCreate(BaseModel):
     name: str
-    is_public: Optional[bool] = True
+    is_public: Optional[bool] = False
 
 class PlaylistTrackAdd(BaseModel):
     track_id: int
