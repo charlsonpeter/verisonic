@@ -324,6 +324,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Initialize Audio Object
   useEffect(() => {
     const audio = new Audio();
+    // Required for iOS Safari to allow background audio playback
+    audio.setAttribute('playsinline', 'true');
+    (audio as any).playsInline = true;
     audioRef.current = audio;
 
     const onPlay = () => {
@@ -411,6 +414,18 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         websocketRef.current.close();
         websocketRef.current = null;
       }
+    };
+  }, []);
+
+  // Wire up MediaSession custom events to actual playPrevious / playNext functions
+  useEffect(() => {
+    const handlePrev = () => playPrevious();
+    const handleNext = () => playNext();
+    window.addEventListener('mediasession:previous', handlePrev);
+    window.addEventListener('mediasession:next', handleNext);
+    return () => {
+      window.removeEventListener('mediasession:previous', handlePrev);
+      window.removeEventListener('mediasession:next', handleNext);
     };
   }, []);
 
@@ -619,6 +634,36 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCurrentTrack(trackToPlay);
     setCurrentTime(0);
     setDuration(trackToPlay.duration || 0);
+
+    // Register MediaSession API for lock screen / notification media controls on mobile
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: trackToPlay.title || 'Unknown Track',
+        artist: trackToPlay.artist_name || 'Unknown Artist',
+        album: trackToPlay.album_name || '',
+        artwork: trackToPlay.cover_art_url
+          ? [{ src: trackToPlay.cover_art_url, sizes: '512x512', type: 'image/jpeg' }]
+          : [],
+      });
+      navigator.mediaSession.setActionHandler('play', () => {
+        audioRef.current?.play();
+      });
+      navigator.mediaSession.setActionHandler('pause', () => {
+        audioRef.current?.pause();
+      });
+      navigator.mediaSession.setActionHandler('previoustrack', () => {
+        // playPrevious will be called from the queue — trigger via custom event
+        window.dispatchEvent(new CustomEvent('mediasession:previous'));
+      });
+      navigator.mediaSession.setActionHandler('nexttrack', () => {
+        window.dispatchEvent(new CustomEvent('mediasession:next'));
+      });
+      navigator.mediaSession.setActionHandler('seekto', (details) => {
+        if (audioRef.current && details.seekTime !== undefined) {
+          audioRef.current.currentTime = details.seekTime;
+        }
+      });
+    }
 
     // Destroy existing Hls sessions
     if (hlsRef.current) {
