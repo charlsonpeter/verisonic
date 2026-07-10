@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Play, Disc, Plus, Trash2, FolderHeart, Loader2 } from 'lucide-react';
+import { Play, Disc, Plus, Trash2, FolderHeart, Loader2, GripVertical, ChevronLeft } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio, Track } from '../context/AudioContext';
 import { TrackRow } from '../components/shared/TrackRow';
@@ -24,9 +24,12 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
 
   const [playlists, setPlaylists] = useState<PlaylistData[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [mobileTracksOpen, setMobileTracksOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   const authHeaders = useCallback((): HeadersInit => ({
     Authorization: `Bearer ${token}`,
@@ -67,6 +70,15 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
 
   const selected = playlists.find(p => p.id === selectedId) || null;
 
+  const updatePlaylistTracks = (playlistId: number, tracks: Track[]) => {
+    setPlaylists(prev => prev.map(p => (p.id === playlistId ? { ...p, tracks } : p)));
+  };
+
+  const handleSelectPlaylist = (id: number) => {
+    setSelectedId(id);
+    setMobileTracksOpen(true);
+  };
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     const name = newPlaylistName.trim();
@@ -83,6 +95,7 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
         setNewPlaylistName('');
         await fetchPlaylists();
         setSelectedId(created.id);
+        setMobileTracksOpen(true);
         toastSuccess(`"${created.name}" created`);
       } else {
         const data = await res.json().catch(() => ({}));
@@ -105,6 +118,7 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
       });
       if (res.ok) {
         toastSuccess(`"${name}" deleted`);
+        setMobileTracksOpen(false);
         await fetchPlaylists();
       } else {
         toastError('Could not delete playlist.');
@@ -123,7 +137,7 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
       });
       if (res.ok) {
         const updated: PlaylistData = await res.json();
-        setPlaylists(prev => prev.map(p => (p.id === updated.id ? updated : p)));
+        updatePlaylistTracks(updated.id, updated.tracks);
         toastSuccess('Track removed');
       } else {
         toastError('Could not remove track.');
@@ -131,6 +145,55 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
     } catch {
       toastError('Could not remove track.');
     }
+  };
+
+  const handleReorderTracks = async (startIndex: number, endIndex: number) => {
+    if (!selected || startIndex === endIndex) return;
+    const reordered = [...selected.tracks];
+    const [moved] = reordered.splice(startIndex, 1);
+    reordered.splice(endIndex, 0, moved);
+    updatePlaylistTracks(selected.id, reordered);
+
+    try {
+      const res = await fetch(`/api/playlist/${selected.id}/tracks/reorder`, {
+        method: 'PUT',
+        headers: authHeaders(),
+        body: JSON.stringify({ track_ids: reordered.map(t => t.id) }),
+      });
+      if (res.ok) {
+        const updated: PlaylistData = await res.json();
+        updatePlaylistTracks(updated.id, updated.tracks);
+      } else {
+        toastError('Could not reorder tracks.');
+        await fetchPlaylists();
+      }
+    } catch {
+      toastError('Could not reorder tracks.');
+      await fetchPlaylists();
+    }
+  };
+
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    setDraggedIndex(index);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
+  const handleDragEnter = (index: number) => {
+    if (draggedIndex !== null && draggedIndex !== index) {
+      setDragOverIndex(index);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    setDragOverIndex(null);
+    if (draggedIndex === null || draggedIndex === targetIndex) return;
+    handleReorderTracks(draggedIndex, targetIndex);
+    setDraggedIndex(null);
   };
 
   const handlePlayAll = () => {
@@ -143,6 +206,10 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
     const mins = Math.floor(secs / 60);
     return `${mins} min`;
   };
+
+  const totalDuration = selected
+    ? formatDuration(selected.tracks.reduce((a, t) => a + (t.duration || 0), 0))
+    : '';
 
   if (isStaffInAdminMode) {
     return (
@@ -164,9 +231,11 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
     );
   }
 
+  const showTracksOnMobile = selected && mobileTracksOpen;
+
   return (
     <div className="space-y-6 w-full">
-      <div>
+      <div className={showTracksOnMobile ? 'hidden lg:block' : ''}>
         <h2 className="text-2xl font-extrabold text-white flex items-center gap-2">
           <FolderHeart className="w-6 h-6 text-rose-400" /> Playlists
         </h2>
@@ -175,7 +244,7 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Playlist list */}
-        <div className="lg:col-span-4 space-y-4">
+        <div className={`lg:col-span-4 space-y-4 ${showTracksOnMobile ? 'hidden lg:block' : 'block'}`}>
           <form onSubmit={handleCreate} className="flex gap-2">
             <input
               type="text"
@@ -205,7 +274,7 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
                   <li key={p.id}>
                     <button
                       type="button"
-                      onClick={() => setSelectedId(p.id)}
+                      onClick={() => handleSelectPlaylist(p.id)}
                       className={`w-full text-left px-4 py-3 transition ${
                         selectedId === p.id
                           ? 'bg-rose-600/10 text-rose-300'
@@ -222,26 +291,41 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
           </div>
         </div>
 
-        {/* Selected playlist */}
-        <div className="lg:col-span-8">
+        {/* Selected playlist tracks */}
+        <div
+          className={`lg:col-span-8 ${
+            !selected
+              ? 'hidden lg:block'
+              : showTracksOnMobile
+                ? 'block'
+                : 'hidden lg:block'
+          }`}
+        >
           {!selected ? (
             <div className="text-center py-16 bg-slate-900/10 border border-dashed border-white/5 rounded-3xl">
               <FolderHeart className="w-10 h-10 text-slate-600 mx-auto mb-3" />
               <p className="text-xs text-slate-500">Select or create a playlist to view its tracks.</p>
             </div>
           ) : (
-            <div className="space-y-6">
-              <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-                <div>
-                  <span className="text-[10px] text-rose-400 font-extrabold uppercase tracking-widest">Playlist</span>
-                  <h1 className="text-2xl md:text-3xl font-extrabold text-white mt-1">{selected.name}</h1>
-                  <p className="text-xs text-slate-400 font-bold mt-2">
-                    {selected.tracks.length} songs
-                    {selected.tracks.length > 0 && (
-                      <> · {formatDuration(selected.tracks.reduce((a, t) => a + (t.duration || 0), 0))}</>
-                    )}
-                  </p>
-                </div>
+            <div className="space-y-4">
+              {/* Mobile fixed header */}
+              <div className="lg:hidden sticky top-0 z-20 -mx-1 px-1 py-3 bg-slate-950/95 backdrop-blur-md border-b border-white/5 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setMobileTracksOpen(false)}
+                  className="p-2 rounded-xl bg-slate-900 border border-white/5 text-slate-300 hover:text-white transition flex-shrink-0"
+                  aria-label="Back to playlists"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+                <h1 className="text-base font-extrabold text-white truncate flex-1">{selected.name}</h1>
+              </div>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <p className="text-xs text-slate-400 font-bold">
+                  {selected.tracks.length} songs
+                  {selected.tracks.length > 0 && <> · {totalDuration}</>}
+                </p>
                 <div className="flex gap-2">
                   <button
                     type="button"
@@ -267,16 +351,41 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
                   <p className="text-xs text-slate-500">No tracks yet. Use the folder icon on any track to add it here.</p>
                 </div>
               ) : (
-                <div className="space-y-2 bg-slate-900/10 border border-white/3 p-4 rounded-3xl">
+                <div className="space-y-2">
                   {selected.tracks.map((track, idx) => (
-                    <TrackRow
+                    <div
                       key={track.id}
-                      track={track}
-                      index={idx}
-                      onViewReport={onViewReport}
-                      onViewDetails={onViewDetails}
-                      onRemove={() => handleRemoveTrack(track.id)}
-                    />
+                      onDragOver={handleDragOver}
+                      onDragEnter={() => handleDragEnter(idx)}
+                      onDragLeave={() => setDragOverIndex(null)}
+                      onDrop={(e) => handleDrop(e, idx)}
+                      className={`flex items-stretch gap-1 rounded-2xl transition-colors ${
+                        dragOverIndex === idx ? 'bg-rose-600/5 ring-1 ring-rose-500/30' : ''
+                      }`}
+                    >
+                      <div
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, idx)}
+                        onDragEnd={() => {
+                          setDraggedIndex(null);
+                          setDragOverIndex(null);
+                        }}
+                        className="flex items-center px-1 text-slate-600 hover:text-slate-400 cursor-grab active:cursor-grabbing flex-shrink-0"
+                        title="Drag to reorder"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <GripVertical className="w-4 h-4" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <TrackRow
+                          track={track}
+                          index={idx}
+                          onViewReport={onViewReport}
+                          onViewDetails={onViewDetails}
+                          onRemove={() => handleRemoveTrack(track.id)}
+                        />
+                      </div>
+                    </div>
                   ))}
                 </div>
               )}

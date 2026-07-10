@@ -152,6 +152,9 @@ class PlaylistCreate(BaseModel):
 class PlaylistTrackAdd(BaseModel):
     track_id: int
 
+class PlaylistTrackReorder(BaseModel):
+    track_ids: List[int]
+
 class PlaylistResponse(BaseModel):
     id: int
     name: str
