@@ -1,5 +1,5 @@
 import React from 'react';
-import { Radio, Heart, Users, Play, Pause } from 'lucide-react';
+import { Radio, Users, Play, Pause, MapPin } from 'lucide-react';
 import { useAudio, RadioStation } from '../../context/AudioContext';
 import { showError } from '../../utils/swal';
 
@@ -13,6 +13,7 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
 
   const isCurrent = activeRadioStation?.id === station.id;
   const isCurrentlyPlaying = isCurrent && isPlaying;
+  const isLive = station.is_online !== false && !!station.stream_url?.includes('/live');
 
   const handlePlayClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -98,27 +99,27 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
           </div>
           <p className="text-xs text-slate-400 mb-3 line-clamp-1">{station.description}</p>
           
-          {/* Current broadcast status block */}
-          <div className="p-3 bg-slate-950/60 rounded-xl border border-white/3 shadow-inner">
-            <div className="text-[8px] text-rose-400 font-extrabold uppercase tracking-widest mb-1 flex items-center gap-1">
-              <Radio className="w-2.5 h-2.5 animate-pulse" />
-              On Air Now:
+          {isLive && (
+            <div className="p-3 bg-slate-950/60 rounded-xl border border-white/5 shadow-inner">
+              <div className="text-[8px] text-rose-400 font-extrabold uppercase tracking-widest mb-1 flex items-center gap-1">
+                <Radio className="w-2.5 h-2.5 animate-pulse" />
+                On Air Now:
+              </div>
+              <div className="text-xs font-bold text-slate-200 truncate">
+                {station.current_track_title || 'Live Program'}
+              </div>
+              <div className="text-[10px] text-slate-400 truncate">
+                By {station.current_track_artist || 'Broadcaster'}
+              </div>
             </div>
-            <div className="text-xs font-bold text-slate-200 truncate">
-              {station.is_online === false ? 'Offline' : (station.current_track_title || 'Live Program')}
-            </div>
-            <div className="text-[10px] text-slate-400 truncate">
-              {station.is_online === false ? 'No active broadcast' : `By ${station.current_track_artist || 'Broadcaster'}`}
-            </div>
-          </div>
+          )}
         </div>
       </div>
 
-      {/* Expandable Station Details tray */}
       {showDetails && (
         <div 
           onClick={(e) => e.stopPropagation()} 
-          className="mt-4 p-3.5 bg-slate-950/40 rounded-2xl border border-white/3 text-[11px] text-slate-300 space-y-3 font-sans cursor-default"
+          className="relative z-10 mt-4 p-3.5 bg-slate-950/40 rounded-2xl border border-white/5 text-[11px] text-slate-300 space-y-3 font-sans cursor-default"
         >
           {/* Location details */}
           {(station.street_address || station.city || station.country) && (
@@ -197,26 +198,34 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
         </div>
       )}
 
-      {/* Footer stats block */}
-      <div className="mt-4 pt-3.5 border-t border-white/3 flex items-center justify-between text-[10px] text-slate-500 font-bold">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1">
-            <Users className="w-3.5 h-3.5 text-slate-400" />
-            <span>{station.is_online === false ? '0' : (station.listeners_count?.toLocaleString() || '1.2K')} tuning in</span>
+      {/* Footer */}
+      <div className="relative z-10 mt-4 pt-3.5 border-t border-white/5 space-y-2.5 text-[10px] text-slate-500 font-bold">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1">
+              <Users className="w-3.5 h-3.5 text-slate-400" />
+              <span>{station.is_online === false ? '0' : (station.listeners_count?.toLocaleString() || '1.2K')} tuning in</span>
+            </div>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowDetails(!showDetails);
+              }}
+              className="text-[9px] font-bold text-rose-455 hover:text-rose-400 uppercase transition tracking-wider flex items-center gap-0.5"
+            >
+              {showDetails ? 'Hide Info' : 'View Info'}
+            </button>
           </div>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowDetails(!showDetails);
-            }}
-            className="text-[9px] font-bold text-rose-455 hover:text-rose-400 uppercase transition tracking-wider flex items-center gap-0.5"
-          >
-            {showDetails ? 'Hide Info' : 'View Info'}
-          </button>
+          <span className="bg-slate-900 border border-white/5 text-slate-400 font-bold px-2 py-0.5 rounded-md text-[8px] uppercase">
+            {station.category || 'Uncategorized'}
+          </span>
         </div>
-        <span className="bg-slate-900 border border-white/3 text-slate-400 font-bold px-2 py-0.5 rounded-md text-[8px] uppercase">
-          {station.category || 'Uncategorized'}
-        </span>
+        <div className="flex items-center gap-1.5 min-w-0 text-slate-400 font-semibold">
+          <MapPin className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+          <span className="truncate">
+            {station.city ? `${station.city}, ${station.country || ''}` : 'No location set'}
+          </span>
+        </div>
       </div>
     </div>
   );

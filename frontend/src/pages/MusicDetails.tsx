@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { 
-  Play, Heart, Share2, Music, AlignLeft,
+  Play, Heart, Share2, Music, AlignLeft, Disc,
   MessageSquare, Send
 } from 'lucide-react';
 import { useAudio, Track } from '../context/AudioContext';
@@ -60,11 +60,16 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate })
     { label: 'Bit Depth', value: track.bit_depth ? `${track.bit_depth}-bit` : 'Unknown' },
   ];
 
+  const detailCardClass =
+    'bg-slate-900/20 border border-white/5 p-6 rounded-3xl h-full flex flex-col gap-4 min-h-[320px]';
+  const detailCardHeaderClass =
+    'text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5 shrink-0';
+
   return (
     <div className="space-y-10 w-full overflow-x-hidden">
       
-      <section className="flex flex-col md:flex-row gap-8 items-center md:items-end">
-        <div className="w-56 h-56 bg-slate-900 border border-white/5 rounded-3xl overflow-hidden shadow-2xl flex-shrink-0 relative group">
+      <section className="flex flex-col sm:flex-row gap-6 sm:gap-8 items-center sm:items-start">
+        <div className="w-48 h-48 sm:w-56 sm:h-56 bg-slate-900 border border-white/5 rounded-3xl overflow-hidden shadow-2xl flex-shrink-0 relative group">
           <img src={track.cover_art_url} alt="Cover" className="w-full h-full object-cover" />
           <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
             <button 
@@ -76,53 +81,54 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate })
             </button>
           </div>
         </div>
-        
-        <div className="text-center md:text-left space-y-3 flex-1 min-w-0">
-          <h1 className="text-3xl md:text-5xl font-extrabold text-gradient-premium tracking-tight leading-tight">
-            {track.title}
-          </h1>
-          <p className="text-sm text-slate-350 font-bold">
-            Artist: <span className="text-slate-100">{track.artist_name}</span>
-          </p>
-          {track.album_title && (
-            <p className="text-xs text-slate-450 font-semibold">Album: {track.album_title}</p>
-          )}
+
+        <div className="flex-1 min-w-0 w-full text-center sm:text-left space-y-5">
+          <div className="space-y-2">
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-gradient-premium tracking-tight leading-tight">
+              {track.title}
+            </h1>
+            <p className="text-sm text-slate-350 font-bold">
+              Artist: <span className="text-slate-100">{track.artist_name}</span>
+            </p>
+            {track.album_title && (
+              <p className="text-xs text-slate-450 font-semibold">Album: {track.album_title}</p>
+            )}
+          </div>
+
+          <div className="flex gap-3 items-center justify-center sm:justify-start">
+            <button
+              onClick={() => playTrack(track)}
+              className="px-6 py-3.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md shadow-rose-600/25 transition"
+            >
+              <Play className="w-4 h-4 fill-current" />
+              Play
+            </button>
+            <button
+              onClick={() => toggleFavorite(track.id)}
+              className={`p-3 bg-slate-900 border border-white/5 rounded-xl transition ${
+                isFav ? 'text-rose-500 hover:text-rose-455' : 'text-slate-400 hover:text-white'
+              }`}
+              title={isFav ? "Remove from Favorites" : "Add to Favorites"}
+            >
+              <Heart className={`w-4 h-4 ${isFav ? 'fill-current' : ''}`} />
+            </button>
+            <button
+              className="p-3 bg-slate-900 border border-white/5 rounded-xl text-slate-400 hover:text-white transition"
+              title="Share Link"
+            >
+              <Share2 className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </section>
 
-      <section className="flex gap-3.5 items-center justify-center md:justify-start">
-        <button
-          onClick={() => playTrack(track)}
-          className="px-6 py-3.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md shadow-rose-600/25 transition"
-        >
-          <Play className="w-4 h-4 fill-current" />
-          Play
-        </button>
-        <button
-          onClick={() => toggleFavorite(track.id)}
-          className={`p-3 bg-slate-900 border border-white/5 rounded-xl transition ${
-            isFav ? 'text-rose-500 hover:text-rose-455' : 'text-slate-400 hover:text-white'
-          }`}
-          title={isFav ? "Remove from Favorites" : "Add to Favorites"}
-        >
-          <Heart className={`w-4 h-4 ${isFav ? 'fill-current' : ''}`} />
-        </button>
-        <button
-          className="p-3 bg-slate-900 border border-white/5 rounded-xl text-slate-400 hover:text-white transition"
-          title="Share Link"
-        >
-          <Share2 className="w-4 h-4" />
-        </button>
-      </section>
-
-      <section className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-        <div className="lg:col-span-5 space-y-6">
-          <div className="bg-slate-900/20 border border-white/5 p-6 rounded-3xl space-y-4">
-            <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest">
-              Track Info
+      <section className="grid grid-cols-1 lg:grid-cols-12 gap-6 lg:gap-8 items-stretch">
+        <div className="lg:col-span-5 flex">
+          <div className={`${detailCardClass} w-full`}>
+            <h3 className={detailCardHeaderClass}>
+              <Disc className="w-4 h-4" /> Track Info
             </h3>
-            
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs bg-slate-950/45 p-4 border border-white/3 rounded-2xl shadow-inner font-sans">
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs flex-1 content-start font-sans">
               {metadataRows.map(({ label, value }) => (
                 <div key={label} className="space-y-1">
                   <dt className="text-[10px] text-slate-500 font-bold uppercase">{label}</dt>
@@ -133,19 +139,21 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate })
           </div>
         </div>
 
-        <div className="lg:col-span-7 bg-slate-900/10 border border-white/3 p-6 rounded-3xl space-y-4">
-          <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
-            <AlignLeft className="w-4 h-4" /> Lyrics
-          </h3>
-          <div className="space-y-4 text-xs font-medium text-slate-350 leading-relaxed whitespace-pre-line">
-            {track.lyrics ? track.lyrics : (
-              <p className="text-slate-500 italic">Lyrics not available for this track.</p>
-            )}
+        <div className="lg:col-span-7 flex">
+          <div className={`${detailCardClass} w-full`}>
+            <h3 className={detailCardHeaderClass}>
+              <AlignLeft className="w-4 h-4" /> Lyrics
+            </h3>
+            <div className="flex-1 min-h-0 text-xs font-medium text-slate-350 leading-relaxed whitespace-pre-line overflow-y-auto">
+              {track.lyrics ? track.lyrics : (
+                <p className="text-slate-500 italic">Lyrics not available for this track.</p>
+              )}
+            </div>
           </div>
         </div>
       </section>
 
-      <section className="bg-slate-900/15 border border-white/3 p-6 rounded-3xl space-y-6">
+      <section className="bg-slate-900/15 border border-white/5 p-6 rounded-3xl space-y-6">
         <h3 className="text-base font-extrabold text-white flex items-center gap-2">
           <MessageSquare className="w-5 h-5 text-rose-400" /> Comments
         </h3>
@@ -163,16 +171,16 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate })
             className="p-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl transition flex-shrink-0"
             title="Post Comment"
           >
-            <Send className="w-4.5 h-4.5" />
+            <Send className="w-4 h-4" />
           </button>
         </form>
 
-        <div className="space-y-4">
+        <div className="space-y-3">
           {comments.map((c, idx) => (
-            <div key={idx} className="bg-slate-900/25 border border-white/3 p-4.5 rounded-2xl space-y-2">
-              <div className="flex justify-between items-center text-[10px] font-bold">
-                <span className="text-slate-200">{c.author}</span>
-                <span className="text-slate-500">{c.time}</span>
+            <div key={idx} className="bg-slate-900/25 border border-white/5 rounded-2xl px-4 py-3 space-y-2">
+              <div className="flex justify-between items-center gap-3 text-[10px] font-bold">
+                <span className="text-slate-200 truncate">{c.author}</span>
+                <span className="text-slate-500 flex-shrink-0">{c.time}</span>
               </div>
               <p className="text-xs text-slate-400 leading-relaxed font-medium">{c.text}</p>
             </div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Radio as RadioIcon, RadioIcon as LiveIcon, Plus, RefreshCw, Sparkles, X, Users, Calendar, Play, Pause, Wifi } from 'lucide-react';
+import { Radio as RadioIcon, RadioIcon as LiveIcon, Plus, RefreshCw, Sparkles, X, Users, Calendar, Play, Pause, Wifi, MapPin } from 'lucide-react';
 import { useAudio, RadioStation } from '../context/AudioContext';
 import { useAuth } from '../context/AuthContext';
 import { RadioCard } from '../components/shared/RadioCard';
@@ -535,16 +535,18 @@ export const Radio: React.FC = () => {
                       </div>
                       </div>
 
-                      {/* Now Playing strip */}
-                      <div className="mx-5 mb-4 bg-slate-950/60 border border-white/5 rounded-2xl px-4 py-3 space-y-0.5">
-                        <p className="text-[9px] text-rose-455 font-extrabold uppercase tracking-widest">Now On Air</p>
-                        <p className="text-sm font-extrabold text-white truncate leading-snug animate-color-shift">
-                          {st.current_program_title || activeProg?.title || 'N/A (Default Broadcast)'}
-                        </p>
-                        <p className="text-[10px] text-rose-400 font-semibold">
-                          {st.rj_name ? `RJ ${st.rj_name}` : activeProg?.rj ? `RJ ${activeProg.rj}` : 'No RJ Scheduled'}
-                        </p>
-                      </div>
+                      {/* Now Playing strip — only when live broadcasting */}
+                      {isLive && (
+                        <div className="mx-5 mb-4 bg-slate-950/60 border border-white/5 rounded-2xl px-4 py-3 space-y-0.5">
+                          <p className="text-[9px] text-rose-455 font-extrabold uppercase tracking-widest">Now On Air</p>
+                          <p className="text-sm font-extrabold text-white truncate leading-snug animate-color-shift">
+                            {st.current_program_title || activeProg?.title || 'N/A (Default Broadcast)'}
+                          </p>
+                          <p className="text-[10px] text-rose-400 font-semibold">
+                            {st.rj_name ? `RJ ${st.rj_name}` : activeProg?.rj ? `RJ ${activeProg.rj}` : 'No RJ Scheduled'}
+                          </p>
+                        </div>
+                      )}
 
                       {/* Stats Row */}
                       <div className="grid grid-cols-3 gap-0 border-t border-white/5 font-sans">
@@ -620,6 +622,13 @@ export const Radio: React.FC = () => {
                           )}
                         </div>
                       )}
+
+                      <div className="px-5 py-3 border-t border-white/5 flex items-center gap-1.5 text-[10px] text-slate-400 min-w-0">
+                        <MapPin className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                        <span className="truncate">
+                          {st.city ? `${st.city}, ${st.country || ''}` : 'No location set'}
+                        </span>
+                      </div>
 
                       {/* Schedule editor modal for this station */}
                       {editingStationId === st.id && createPortal(

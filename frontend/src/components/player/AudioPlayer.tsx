@@ -220,77 +220,79 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
         </div>
 
         {/* Desktop: Primary media controls */}
-        <div className="hidden md:flex flex-col items-center gap-2.5 flex-1 max-w-2xl px-4">
-          <div className="flex items-center gap-6">
-            <button 
-              onClick={toggleShuffle} 
-              disabled={isRadioSync || isAdminMode}
-              className={`transition ${isShuffle ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'} disabled:opacity-30`}
-              title="Shuffle Queue"
-            >
-              <Shuffle className="w-4 h-4" />
-            </button>
+        <div className="hidden md:flex flex-1 items-center justify-center min-w-0 px-4">
+          <div className="inline-flex flex-col items-center gap-2.5">
+            <div className="flex items-center justify-center gap-6">
+              <button 
+                onClick={toggleShuffle} 
+                disabled={isRadioSync || isAdminMode}
+                className={`transition ${isShuffle ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'} disabled:opacity-30`}
+                title="Shuffle Queue"
+              >
+                <Shuffle className="w-4 h-4" />
+              </button>
 
-            <button 
-              onClick={playPrevious} 
-              disabled={isRadioSync || isAdminMode}
-              className="text-slate-400 hover:text-white transition disabled:opacity-30"
-              title="Previous"
-            >
-              <SkipBack className="w-5 h-5 fill-current" />
-            </button>
+              <button 
+                onClick={playPrevious} 
+                disabled={isRadioSync || isAdminMode}
+                className="text-slate-400 hover:text-white transition disabled:opacity-30"
+                title="Previous"
+              >
+                <SkipBack className="w-5 h-5 fill-current" />
+              </button>
 
-            <button
-              onClick={togglePlay}
-              disabled={isOffline}
-              className="w-11 h-11 bg-white hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none active:scale-95 rounded-full flex items-center justify-center text-slate-950 font-bold shadow-md hover:shadow-rose-500/10 transition-all duration-300"
-              title={isOffline ? "Station Offline" : isPlaying ? "Pause" : "Play"}
-            >
-              {isPlaying ? <Pause className="w-5 h-5 fill-current text-slate-950" /> : <Play className="w-5 h-5 fill-current text-slate-950 ml-0.5" />}
-            </button>
+              <button
+                onClick={togglePlay}
+                disabled={isOffline}
+                className="w-11 h-11 bg-white hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none active:scale-95 rounded-full flex items-center justify-center text-slate-950 font-bold shadow-md hover:shadow-rose-500/10 transition-all duration-300"
+                title={isOffline ? "Station Offline" : isPlaying ? "Pause" : "Play"}
+              >
+                {isPlaying ? <Pause className="w-5 h-5 fill-current text-slate-950" /> : <Play className="w-5 h-5 fill-current text-slate-950 ml-0.5" />}
+              </button>
 
-            <button 
-              onClick={playNext} 
-              disabled={isRadioSync || isAdminMode}
-              className="text-slate-400 hover:text-white transition disabled:opacity-30"
-              title="Next"
-            >
-              <SkipForward className="w-5 h-5 fill-current" />
-            </button>
+              <button 
+                onClick={playNext} 
+                disabled={isRadioSync || isAdminMode}
+                className="text-slate-400 hover:text-white transition disabled:opacity-30"
+                title="Next"
+              >
+                <SkipForward className="w-5 h-5 fill-current" />
+              </button>
 
-            <button 
-              onClick={() => {
-                if (repeatMode === 'none') setRepeatMode('all');
-                else if (repeatMode === 'all') setRepeatMode('one');
-                else setRepeatMode('none');
-              }} 
-              disabled={isRadioSync || isAdminMode}
-              className={`transition relative ${repeatMode !== 'none' ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'} disabled:opacity-30`}
-              title={`Repeat Mode: ${repeatMode}`}
-            >
-              <Repeat className="w-4 h-4" />
-              {repeatMode === 'one' && (
-                <span className="absolute -top-1.5 -right-1.5 text-[8px] bg-rose-500 text-white font-extrabold w-3 h-3 rounded-full flex items-center justify-center font-sans">1</span>
-              )}
-            </button>
-          </div>
+              <button 
+                onClick={() => {
+                  if (repeatMode === 'none') setRepeatMode('all');
+                  else if (repeatMode === 'all') setRepeatMode('one');
+                  else setRepeatMode('none');
+                }} 
+                disabled={isRadioSync || isAdminMode}
+                className={`transition relative ${repeatMode !== 'none' ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'} disabled:opacity-30`}
+                title={`Repeat Mode: ${repeatMode}`}
+              >
+                <Repeat className="w-4 h-4" />
+                {repeatMode === 'one' && (
+                  <span className="absolute -top-1.5 -right-1.5 text-[8px] bg-rose-500 text-white font-extrabold w-3 h-3 rounded-full flex items-center justify-center font-sans">1</span>
+                )}
+              </button>
+            </div>
 
-          <div className="w-full flex items-center gap-3 text-[10px] text-slate-500 font-bold font-sans">
-            <span className="w-14 text-right tabular-nums">
-              {isRadioSync ? format24hTime(secondsSinceMidnight) : formatTime(currentTime)}
-            </span>
-            <input 
-              type="range" 
-              min="0"
-              max={isRadioSync ? 86400 : (duration || 100)}
-              value={isRadioSync ? secondsSinceMidnight : currentTime}
-              onChange={(e) => seek(parseFloat(e.target.value))}
-              disabled={isRadioSync}
-              className="w-full accent-rose-500 h-1 bg-slate-800 rounded-lg outline-none cursor-pointer audio-knob"
-            />
-            <span className="w-14 text-left tabular-nums">
-              {isRadioSync ? "24:00:00" : formatTime(duration)}
-            </span>
+            <div className={`flex items-center gap-1.5 text-slate-500 font-bold font-sans ${isRadioSync ? 'w-[15rem]' : 'w-[13.5rem]'}`}>
+              <span className={`shrink-0 text-right tabular-nums ${isRadioSync ? 'w-11 text-[9px]' : 'w-9 text-[10px]'}`}>
+                {isRadioSync ? format24hTime(secondsSinceMidnight) : formatTime(currentTime)}
+              </span>
+              <input 
+                type="range" 
+                min="0"
+                max={isRadioSync ? 86400 : (duration || 100)}
+                value={isRadioSync ? secondsSinceMidnight : currentTime}
+                onChange={(e) => seek(parseFloat(e.target.value))}
+                disabled={isRadioSync}
+                className="flex-1 min-w-0 accent-rose-500 h-1 bg-slate-800 rounded-lg outline-none cursor-pointer audio-knob"
+              />
+              <span className={`shrink-0 text-left tabular-nums ${isRadioSync ? 'w-11 text-[9px]' : 'w-9 text-[10px]'}`}>
+                {isRadioSync ? "24:00:00" : formatTime(duration)}
+              </span>
+            </div>
           </div>
         </div>
 
