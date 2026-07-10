@@ -302,12 +302,12 @@
 
 @keyframes slide-down {
   from {
-    transform: translateY(0);
-    opacity: 1;
+    transform: translateY(-8px);
+    opacity: 0;
   }
   to {
-    transform: translateY(100%);
-    opacity: 0.9;
+    transform: translateY(0);
+    opacity: 1;
   }
 }
 .animate-slide-down {
