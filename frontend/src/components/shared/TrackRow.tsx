@@ -1,5 +1,5 @@
 import React from 'react';
-import { Play, Plus, Heart, HelpCircle, ShieldCheck, Disc } from 'lucide-react';
+import { Play, Plus, Heart, HelpCircle, ShieldCheck, Disc, Trash2 } from 'lucide-react';
 import { useAudio, Track } from '../../context/AudioContext';
 import { AddToPlaylistButton } from './AddToPlaylistButton';
 
@@ -8,9 +8,10 @@ interface TrackRowProps {
   index: number;
   onViewReport?: (track: Track) => void;
   onViewDetails?: (track: Track) => void;
+  onRemove?: () => void;
 }
 
-export const TrackRow: React.FC<TrackRowProps> = ({ track, index, onViewReport, onViewDetails }) => {
+export const TrackRow: React.FC<TrackRowProps> = ({ track, index, onViewReport, onViewDetails, onRemove }) => {
   const { playTrack, addToQueue, toggleFavorite, favorites, currentTrack, isPlaying } = useAudio();
 
   const isCurrent = currentTrack?.id === track.id;
@@ -95,8 +96,21 @@ export const TrackRow: React.FC<TrackRowProps> = ({ track, index, onViewReport, 
           </button>
 
           <div onClick={(e) => e.stopPropagation()}>
-            <AddToPlaylistButton track={track} />
+            {!onRemove && <AddToPlaylistButton track={track} />}
           </div>
+
+          {onRemove && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onRemove();
+              }}
+              className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-500 hover:text-rose-400 transition"
+              title="Remove from playlist"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
 
           {onViewReport && (
             <button

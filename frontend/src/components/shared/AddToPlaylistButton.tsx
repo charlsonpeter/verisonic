@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { FolderHeart, Plus, Loader2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { Track } from '../../context/AudioContext';
-import { showError, showSuccess } from '../../utils/swal';
+import { toastError, toastSuccess } from '../../utils/toast';
 
 interface PlaylistOption {
   id: number;
@@ -80,14 +80,14 @@ export const AddToPlaylistButton: React.FC<AddToPlaylistButtonProps> = ({ track 
       if (res.ok) {
         const updated = await res.json();
         setPlaylists(prev => prev.map(p => (p.id === playlistId ? updated : p)));
-        showSuccess('Added to playlist', `Track added to "${updated.name}".`);
+        toastSuccess(`Added to "${updated.name}"`);
         setOpen(false);
       } else {
         const data = await res.json().catch(() => ({}));
-        showError('Could not add track', data.detail || 'Please try again.');
+        toastError(data.detail || 'Could not add track.');
       }
     } catch {
-      showError('Could not add track', 'Network error.');
+      toastError('Could not add track.');
     } finally {
       setIsAdding(null);
     }
@@ -106,7 +106,7 @@ export const AddToPlaylistButton: React.FC<AddToPlaylistButtonProps> = ({ track 
       });
       if (!createRes.ok) {
         const data = await createRes.json().catch(() => ({}));
-        showError('Could not create playlist', data.detail || 'Please try again.');
+        toastError(data.detail || 'Could not create playlist.');
         return;
       }
       const created = await createRes.json();
@@ -114,7 +114,7 @@ export const AddToPlaylistButton: React.FC<AddToPlaylistButtonProps> = ({ track 
       await addToPlaylist(created.id);
       await loadPlaylists();
     } catch {
-      showError('Could not create playlist', 'Network error.');
+      toastError('Could not create playlist.');
     } finally {
       setIsCreating(false);
     }

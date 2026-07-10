@@ -3,7 +3,7 @@ import { Play, Disc, Plus, Trash2, FolderHeart, Loader2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio, Track } from '../context/AudioContext';
 import { TrackRow } from '../components/shared/TrackRow';
-import { showConfirm, showError, showSuccess } from '../utils/swal';
+import { toastError, toastSuccess } from '../utils/toast';
 
 interface PlaylistData {
   id: number;
@@ -83,13 +83,13 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
         setNewPlaylistName('');
         await fetchPlaylists();
         setSelectedId(created.id);
-        showSuccess('Playlist created', `"${created.name}" is ready.`);
+        toastSuccess(`"${created.name}" created`);
       } else {
         const data = await res.json().catch(() => ({}));
-        showError('Create failed', data.detail || 'Could not create playlist.');
+        toastError(data.detail || 'Could not create playlist.');
       }
     } catch {
-      showError('Create failed', 'Network error.');
+      toastError('Could not create playlist.');
     } finally {
       setIsCreating(false);
     }
@@ -97,25 +97,20 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
 
   const handleDeletePlaylist = async () => {
     if (!selected || !token) return;
-    const confirmed = await showConfirm(
-      'Delete playlist?',
-      `Remove "${selected.name}" and all its tracks from your library?`,
-      'Delete'
-    );
-    if (!confirmed) return;
+    const name = selected.name;
     try {
       const res = await fetch(`/api/playlist/${selected.id}`, {
         method: 'DELETE',
         headers: authHeaders(),
       });
       if (res.ok) {
-        showSuccess('Playlist deleted');
+        toastSuccess(`"${name}" deleted`);
         await fetchPlaylists();
       } else {
-        showError('Delete failed', 'Could not delete playlist.');
+        toastError('Could not delete playlist.');
       }
     } catch {
-      showError('Delete failed', 'Network error.');
+      toastError('Could not delete playlist.');
     }
   };
 
@@ -129,11 +124,12 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
       if (res.ok) {
         const updated: PlaylistData = await res.json();
         setPlaylists(prev => prev.map(p => (p.id === updated.id ? updated : p)));
+        toastSuccess('Track removed');
       } else {
-        showError('Remove failed', 'Could not remove track from playlist.');
+        toastError('Could not remove track.');
       }
     } catch {
-      showError('Remove failed', 'Network error.');
+      toastError('Could not remove track.');
     }
   };
 
@@ -273,22 +269,14 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
               ) : (
                 <div className="space-y-2 bg-slate-900/10 border border-white/3 p-4 rounded-3xl">
                   {selected.tracks.map((track, idx) => (
-                    <div key={track.id} className="relative group/row">
-                      <TrackRow
-                        track={track}
-                        index={idx}
-                        onViewReport={onViewReport}
-                        onViewDetails={onViewDetails}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveTrack(track.id)}
-                        className="absolute right-14 top-1/2 -translate-y-1/2 p-1.5 rounded-lg opacity-0 group-hover/row:opacity-100 bg-slate-900 border border-white/5 text-slate-500 hover:text-rose-400 transition z-10"
-                        title="Remove from playlist"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                    <TrackRow
+                      key={track.id}
+                      track={track}
+                      index={idx}
+                      onViewReport={onViewReport}
+                      onViewDetails={onViewDetails}
+                      onRemove={() => handleRemoveTrack(track.id)}
+                    />
                   ))}
                 </div>
               )}
