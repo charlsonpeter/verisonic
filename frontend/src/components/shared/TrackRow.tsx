@@ -63,16 +63,6 @@ export const TrackRow: React.FC<TrackRowProps> = ({ track, index, onViewReport, 
         {track.album_title || 'Single'}
       </div>
 
-      {/* Badges block */}
-      <div className="hidden sm:flex items-center gap-3 px-4">
-        {track.approved && (
-          <span className="flex items-center gap-0.5 text-[9px] text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/15 rounded-full px-1.5 py-0.2" title="Acoustic Authenticity Verified">
-            <ShieldCheck className="w-3 h-3" />
-            Master
-          </span>
-        )}
-      </div>
-
       {/* Duration and quick settings */}
       <div className="flex items-center gap-4">
         <span className="text-[10px] text-slate-500 font-bold">

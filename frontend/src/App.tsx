@@ -183,6 +183,9 @@ function DashboardContent() {
     setActiveTab('details');
   };
 
+  const canViewAcousticReport = !!currentUser && ['admin', 'studio_admin'].includes(currentUser.role);
+  const viewReportHandler = canViewAcousticReport ? viewQualityReport : undefined;
+
   // Helper circle chart render
   const renderCircularProgress = (score: number) => {
     const radius = 55;
@@ -217,7 +220,7 @@ function DashboardContent() {
       case 'landing':
         return <LandingPage onNavigate={setActiveTab} />;
       case 'home':
-        return <Home onNavigate={setActiveTab} onViewReport={viewQualityReport} onViewDetails={handleDetailsView} />;
+        return <Home onNavigate={setActiveTab} onViewReport={viewReportHandler} onViewDetails={handleDetailsView} />;
       case 'discover':
         return <Discover onNavigate={setActiveTab} />;
       case 'radio':
@@ -225,20 +228,20 @@ function DashboardContent() {
       case 'search':
         return (
           <SearchPage 
-            onViewReport={viewQualityReport} 
+            onViewReport={viewReportHandler} 
             onViewDetails={handleDetailsView}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
           />
         );
       case 'favorites':
-        return <UserProfile onViewReport={viewQualityReport} onViewDetails={handleDetailsView} />;
+        return <UserProfile onViewReport={viewReportHandler} onViewDetails={handleDetailsView} />;
       case 'playlists':
-        return <PlaylistPage onViewReport={viewQualityReport} onViewDetails={handleDetailsView} />;
+        return <PlaylistPage onViewReport={viewReportHandler} onViewDetails={handleDetailsView} />;
       case 'details':
         return <MusicDetails track={selectedDetailsTrack} onNavigate={setActiveTab} />;
       case 'profile':
-        return <UserProfile onViewReport={viewQualityReport} onViewDetails={handleDetailsView} />;
+        return <UserProfile onViewReport={viewReportHandler} onViewDetails={handleDetailsView} />;
       case 'station-profile':
         return <StationProfile onNavigate={setActiveTab} />;
       case 'studio-profile':

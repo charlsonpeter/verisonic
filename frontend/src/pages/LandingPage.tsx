@@ -305,12 +305,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
               </div>
               <h4 className="font-bold text-white text-xs truncate mb-0.5">{track.title}</h4>
               <p className="text-[10px] text-slate-450 truncate">{track.artist_name}</p>
-              <div className="flex items-center justify-between mt-2.5 pt-2.5 border-t border-white/3">
-                <span className="text-[9px] font-extrabold text-rose-455 bg-rose-500/10 px-2 py-0.5 rounded-full border border-rose-500/15 uppercase">
-                  Studio Quality
-                </span>
-                <span className="text-[9px] text-slate-500 font-bold">{track.quality_score}/100</span>
-              </div>
             </div>
           ))}
         </div>

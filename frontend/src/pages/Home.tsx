@@ -198,9 +198,6 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewReport, onViewDeta
                   <h4 className="text-xs font-bold text-slate-200 truncate">{track.title}</h4>
                   <p className="text-[10px] text-slate-400 truncate mt-0.5">{track.artist_name}</p>
                 </div>
-                <span className="text-[9px] font-bold text-slate-450 bg-slate-950/40 border border-white/5 px-2.5 py-1 rounded-lg">
-                  {track.quality_score ? `${track.quality_score}% Hi-Fi` : 'N/A'}
-                </span>
               </div>
             ))}
           </div>
