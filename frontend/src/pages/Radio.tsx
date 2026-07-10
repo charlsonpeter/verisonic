@@ -585,7 +585,7 @@ export const Radio: React.FC = () => {
                               <div className="space-y-1">
                                 <h4 className="text-xs font-bold text-rose-400 uppercase tracking-widest">Stream Ingestion Node</h4>
                                 <p className="text-[11px] text-slate-405 leading-normal">
-                                  Copy your personal stream key into the PyQt5 desktop broadcaster or your encoder to go live.
+                                  Copy your personal stream key into the Desktop Broadcaster app to go live.
                                 </p>
                               </div>
 
