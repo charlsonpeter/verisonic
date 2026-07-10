@@ -77,8 +77,8 @@ docker compose up --build
 ```
 
 #### Running Endpoints:
-* **Web Portal (Frontend)**: [http://localhost](http://localhost) (Proxied via Nginx)
-* **Backend API Documentation**: [http://localhost/api/docs](http://localhost/api/docs)
+* **Web Portal (Frontend)**: [http://localhost:3000](http://localhost:3000) (Proxied via Nginx)
+* **Backend API Documentation**: [http://localhost:3000/docs](http://localhost:3000/docs)
 * **MinIO Console (S3 Storage)**: [http://localhost:9001](http://localhost:9001) (User: `minioadmin` / Pass: `minioadmin`)
 
 ---

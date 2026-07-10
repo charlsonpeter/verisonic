@@ -37,18 +37,7 @@ export const Settings: React.FC = () => {
         }
       }
     } catch (e) {
-      console.warn("Failed to load user station details for settings. Loading mock station.");
-      if (currentUser) {
-        setStation({
-          id: 1,
-          name: "Mock Broadcaster FM",
-          description: "Studio Master High-Fidelity continuous live node stream.",
-          owner_id: currentUser.id,
-          stream_key: "rs_key_mock_secret_stream_token_1234567890",
-          stream_url: "https://pub1.freefm.lk/1.aac",
-          is_active: true
-        });
-      }
+      console.warn("Failed to load user station details for settings.", e);
     }
   };
 

@@ -179,6 +179,26 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
 
+  useEffect(() => {
+    if (!token) {
+      setFavorites([]);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/favorites`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const tracks = await res.json();
+          setFavorites(tracks.map((t: Track) => t.id));
+        }
+      } catch (e) {
+        console.warn('Failed to load favorites:', e);
+      }
+    })();
+  }, [token]);
+
   const fadeVolume = (targetVolume: number, durationMs: number): Promise<void> => {
     return new Promise((resolve) => {
       if (!audioRef.current) {
@@ -292,30 +312,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               }
             }
           } catch (e) {
-            console.warn("Failed to load radio admin station on admin mode enter. Using mock fallback.");
-            const mockStation = {
-              id: 1,
-              name: "Mock Broadcaster FM",
-              description: "Virtual broadcast stream for offline testing.",
-              owner_id: currentUser.id,
-              stream_url: "https://pub1.freefm.lk/1.aac",
-              is_active: true
-            };
-            setActiveRadioStation(mockStation);
-            setIsRadioSync(true);
-            const virtualTrack: Track = {
-              id: mockStation.id * 100,
-              title: "Standby Broadcast",
-              artist_name: mockStation.name,
-              duration: 0,
-              stream_url: mockStation.stream_url
-            };
-            setCurrentTrack(virtualTrack);
-            if (audioRef.current && mockStation.stream_url) {
-              audioRef.current.src = resolveStreamUrl(mockStation.stream_url);
-              audioRef.current.pause();
-            }
-            setIsPlaying(false);
+            console.warn("Failed to load radio admin station on admin mode enter.", e);
           }
         };
         loadBroadcasterStation();
@@ -334,6 +331,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const onPlay = () => {
       setIsPlaying(true);
       audio.playbackRate = playbackSpeedRef.current;
+      const track = currentTrackRef.current;
+      if (track && token && !activeRadioStationRef.current && track.id < 100000) {
+        fetch(`${API_URL}/music/${track.id}/play`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` }
+        }).catch(() => {});
+      }
       // Tell Chrome Android this page is actively playing media — required for background audio
       if ('mediaSession' in navigator) {
         navigator.mediaSession.playbackState = 'playing';
@@ -983,16 +987,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         throw new Error();
       }
     } catch (e) {
-      // Offline mock radio streaming fallback
-      const fallbackUrl = station.stream_url || 'https://pub1.freefm.lk/1.aac';
-      const virtualTrack: Track = {
-        id: station.id * 100,
-        title: station.current_track_title || "Live stream broadcast",
-        artist_name: station.current_track_artist || station.name,
-        duration: 0,
-        stream_url: fallbackUrl
-      };
-      playTrack(virtualTrack, true);
+      showError("Station Offline", "This radio station is currently offline.");
+      setActiveRadioStation(null);
+      setIsRadioSync(false);
     }
   };
 
@@ -1107,10 +1104,20 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const toggleShuffle = () => setIsShuffle(!isShuffle);
 
-  const toggleFavorite = (trackId: number) => {
+  const toggleFavorite = async (trackId: number) => {
+    const isFav = favorites.includes(trackId);
     setFavorites(prev =>
-      prev.includes(trackId) ? prev.filter(id => id !== trackId) : [...prev, trackId]
+      isFav ? prev.filter(id => id !== trackId) : [...prev, trackId]
     );
+    if (!token) return;
+    try {
+      await fetch(`${API_URL}/favorites/${trackId}`, {
+        method: isFav ? 'DELETE' : 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+    } catch (e) {
+      console.warn('Failed to sync favorite:', e);
+    }
   };
 
   const addToQueue = (track: Track) => {

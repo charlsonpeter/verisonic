@@ -64,6 +64,36 @@ except ImportError:
 # Define fixed server stream URL (with env override)
 DEFAULT_SERVER_URL = os.environ.get("VERISONIC_SERVER_URL", "ws://54.66.243.141:3000/api/radio/stream/ws")
 
+
+def _config_cipher_key() -> bytes:
+    import hashlib
+    import platform
+    seed = f"{platform.node()}:{platform.system()}:verisonic".encode()
+    return hashlib.sha256(seed).digest()
+
+
+def _encode_config_value(value: str) -> str:
+    import base64
+    if not value:
+        return ""
+    key = _config_cipher_key()
+    raw = value.encode("utf-8")
+    obfuscated = bytes(b ^ key[i % len(key)] for i, b in enumerate(raw))
+    return base64.urlsafe_b64encode(obfuscated).decode("ascii")
+
+
+def _decode_config_value(value: str) -> str:
+    import base64
+    if not value:
+        return ""
+    try:
+        key = _config_cipher_key()
+        raw = base64.urlsafe_b64decode(value.encode("ascii"))
+        plain = bytes(b ^ key[i % len(key)] for i, b in enumerate(raw))
+        return plain.decode("utf-8")
+    except Exception:
+        return ""
+
 # AudioStreamTrack is only needed if we ever do full WebRTC ingest in future
 if USE_WEBRTC:
     class AudioStreamTrack(MediaStreamTrack):
@@ -430,16 +460,27 @@ class PyQtBroadcasterApp(QMainWindow):
                     config = json.load(f)
                     self.saved_email = config.get("email", "")
                     self.saved_bitrate = config.get("bitrate", 320)
+                    enc_access = config.get("access_token_enc", "")
+                    enc_refresh = config.get("refresh_token_enc", "")
+                    if enc_access:
+                        self.auth_token = _decode_config_value(enc_access)
+                    if enc_refresh:
+                        self.refresh_token = _decode_config_value(enc_refresh)
             except Exception as e:
                 print("Failed to load config:", e)
 
     def save_config(self):
         try:
+            payload = {
+                "email": self.saved_email,
+                "bitrate": self.saved_bitrate,
+            }
+            if self.auth_token:
+                payload["access_token_enc"] = _encode_config_value(self.auth_token)
+            if self.refresh_token:
+                payload["refresh_token_enc"] = _encode_config_value(self.refresh_token)
             with open(self.config_path, "w") as f:
-                json.dump({
-                    "email": self.saved_email,
-                    "bitrate": self.saved_bitrate
-                }, f)
+                json.dump(payload, f)
         except Exception as e:
             print("Failed to save config:", e)
 

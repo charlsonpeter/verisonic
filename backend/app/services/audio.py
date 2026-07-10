@@ -208,7 +208,7 @@ def analyze_audio_spectral(file_path: str, output_img_path: str) -> dict:
     # but has a physical cutoff below 16kHz during its active sections (indicating 128kbps upscale).
     is_fake_upscaled = False
     
-    if cutoff_frequency < 16000 and max_frequency < 16500:
+    if cutoff_frequency < 15500 and max_frequency < 16000:
         is_fake_upscaled = True
         
     print(f"[Audio Analysis] File: {os.path.basename(file_path)} | Cutoff: {cutoff_frequency:.1f} Hz | Max Active Freq: {max_frequency:.1f} Hz | Fake: {is_fake_upscaled}")

@@ -58,27 +58,29 @@ def analyze_audio_task(track_id: int, temp_file_path: str):
         if not track.lyrics:
             if metadata.get("lyrics"):
                 track.lyrics = metadata["lyrics"]
-            else:
-                try:
-                    from app.api.music import transcribe_audio
-                    artist_name = track.artist_name_override if track.artist_name_override else (track.artist.stage_name if track.artist else "Unknown Artist")
-                    track.lyrics = transcribe_audio(temp_file_path, language="en", track_title=track.title, artist_name=artist_name)
-                except Exception as e:
-                    print(f"Error during auto-transcription in tasks: {e}")
         
         track.quality_score = quality["quality_score"]
         track.quality_level = quality["quality_level"]
         track.approved = quality["approved"]
         
         # Create or update analysis report
-        report = AudioAnalysisReport(
-            track_id=track_id,
-            max_frequency=spectral["max_frequency"],
-            cutoff_frequency=spectral["cutoff_frequency"],
-            high_frequency_energy=spectral["high_frequency_energy"],
-            spectrogram_path=img_key
-        )
-        db.add(report)
+        report = db.query(AudioAnalysisReport).filter(
+            AudioAnalysisReport.track_id == track_id
+        ).first()
+        if report:
+            report.max_frequency = spectral["max_frequency"]
+            report.cutoff_frequency = spectral["cutoff_frequency"]
+            report.high_frequency_energy = spectral["high_frequency_energy"]
+            report.spectrogram_path = img_key
+        else:
+            report = AudioAnalysisReport(
+                track_id=track_id,
+                max_frequency=spectral["max_frequency"],
+                cutoff_frequency=spectral["cutoff_frequency"],
+                high_frequency_energy=spectral["high_frequency_energy"],
+                spectrogram_path=img_key
+            )
+            db.add(report)
         db.commit()
         
         # If approved, run transcoding

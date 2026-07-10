@@ -29,78 +29,7 @@ from app.schemas import RadioStationCreate, RadioStationUpdate, RadioStationResp
 from app.api.auth import get_current_admin, get_current_user, get_current_radio_admin, get_optional_current_user
 from app.api.music import serialize_track
 from app.services.storage import generate_presigned_url
-
-class LiveStreamManager:
-    def __init__(self):
-        # Maps station_id (int) -> Set[asyncio.Queue] of listeners
-        self.listeners: Dict[int, Set[asyncio.Queue]] = {}
-        # Maps station_id (int) -> bool indicating if a broadcaster is currently connected
-        self.broadcasters: Dict[int, bool] = {}
-        # Maps station_id (int) -> deque of recent audio chunks for fast-start
-        self.history: Dict[int, deque] = {}
-
-    def is_live(self, station_id: int) -> bool:
-        return self.broadcasters.get(station_id, False)
-
-    def register_listener(self, station_id: int, skip_history: bool = False) -> asyncio.Queue:
-        q = asyncio.Queue(maxsize=10)
-        if station_id not in self.listeners:
-            self.listeners[station_id] = set()
-        self.listeners[station_id].add(q)
-        
-        # Normalize skip_history string if passed as query parameter string
-        if isinstance(skip_history, str):
-            skip_history = skip_history.lower() == "true"
-
-        # Populate new listener's queue with combined recent history as a single block to start playing instantly
-        if not skip_history and station_id in self.history and self.history[station_id]:
-            history_data = b"".join(self.history[station_id])
-            try:
-                q.put_nowait(history_data)
-            except asyncio.QueueFull:
-                pass
-        return q
-
-    def unregister_listener(self, station_id: int, q: asyncio.Queue):
-        if station_id in self.listeners:
-            self.listeners[station_id].discard(q)
-            if not self.listeners[station_id]:
-                del self.listeners[station_id]
-
-    async def broadcast_chunk(self, station_id: int, chunk: bytes):
-        # Store chunk in sliding window history buffer (last ~100 chunks is about 4.6 seconds)
-        if station_id not in self.history:
-            self.history[station_id] = deque(maxlen=100)
-        self.history[station_id].append(chunk)
-
-        # Push to all HTTP streaming listeners
-        for q in list(self.listeners.get(station_id, set())):
-            try:
-                q.put_nowait(chunk)
-            except asyncio.QueueFull:
-                try:
-                    q.get_nowait()
-                    q.put_nowait(chunk)
-                except Exception:
-                    pass
-
-        # Also push to any active WebRTC relay tracks
-        _wm = globals().get('webrtc_manager')
-        if _wm is not None:
-            await _wm.push_chunk(station_id, chunk)
-
-    async def stop_broadcasting(self, station_id: int):
-        self.broadcasters[station_id] = False
-        if station_id in self.history:
-            del self.history[station_id]
-        if station_id in self.listeners:
-            for q in list(self.listeners[station_id]):
-                try:
-                    q.put_nowait(None)
-                except Exception:
-                    pass
-
-live_stream_manager = LiveStreamManager()
+from app.services.live_stream import live_stream_manager
 
 # =====================================================================
 # SERVER-SIDE WEBRTC DELIVERY (SFU relay from LiveStreamManager queue)

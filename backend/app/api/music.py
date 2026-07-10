@@ -2,7 +2,7 @@ import os
 import shutil
 import tempfile
 import asyncio
-from fastapi import Request, APIRouter, Depends, HTTPException, UploadFile, File, Form, status, WebSocket, WebSocketDisconnect
+from fastapi import Request, APIRouter, Depends, HTTPException, UploadFile, File, Form, status, WebSocket, WebSocketDisconnect, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
@@ -10,8 +10,10 @@ from app.db.session import get_db, SessionLocal
 from app.models import Track, Artist, Album, Genre, AudioAnalysisReport, ListeningHistory, StreamingLog
 from app.schemas import TrackResponse, AudioAnalysisReportResponse
 from app.api.auth import get_current_user, get_current_studio_admin, get_current_admin, get_optional_current_user
-from app.services.storage import generate_presigned_url, delete_file, upload_file
+from app.services.storage import generate_presigned_url, delete_file, upload_file, delete_prefix
 from app.tasks.tasks import analyze_audio_task
+from app.core.premium import user_has_premium
+from app.models import User
 
 def normalize_optional_string(val: Optional[str]) -> Optional[str]:
     if val is None:
@@ -24,7 +26,7 @@ def normalize_optional_string(val: Optional[str]) -> Optional[str]:
 router = APIRouter(prefix="/music", tags=["music"])
 
 # Helper to serialize Track into response with pre-signed URLs
-def serialize_track(track: Track, db: Session) -> dict:
+def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) -> dict:
     artist_name = track.artist_name_override if track.artist_name_override else (track.artist.stage_name if track.artist else "Unknown Artist")
     album_title = track.album.title if track.album else None
     
@@ -40,6 +42,20 @@ def serialize_track(track: Track, db: Session) -> dict:
         cover_art_url = generate_presigned_url(track.album.cover_art_url) if "/" in track.album.cover_art_url and not track.album.cover_art_url.startswith("http") else track.album.cover_art_url
     if not cover_art_url:
         cover_art_url = "https://images.unsplash.com/photo-1507838153414-b4b713384a76?auto=format&fit=crop&q=80&w=150"
+
+    premium = user_has_premium(viewer)
+    is_owner_or_admin = False
+    if viewer:
+        if viewer.role == "admin":
+            is_owner_or_admin = True
+        else:
+            artist = db.query(Artist).filter(Artist.user_id == viewer.id).first()
+            is_owner_or_admin = bool(artist and track.artist_id == artist.id)
+
+    if not premium and not is_owner_or_admin:
+        original_url = None
+        mp3_url = None
+        aac_256_url = None
 
     return {
         "id": track.id,
@@ -113,123 +129,8 @@ def transcribe_audio(file_path: str, language: Optional[str] = None, track_title
         except Exception as ex:
             print(f"Failed to transcribe via OpenAI Whisper API: {ex}")
             
-    # Mock AI transcription with multi-language template generation based on title and artist
-    lang_code = "en"
-    if language:
-        l_lower = language.lower()
-        if "span" in l_lower or "esp" in l_lower or l_lower == "es":
-            lang_code = "es"
-        elif "fren" in l_lower or "fran" in l_lower or l_lower == "fr":
-            lang_code = "fr"
-        elif "germ" in l_lower or "deut" in l_lower or l_lower == "de":
-            lang_code = "de"
-        elif "hind" in l_lower or l_lower == "hi":
-            lang_code = "hi"
-        elif "chin" in l_lower or "zh" in l_lower or "mand" in l_lower:
-            lang_code = "zh"
-            
-    lyrics_templates = {
-        "en": [
-            "({Artist} - {Title} - AI Transcript)",
-            "Intro (Instrumental)",
-            "[Verse 1]",
-            "Walking down these city lights, thinking of you,",
-            "The stars are fading, but our dream stays true.",
-            "I heard the echo of your voice in the sound,",
-            "But you were nowhere to be found.",
-            "[Chorus]",
-            "This is our song, rising high in the sky,",
-            "No more tears left, no more saying goodbye.",
-            "We are the rhythm, the beat of the night,",
-            "Shining so bright, under the neon light.",
-            "[Outro]",
-            "Echoes fade... we are home."
-        ],
-        "es": [
-            "({Artist} - {Title} - AI Transcript [Spanish])",
-            "Intro (Instrumental)",
-            "[Verso 1]",
-            "Caminando bajo las luces de la ciudad, pensando en ti,",
-            "Las estrellas se apagan, pero nuestro sueño sigue aquí.",
-            "Escuché el eco de tu voz en la melodía,",
-            "Pero la distancia nos envolvía.",
-            "[Coro]",
-            "Esta es nuestra canción, volando en el viento,",
-            "Sin más lágrimas, deteniendo el tiempo.",
-            "Somos el ritmo, el latido del mar,",
-            "Bajo la luna, listos para empezar.",
-            "[Outro]",
-            "Los ecos se apagan... estamos en casa."
-        ],
-        "fr": [
-            "({Artist} - {Title} - AI Transcript [French])",
-            "Intro (Instrumental)",
-            "[Couplet 1]",
-            "Marchant sous les lumières de la ville, je pense à toi,",
-            "Les étoiles s'effacent, mais notre rêve reste là.",
-            "J'ai entendu l'écho de ta voix dans le vent,",
-            "Mais tu n'étais plus là comme avant.",
-            "[Refrain]",
-            "C'est notre chanson qui s'élève vers le ciel,",
-            "Plus de larmes, notre amour est éternel.",
-            "Nous sommes le rythme, les battements de la nuit,",
-            "Brillant si fort, là où l'espoir luit.",
-            "[Outro]",
-            "Les échos s'estompent... nous sommes chez nous."
-        ],
-        "de": [
-            "({Artist} - {Title} - AI Transcript [German])",
-            "Intro (Instrumental)",
-            "[Strophe 1]",
-            "Ich gehe durch die Lichter der Stadt und denke an dich,",
-            "Die Sterne verblassen, doch unser Traum verlässt uns nicht.",
-            "Ich hörte das Echo deiner Stimme im Wind,",
-            "Doch wo wir jetzt verloren sind.",
-            "[Refrain]",
-            "Das ist unser Lied, das zum Himmel steigt,",
-            "Keine Tränen mehr, bis die Nacht sich neigt.",
-            "Wir sind der Rhythmus, der Schlag dieser Nacht,",
-            "Der in uns das Feuer neu entfacht.",
-            "[Outro]",
-            "Die Echos verblassen... wir sind zu Hause."
-        ],
-        "hi": [
-            "({Artist} - {Title} - AI Transcript [Hindi])",
-            "संगीत (Instrumental)",
-            "[पद १]",
-            "इस शहर की रोशनी में, तेरी याद आती है,",
-            "तारे खो जाते हैं, पर हमारी उम्मीद बाकी रहती है।",
-            "हवाओं में गूंजी तेरी वो मीठी सदा,",
-            "पर तू न जाने कहाँ खो गया जुदा।",
-            "[ध्रुवपद]",
-            "यह हमारा गीत है, जो आसमान छू रहा है,",
-            "आँसू थम गए हैं, अब कोई शिकवा नहीं रहा है।",
-            "हम हैं वो धड़कन, इस रात की जान,",
-            "चमकेंगे सदा, बनकर नए आसमान।",
-            "[अंत]",
-            "गूंज थमी... हम घर आ गए।"
-        ],
-        "zh": [
-            "({Artist} - {Title} - AI Transcript [Chinese])",
-            "前奏 (Instrumental)",
-            "[主歌 1]",
-            "走在霓虹灯下，脑海中全是你的身影，",
-            "星光渐暗，但我们的梦想依然清澈透明。",
-            "我听到风中传来你温柔的呼唤，",
-            "却发现你早已不在我的身边。",
-            "[副歌]",
-            "这是属于我们的歌，在夜空中飞扬，",
-            "擦干眼泪，不再有离别的悲伤。",
-            "我们是夜的旋律，是心跳的节奏，",
-            "在闪烁的霓虹里，牵手走到最后。",
-            "[尾奏]",
-            "歌声渐弱... 我们到家了。"
-        ]
-    }
-    
-    template = lyrics_templates.get(lang_code, lyrics_templates["en"])
-    lyrics_lines = [line.replace("{Artist}", artist_name).replace("{Title}", track_title) for line in template]
-    return "\n".join(lyrics_lines)
+    # Mock AI transcription disabled — return empty when Whisper API is unavailable
+    return ""
 
 @router.post("/parse-metadata")
 async def parse_metadata(
@@ -565,7 +466,7 @@ def list_tracks(
                      )
                      
     tracks = query.order_by(Track.created_at.desc()).all()
-    return [serialize_track(t, db) for t in tracks]
+    return [serialize_track(t, db, viewer=current_user) for t in tracks]
 
 
 @router.get("/manage", response_model=List[TrackResponse])
@@ -599,11 +500,22 @@ def get_track(
     track = db.query(Track).filter(Track.id == id).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
+
+    is_owner_or_admin = False
+    if current_user:
+        if current_user.role == "admin":
+            is_owner_or_admin = True
+        else:
+            artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+            is_owner_or_admin = bool(artist and track.artist_id == artist.id)
+
+    if not track.approved and not is_owner_or_admin:
+        raise HTTPException(status_code=404, detail="Track not found")
         
     if track.artist and not track.artist.is_active and (not current_user or current_user.role != "admin"):
         raise HTTPException(status_code=403, detail="Track is currently unavailable (Studio is disabled)")
         
-    return serialize_track(track, db)
+    return serialize_track(track, db, viewer=current_user)
 
 @router.delete("/{id}", status_code=status.HTTP_200_OK)
 def delete_track(
@@ -632,9 +544,8 @@ def delete_track(
         delete_file(track.aac_128_path)
     # Note: deleting the entire HLS folder structure key prefixes
     if track.hls_playlist_path:
-        prefix = f"hls/{track.id}/"
+        delete_prefix(f"hls/{track.id}/")
         delete_file(track.hls_playlist_path)
-        # Boto3 simple file delete handles one file. For deep folder recursive clean up, normally you run list and delete.
         
     db.delete(track)
     db.commit()
@@ -679,6 +590,7 @@ def manually_approve_track(
 @router.post("/{id}/play", status_code=status.HTTP_200_OK)
 def log_track_play(
     id: int,
+    bytes_streamed: Optional[int] = Query(None),
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
@@ -688,14 +600,21 @@ def log_track_play(
     track = db.query(Track).filter(Track.id == id).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
+
+    if not track.approved:
+        raise HTTPException(status_code=403, detail="Track is not approved for playback")
         
     # 1. Log play history
     history = ListeningHistory(user_id=current_user.id, track_id=track.id)
     db.add(history)
     
-    # 2. Estimate average bandwidth based on a 3-minute 256kbps HLS stream
-    bytes_streamed = int((track.duration or 180.0) * (256000 / 8))
-    log = StreamingLog(user_id=current_user.id, track_id=track.id, bytes_streamed=bytes_streamed)
+    if bytes_streamed is not None and bytes_streamed > 0:
+        streamed = bytes_streamed
+    elif track.bitrate and track.duration:
+        streamed = int(track.duration * (track.bitrate / 8))
+    else:
+        streamed = int((track.duration or 180.0) * (256000 / 8))
+    log = StreamingLog(user_id=current_user.id, track_id=track.id, bytes_streamed=streamed)
     db.add(log)
     
     db.commit()

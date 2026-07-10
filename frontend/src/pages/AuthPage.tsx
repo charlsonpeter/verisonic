@@ -16,7 +16,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [role, setRole] = useState<'listener' | 'studio_admin' | 'radio_admin' | 'admin'>('listener');
 
   // UI state
   const [isLoading, setIsLoading] = useState(false);
@@ -29,7 +28,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
     setSuccessMsg(null);
 
     if (isRegistering) {
-      const success = await register(email, password, fullName, role);
+      const success = await register(email, password, fullName);
       if (success) {
         // Automatically login the user upon successful registration
         const loginSuccess = await login(email, password);

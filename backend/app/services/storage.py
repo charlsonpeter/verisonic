@@ -18,8 +18,13 @@ if settings.S3_ENDPOINT_URL:
     s3_options["endpoint_url"] = settings.S3_ENDPOINT_URL
 
 s3_client = boto3.client("s3", **s3_options)
+_bucket_ready = False
+
 
 def ensure_bucket_exists():
+    global _bucket_ready
+    if _bucket_ready:
+        return
     try:
         s3_client.head_bucket(Bucket=settings.S3_BUCKET_NAME)
     except Exception:
@@ -53,6 +58,25 @@ def ensure_bucket_exists():
         )
     except Exception as e:
         logger.error(f"Failed to set bucket policy: {e}")
+    _bucket_ready = True
+
+
+def delete_prefix(prefix: str) -> None:
+    """Delete all objects under a key prefix (e.g. hls/42/)."""
+    try:
+        paginator = s3_client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=settings.S3_BUCKET_NAME, Prefix=prefix):
+            contents = page.get("Contents") or []
+            if not contents:
+                continue
+            keys = [{"Key": obj["Key"]} for obj in contents]
+            s3_client.delete_objects(
+                Bucket=settings.S3_BUCKET_NAME,
+                Delete={"Objects": keys},
+            )
+    except Exception as e:
+        logger.error(f"Error deleting prefix {prefix} from S3: {e}")
+
 
 def upload_file(file_bytes: bytes, key: str, content_type: str = None) -> str:
     """

@@ -125,6 +125,22 @@ def add_track_to_playlist(
         "tracks": tracks
     }
 
+@router.delete("/{id}", status_code=status.HTTP_200_OK)
+def delete_playlist(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user),
+):
+    if current_user.role == "radio_admin":
+        raise HTTPException(status_code=403, detail="Radio admins are not allowed to access playlists.")
+    playlist = db.query(Playlist).filter(Playlist.id == id, Playlist.user_id == current_user.id).first()
+    if not playlist:
+        raise HTTPException(status_code=404, detail="Playlist not found or you are not the owner")
+    db.delete(playlist)
+    db.commit()
+    return {"message": "Playlist deleted successfully"}
+
+
 @router.delete("/{id}/track/{track_id}", response_model=PlaylistResponse)
 def remove_track_from_playlist(
     id: int,

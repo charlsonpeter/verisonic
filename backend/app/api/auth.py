@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from jose import jwt, JWTError
@@ -7,8 +7,10 @@ from typing import List, Optional
 from app.db.session import get_db
 from app.models import User, Artist
 from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, Token, UserResponse, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, RequestReactivationSchema
-from app.core.security import verify_password, get_password_hash, create_access_token, create_refresh_token, ALGORITHM
+from app.core.security import verify_password, get_password_hash, create_access_token, create_refresh_token, validate_refresh_token, revoke_refresh_token, ALGORITHM
 from app.core.config import settings
+from app.core.password_policy import validate_password
+from app.core.rate_limit import enforce_rate_limit
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -18,9 +20,11 @@ security = HTTPBearer(auto_error=False)
 # Supporting form-based login for Swagger UI / external clients
 @router.post("/login-form", response_model=Token)
 def login_oauth2(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
+    enforce_rate_limit(request, "login")
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
@@ -110,12 +114,17 @@ def get_current_radio_admin(current_user: User = Depends(get_current_user)) -> U
     return current_user
 
 @router.post("/register", response_model=UserResponse)
-def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
+def register_user(user_in: UserCreate, request: Request, db: Session = Depends(get_db)):
     """
     Register a new user (always as listener).
     """
+    enforce_rate_limit(request, "register")
     email = user_in.email.strip().lower()
     password = user_in.password.strip()
+    try:
+        validate_password(password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     
     db_user = db.query(User).filter(User.email == email).first()
     if db_user:
@@ -139,10 +148,11 @@ def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token)
-def login(user_in: UserLogin, db: Session = Depends(get_db)):
+def login(user_in: UserLogin, request: Request, db: Session = Depends(get_db)):
     """
     Log in with email and password to receive access token.
     """
+    enforce_rate_limit(request, "login")
     email = user_in.email.strip().lower()
     password = user_in.password.strip()
     
@@ -387,8 +397,13 @@ def change_password(
 ):
     if not verify_password(pw_in.old_password, current_user.hashed_password):
         raise HTTPException(status_code=400, detail="Incorrect old password")
-        
+    try:
+        validate_password(pw_in.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     current_user.hashed_password = get_password_hash(pw_in.new_password)
+    revoke_refresh_token(current_user.id)
     db.commit()
     return {"detail": "Password updated successfully"}
 
@@ -397,8 +412,8 @@ def refresh_token(
     body: dict,
     db: Session = Depends(get_db)
 ):
-    refresh_token = body.get("refresh_token")
-    if not refresh_token:
+    refresh_token_value = body.get("refresh_token")
+    if not refresh_token_value:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Refresh token is required"
@@ -409,18 +424,15 @@ def refresh_token(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(refresh_token, settings.SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
-        token_type: str = payload.get("type")
-        if user_id is None or token_type != "refresh":
-            raise credentials_exception
+        user_id = validate_refresh_token(refresh_token_value)
     except Exception:
         raise credentials_exception
-        
-    user = db.query(User).filter(User.id == int(user_id)).first()
+
+    user = db.query(User).filter(User.id == user_id).first()
     if user is None or not user.is_active:
         raise credentials_exception
-        
+
+    revoke_refresh_token(user.id)
     return {
         "access_token": create_access_token(subject=user.id),
         "token_type": "bearer",

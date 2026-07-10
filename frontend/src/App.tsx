@@ -41,6 +41,7 @@ import { UsersManagement } from './pages/UsersManagement';
 import { TracksManagement } from './pages/TracksManagement';
 import { Contact } from './pages/Contact';
 import { BroadcasterDownload } from './pages/BroadcasterDownload';
+import { AdminAnalytics } from './pages/AdminAnalytics';
 
 const API_URL = '/api';
 
@@ -131,18 +132,8 @@ function DashboardContent() {
         setAnalyticsData(data);
       }
     } catch (e) {
-      console.warn("Backend offline: Simulated dashboard payload deployed.");
-      setAnalyticsData({
-        total_plays: 1450,
-        total_listeners: 320,
-        total_tracks: 14,
-        bandwidth_gb: 42.6,
-        quality_distribution: { studio: 8, good: 4, average: 2, poor: 0 },
-        popular_tracks: [
-          { id: 2, title: "Midnight Piano Sonata", artist_name: "Clara Schumann Ensembles", play_count: 320 },
-          { id: 1, title: "Acoustic Forest Resonance", artist_name: "Nature Synthesis", play_count: 240 }
-        ]
-      });
+      console.warn("Failed to fetch analytics:", e);
+      setAnalyticsData(null);
     }
   };
 
@@ -164,13 +155,8 @@ function DashboardContent() {
         throw new Error();
       }
     } catch (e) {
-      // Mock quality report when offline
-      setActiveReport({
-        max_frequency: 24000,
-        cutoff_frequency: track.quality_score && track.quality_score >= 86 ? 22000 : 16000,
-        high_frequency_energy: track.quality_score && track.quality_score >= 86 ? 0.082 : 0.003,
-        spectrogram_path: "https://images.unsplash.com/photo-1507838153414-b4b713384a76?auto=format&fit=crop&q=80&w=600"
-      });
+      console.warn('Failed to load quality report:', e);
+      setActiveReport(null);
     }
   };
 
@@ -522,75 +508,7 @@ function DashboardContent() {
 
       // Admin Analytics Dashboard
       case 'analytics':
-        return (
-          <div className="space-y-6 font-sans">
-            <div>
-              <h2 className="text-3xl font-extrabold tracking-tight text-white mb-1">System Metrics</h2>
-              <p className="text-sm text-slate-400">Acoustic check stats, unique listener counts, and bandwidth loads.</p>
-            </div>
-
-            {!analyticsData ? (
-              <button onClick={fetchAnalytics} className="px-4 py-2 bg-rose-600 text-white rounded-xl text-xs font-bold">Load Stats</button>
-            ) : (
-              <div className="space-y-6">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-                  {[
-                    { label: "Plays Count", val: analyticsData.total_plays },
-                    { label: "Unique Users", val: analyticsData.total_listeners },
-                    { label: "Library Songs", val: analyticsData.total_tracks },
-                    { label: "Bandwidth Used", val: `${analyticsData.bandwidth_gb} GB` }
-                  ].map((s, idx) => (
-                    <div key={idx} className="glass-card rounded-2xl p-5 border-white/5 shadow-inner">
-                      <span className="text-[10px] text-rose-400 font-extrabold uppercase block mb-1">{s.label}</span>
-                      <span className="text-2xl font-extrabold text-white">{s.val}</span>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
-                  {/* Quality Level Distribution */}
-                  <div className="glass-card rounded-3xl p-6 border-white/5">
-                    <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest mb-5">Verified Acoustic Spread</h3>
-                    <div className="space-y-4">
-                      <div>
-                        <div className="flex justify-between mb-1 font-semibold text-slate-350">
-                          <span>Studio (&gt;85 score)</span>
-                          <span>{analyticsData.quality_distribution.studio} tracks</span>
-                        </div>
-                        <div className="h-1.5 bg-slate-950 border border-white/3 rounded-full overflow-hidden">
-                          <div className="h-full bg-emerald-500" style={{ width: `${(analyticsData.quality_distribution.studio / analyticsData.total_tracks) * 100}%` }} />
-                        </div>
-                      </div>
-                      <div>
-                        <div className="flex justify-between mb-1 font-semibold text-slate-350">
-                          <span>Good (71-85 score)</span>
-                          <span>{analyticsData.quality_distribution.good} tracks</span>
-                        </div>
-                        <div className="h-1.5 bg-slate-950 border border-white/3 rounded-full overflow-hidden">
-                          <div className="h-full bg-cyan-500" style={{ width: `${(analyticsData.quality_distribution.good / analyticsData.total_tracks) * 100}%` }} />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Top Tracks */}
-                  <div className="glass-card rounded-3xl p-6 border-white/5">
-                    <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest mb-5">Broadcast Plays Leaderboard</h3>
-                    <div className="space-y-3">
-                      {analyticsData.popular_tracks.map((t: any, idx: number) => (
-                        <div key={idx} className="flex justify-between items-center bg-slate-950/45 p-3 rounded-xl border border-white/3">
-                          <span className="font-extrabold text-rose-400 text-[10px]">#0{idx + 1}</span>
-                          <span className="font-bold text-slate-200 truncate max-w-[150px]">{t.title}</span>
-                          <span className="bg-rose-500/10 text-rose-300 font-bold px-2 py-0.5 rounded-full text-[8.5px] border border-rose-500/15">{t.play_count} plays</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        );
+        return <AdminAnalytics analyticsData={analyticsData} onLoad={fetchAnalytics} />;
 
       default:
         return <LandingPage onNavigate={setActiveTab} />;
