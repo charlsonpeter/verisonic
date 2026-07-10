@@ -640,7 +640,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       navigator.mediaSession.metadata = new MediaMetadata({
         title: trackToPlay.title || 'Unknown Track',
         artist: trackToPlay.artist_name || 'Unknown Artist',
-        album: trackToPlay.album_name || '',
+        album: trackToPlay.album_title || '',
         artwork: trackToPlay.cover_art_url
           ? [{ src: trackToPlay.cover_art_url, sizes: '512x512', type: 'image/jpeg' }]
           : [],
