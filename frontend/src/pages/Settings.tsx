@@ -178,53 +178,6 @@ export const Settings: React.FC = () => {
   const [notifyEmail, setNotifyEmail] = useState(true);
   const [notifyUploads, setNotifyUploads] = useState(false);
 
-  // Artist Request fields
-  const [stageName, setStageName] = useState(currentUser?.artist_profile?.stage_name || '');
-  const [bio, setBio] = useState(currentUser?.artist_profile?.bio || '');
-  const [artistReqMessage, setArtistReqMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
-  const [isArtistReqLoading, setIsArtistReqLoading] = useState(false);
-
-  React.useEffect(() => {
-    if (currentUser?.artist_profile) {
-      setStageName(currentUser.artist_profile.stage_name || '');
-      setBio(currentUser.artist_profile.bio || '');
-    }
-  }, [currentUser]);
-
-  const handleArtistRequestSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!stageName.trim()) {
-      setArtistReqMessage({ type: 'error', text: 'Stage name is required.' });
-      return;
-    }
-    setIsArtistReqLoading(true);
-    setArtistReqMessage(null);
-    try {
-      const res = await fetch('/api/auth/request-artist', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          stage_name: stageName,
-          bio: bio
-        })
-      });
-      if (res.ok) {
-        setArtistReqMessage({ type: 'success', text: 'Artist request submitted successfully! Pending approval from administrator.' });
-        await fetchCurrentUser();
-      } else {
-        const data = await res.json();
-        setArtistReqMessage({ type: 'error', text: data.detail || 'Failed to submit request.' });
-      }
-    } catch {
-      setArtistReqMessage({ type: 'error', text: 'Network connection failed.' });
-    } finally {
-      setIsArtistReqLoading(false);
-    }
-  };
-
   const devices = [
     { name: "Schiit Bifrost 2/64 DAC", type: "USB External DAC", status: "Active (24-bit / 96kHz Mode)", icon: Headphones },
     { name: "Sony WH-1000XM4", type: "Bluetooth Receiver", status: "Connected (LDAC 990kbps)", icon: Headphones },
@@ -430,75 +383,6 @@ export const Settings: React.FC = () => {
             </div>
           </section>
 
-          {/* 4. STUDIO ADMIN REQUEST */}
-          {currentUser?.role === 'listener' && (
-            <section className="bg-slate-900/10 border border-white/3 p-6 rounded-3xl space-y-4 shadow-inner">
-              <div>
-                <h3 className="text-sm font-bold text-cyan-400 uppercase tracking-widest flex items-center gap-1.5">
-                  <Headphones className="w-4.5 h-4.5" /> Request Studio Admin Access
-                </h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  Submit your stage name and biography to unlock studio upload tools, high-fidelity master inspection, and studio management permissions.
-                </p>
-              </div>
-
-              {currentUser.artist_profile && (
-                <div className="p-4 bg-cyan-500/5 border border-cyan-500/15 text-cyan-300 text-xs rounded-xl flex flex-col gap-1.5">
-                  <span className="font-bold flex items-center gap-1.5">
-                    <CheckCircle2 className="w-4.5 h-4.5 text-cyan-400" />
-                    Studio Admin request is currently pending administrator approval.
-                  </span>
-                  <p>Stage Name: <strong>{currentUser.artist_profile.stage_name}</strong></p>
-                  <p>Biography: <em>{currentUser.artist_profile.bio || "No biography provided."}</em></p>
-                </div>
-              )}
-
-              {artistReqMessage && (
-                <div className={`p-4 rounded-xl text-xs flex items-center gap-2 font-semibold ${
-                  artistReqMessage.type === 'success' 
-                    ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-450' 
-                    : 'bg-rose-500/10 border border-rose-500/20 text-rose-455'
-                }`}>
-                  {artistReqMessage.text}
-                </div>
-              )}
-
-              <form onSubmit={handleArtistRequestSubmit} className="space-y-4 text-xs font-sans">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-350 block">Stage Name</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. DJ Resonance"
-                      value={stageName}
-                      onChange={(e) => setStageName(e.target.value)}
-                      className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-cyan-500 text-slate-300 transition"
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="font-bold text-slate-350 block">Artist Biography</label>
-                  <textarea
-                    placeholder="Share your musical background, style, and influences..."
-                    value={bio}
-                    onChange={(e) => setBio(e.target.value)}
-                    rows={4}
-                    className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-cyan-500 text-slate-300 transition resize-none"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isArtistReqLoading}
-                  className="px-5 py-2.5 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-slate-950 font-bold text-xs rounded-xl shadow-md transition"
-                >
-                  {isArtistReqLoading ? "Submitting Request..." : currentUser.artist_profile ? "Update Request Details" : "Submit Studio Admin Request"}
-                </button>
-              </form>
-            </section>
-          )}
         </div>
       )}
     </div>
