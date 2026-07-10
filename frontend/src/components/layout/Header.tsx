@@ -57,7 +57,7 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="px-8 py-4 flex items-center justify-between border-b border-white/5 bg-slate-950/45 backdrop-blur-md z-30 sticky top-0">
+    <header className="flex-shrink-0 px-4 md:px-8 py-3 md:py-4 flex items-center justify-between border-b border-white/5 bg-slate-950/45 backdrop-blur-md z-30">
       
       {/* 1. Left: Brand Mark */}
       <div 

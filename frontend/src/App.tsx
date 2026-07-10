@@ -519,13 +519,13 @@ function DashboardContent() {
   };
 
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden font-sans select-none relative w-full">
+    <div className="flex flex-1 min-h-0 h-[100dvh] max-h-[100dvh] w-full box-border pt-[env(safe-area-inset-top,0px)] bg-slate-950 text-slate-100 overflow-hidden font-sans select-none relative">
       {/* Background Blobs */}
       <div className="absolute top-10 left-10 w-96 h-96 bg-rose-600/5 rounded-full blur-[110px] pointer-events-none animate-blob-1" />
       <div className="absolute top-1/3 right-1/4 w-[35rem] h-[35rem] bg-pink-600/5 rounded-full blur-[130px] pointer-events-none animate-blob-2" />
       
       {/* 2. Main content viewport */}
-      <div className="flex-1 flex flex-col min-w-0 min-h-0 relative">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden">
         {activeTab !== 'landing' && (
           <Header 
             searchQuery={searchQuery} 
@@ -535,14 +535,21 @@ function DashboardContent() {
           />
         )}
         
-        <main ref={mainRef} className={`flex-1 overflow-y-auto min-h-0 md:pb-36 ${activeTab === 'landing' ? 'px-0 py-0' : 'px-6 md:px-8'}`}>
+        <main
+          ref={mainRef}
+          className={`flex-1 min-h-0 overflow-y-auto overscroll-y-contain md:pb-36 ${
+            activeTab === 'landing'
+              ? 'px-0 py-0'
+              : 'px-6 md:px-8 max-md:py-3'
+          }`}
+        >
           <div key={activeTab} className="animate-page-entry w-full">
             {renderTabContent()}
           </div>
         </main>
 
         {/* Mobile bottom chrome — in document flow so content never scrolls behind */}
-        <div className="md:hidden flex-shrink-0">
+        <div className="md:hidden flex-shrink-0 pb-[env(safe-area-inset-bottom,0px)] bg-slate-950">
           <AudioPlayer 
             onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
             isQueueOpen={isQueueOpen} 

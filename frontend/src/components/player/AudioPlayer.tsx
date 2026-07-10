@@ -176,7 +176,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           <button
             type="button"
             onClick={() => setIsMobileExpanded(true)}
-            className="w-11 h-11 bg-gradient-to-tr from-slate-900 to-rose-900 rounded-xl overflow-hidden flex items-center justify-center border border-white/5 shadow-md flex-shrink-0 active:scale-95 transition"
+            className="w-10 h-10 bg-gradient-to-tr from-slate-900 to-rose-900 rounded-xl overflow-hidden flex items-center justify-center border border-white/5 shadow-md flex-shrink-0 active:scale-95 transition"
           >
             {currentTrack?.cover_art_url ? (
               <img src={currentTrack.cover_art_url} alt="Cover" className="w-full h-full object-cover" />
@@ -213,28 +213,28 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           </div>
 
           {/* Col 3 — playback controls */}
-          <div className="flex items-center gap-1.5 flex-shrink-0">
+          <div className="flex items-center justify-center gap-6 flex-shrink-0 min-w-[6.5rem] pl-0.5">
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); playPrevious(); }}
               disabled={isRadioSync || isAdminMode}
-              className="text-slate-400 active:text-white transition disabled:opacity-20"
+              className="p-1 text-slate-400 active:text-white transition disabled:opacity-20"
               title="Previous"
             >
-              <SkipBack className="w-3.5 h-3.5 fill-current" />
+              <SkipBack className="w-4 h-4 fill-current" />
             </button>
 
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); togglePlay(); }}
               disabled={isOffline}
-              className="w-8 h-8 bg-white hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none active:scale-95 rounded-full flex items-center justify-center text-slate-950 font-bold shadow-md transition"
+              className="w-9 h-9 bg-white hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none active:scale-95 rounded-full flex items-center justify-center text-slate-950 font-bold shadow-md transition"
               title={isOffline ? 'Station Offline' : isPlaying ? 'Pause' : 'Play'}
             >
               {isPlaying ? (
-                <Pause className="w-3.5 h-3.5 fill-current text-slate-950" />
+                <Pause className="w-4 h-4 fill-current text-slate-950" />
               ) : (
-                <Play className="w-3.5 h-3.5 fill-current text-slate-950 ml-0.5" />
+                <Play className="w-4 h-4 fill-current text-slate-950 ml-0.5" />
               )}
             </button>
 
@@ -242,10 +242,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               type="button"
               onClick={(e) => { e.stopPropagation(); playNext(); }}
               disabled={isRadioSync || isAdminMode}
-              className="text-slate-400 active:text-white transition disabled:opacity-20"
+              className="p-1 text-slate-400 active:text-white transition disabled:opacity-20"
               title="Next"
             >
-              <SkipForward className="w-3.5 h-3.5 fill-current" />
+              <SkipForward className="w-4 h-4 fill-current" />
             </button>
           </div>
         </div>
