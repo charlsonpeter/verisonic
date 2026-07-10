@@ -43,11 +43,6 @@ export const Radio: React.FC = () => {
   const [copiedKeyMap, setCopiedKeyMap] = useState<Record<number, boolean>>({});
   const [isRegeneratingKey, setIsRegeneratingKey] = useState<Record<number, boolean>>({});
 
-  const getIngestWebSocketUrl = () => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    return `${protocol}//${window.location.host}/api/radio/stream/ws`;
-  };
-
   const fallbackCopyText = (text: string, onSuccess: () => void) => {
     const textArea = document.createElement('textarea');
     textArea.value = text;
@@ -590,31 +585,12 @@ export const Radio: React.FC = () => {
                               <div className="space-y-1">
                                 <h4 className="text-xs font-bold text-rose-400 uppercase tracking-widest">Stream Ingestion Node</h4>
                                 <p className="text-[11px] text-slate-405 leading-normal">
-                                  Use these credentials in the PyQt5 desktop broadcaster or your encoder to go live.
+                                  Copy your personal stream key into the PyQt5 desktop broadcaster or your encoder to go live.
                                 </p>
                               </div>
 
                               <div className="space-y-1">
-                                <label className="text-[9.5px] font-bold text-slate-555 uppercase block">WebSocket URL</label>
-                                <div className="flex gap-2">
-                                  <input
-                                    type="text"
-                                    readOnly
-                                    value={getIngestWebSocketUrl()}
-                                    className="w-full bg-slate-950 border border-white/5 text-[10px] p-2.5 rounded-xl text-white font-mono font-semibold outline-none tracking-wider"
-                                  />
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCopy(getIngestWebSocketUrl(), st.id + 10000)}
-                                    className="px-3 bg-slate-900 hover:bg-slate-800 border border-white/5 text-slate-405 hover:text-white rounded-xl transition cursor-pointer font-bold text-[10px]"
-                                  >
-                                    {copiedKeyMap[st.id + 10000] ? 'Copied' : 'Copy'}
-                                  </button>
-                                </div>
-                              </div>
-
-                              <div className="space-y-1">
-                                <label className="text-[9.5px] font-bold text-slate-555 uppercase block">Connection Key (Stream Key)</label>
+                                <label className="text-[9.5px] font-bold text-slate-555 uppercase block">Stream Key</label>
                                 <div className="flex gap-2">
                                   <input
                                     type="text"
@@ -638,7 +614,7 @@ export const Radio: React.FC = () => {
                                 onClick={() => handleRegenerateKey(st.id)}
                                 className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-rose-455 font-bold border border-rose-500/10 hover:border-rose-500/30 rounded-xl transition text-[10px] uppercase tracking-wider"
                               >
-                                {isRegeneratingKey[st.id] ? 'Regenerating...' : 'Regenerate Connection Key'}
+                                {isRegeneratingKey[st.id] ? 'Regenerating...' : 'Regenerate Stream Key'}
                               </button>
                             </div>
                           )}
