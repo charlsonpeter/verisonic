@@ -165,6 +165,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const isShuffleRef = useRef(isShuffle);
   const volumeRef = useRef(volume);
   const isMutedRef = useRef(isMuted);
+  // Tracks whether the user EXPLICITLY pressed pause (vs browser-initiated background pause)
+  const userPausedRef = useRef(false);
 
   useEffect(() => { currentTrackRef.current = currentTrack; }, [currentTrack]);
   useEffect(() => { isPremiumRef.current = isPremium; }, [isPremium]);
@@ -332,10 +334,39 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const onPlay = () => {
       setIsPlaying(true);
       audio.playbackRate = playbackSpeedRef.current;
+      // Tell Chrome Android this page is actively playing media — required for background audio
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'playing';
+      }
     };
-    const onPause = () => setIsPlaying(false);
+    const onPause = () => {
+      // If the page is hidden (background/minimize/lock) AND the user did NOT explicitly pause,
+      // Chrome is pausing our audio — immediately try to resume it
+      if (document.hidden && !userPausedRef.current) {
+        setTimeout(() => {
+          if (audioRef.current?.paused && !userPausedRef.current) {
+            audioRef.current.play().catch(() => {});
+          }
+        }, 200);
+        return; // Don't update isPlaying state — we intend to keep playing
+      }
+      setIsPlaying(false);
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'paused';
+      }
+    };
     const onTimeUpdate = () => {
       setCurrentTime(audio.currentTime);
+      // Update Chrome's notification seek bar position
+      if ('mediaSession' in navigator && !activeRadioStationRef.current && audio.duration && isFinite(audio.duration)) {
+        try {
+          navigator.mediaSession.setPositionState({
+            duration: audio.duration,
+            playbackRate: audio.playbackRate,
+            position: audio.currentTime,
+          });
+        } catch (_) {}
+      }
 
       // Eliminate browser buffering latency on live broadcasts by catching up to the live edge
       if (activeRadioStationRef.current && !audio.paused && audio.buffered.length > 0) {
@@ -427,6 +458,24 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       window.removeEventListener('mediasession:previous', handlePrev);
       window.removeEventListener('mediasession:next', handleNext);
     };
+  }, []);
+
+  // Auto-resume audio when user returns to page after browser suspends it in background
+  useEffect(() => {
+    let wasPlayingBeforeHide = false;
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // Record whether audio was actively playing when page went hidden
+        wasPlayingBeforeHide = isPlayingRef.current && !audioRef.current?.paused;
+      } else {
+        // Page is visible again — if we were playing before, try to resume
+        if (wasPlayingBeforeHide && audioRef.current?.paused) {
+          audioRef.current.play().catch(() => {});
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
   // Real VU meter — driven by Web Audio API AnalyserNode
@@ -734,6 +783,21 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setIsRadioSync(true);
     setCurrentTrack(null);
 
+    // Register MediaSession for lock screen / notification controls on mobile
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: station.current_track_title || station.name || 'Live Radio',
+        artist: station.current_track_artist || station.rj_name || '',
+        album: station.name || '',
+        artwork: station.cover_art_url
+          ? [{ src: station.cover_art_url, sizes: '512x512', type: 'image/jpeg' }]
+          : [],
+      });
+      navigator.mediaSession.setActionHandler('play', () => { audioRef.current?.play(); });
+      navigator.mediaSession.setActionHandler('pause', () => { audioRef.current?.pause(); });
+      navigator.mediaSession.setActionHandler('stop', () => { audioRef.current?.pause(); });
+    }
+
     if (webrtcPCRef.current) {
       webrtcPCRef.current.close();
       webrtcPCRef.current = null;
@@ -935,8 +999,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const togglePlay = () => {
     if (!audioRef.current) return;
     if (isPlaying) {
+      userPausedRef.current = true; // Mark as intentional user pause
       isPlayingRef.current = false; // Sync update to prevent onError from firing when unloading source
       setIsPlaying(false);
+
 
       // Fade out audio before pausing
       fadeVolume(0, 300).then(() => {
