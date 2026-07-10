@@ -62,6 +62,7 @@ class UserResponse(BaseModel):
     full_name: Optional[str] = None
     role: str
     subscription: str
+    subscription_cycle: Optional[str] = None
     real_role: Optional[str] = None
     is_active: bool
     created_at: datetime

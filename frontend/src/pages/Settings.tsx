@@ -12,6 +12,14 @@ export const Settings: React.FC = () => {
   const { currentUser, isPremium, token, fetchCurrentUser, userMode } = useAuth();
   const { qualityLevelSetting, setQualityLevelSetting } = useAudio();
 
+  const getTrialDaysLeft = () => {
+    if (!currentUser?.created_at) return 0;
+    const createdAt = new Date(currentUser.created_at);
+    const now = new Date();
+    const diffDays = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24);
+    return Math.max(0, Math.ceil(7 - diffDays));
+  };
+
   // Broadcaster states
   const [station, setStation] = useState<any>(null);
   const [isRegeneratingKey, setIsRegeneratingKey] = useState(false);
@@ -357,7 +365,19 @@ export const Settings: React.FC = () => {
               <div>
                 <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Current Account Tier</span>
                 <span className="text-base font-extrabold text-white mt-1 block">
-                  {isPremium ? "Studio Master VIP (Active)" : "Free Preview Tier"}
+                  {currentUser?.subscription === 'unlimited' && "Super Master Unlimited (Active)"}
+                  {currentUser?.subscription === 'premium' && (
+                    currentUser?.subscription_cycle === 'yearly'
+                      ? "Premium - Yearly Subscription (Active)"
+                      : "Premium - Monthly Subscription (Active)"
+                  )}
+                  {(!currentUser?.subscription || currentUser?.subscription === 'free') && (
+                    currentUser?.role === 'admin' || currentUser?.role === 'studio_admin'
+                      ? "Studio Master VIP (Active)"
+                      : getTrialDaysLeft() > 0
+                        ? `Free Trial (Active - ${getTrialDaysLeft()} Days Left)`
+                        : "Free Preview Tier"
+                  )}
                 </span>
               </div>
 

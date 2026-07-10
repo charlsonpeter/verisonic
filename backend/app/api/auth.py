@@ -279,20 +279,61 @@ def update_user_role_admin(
 def update_user_subscription_admin(
     user_id: int,
     subscription: str,
+    subscription_cycle: Optional[str] = None,
     current_user: User = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
     """
-    Admin user management: update a user's subscription tier.
+    Admin user management: update a user's subscription plan and cycle.
     """
-    if subscription not in ["free", "premium"]:
-        raise HTTPException(status_code=400, detail="Invalid subscription tier")
+    if subscription not in ["free", "premium", "unlimited"]:
+        raise HTTPException(status_code=400, detail="Invalid subscription plan")
+    if subscription_cycle is not None and subscription_cycle not in ["monthly", "yearly"]:
+        raise HTTPException(status_code=400, detail="Invalid subscription cycle")
+        
+    # Consistency validation
+    if subscription == "free" and subscription_cycle is not None:
+        raise HTTPException(status_code=400, detail="Free plan must not have a subscription cycle")
+    if subscription == "premium" and subscription_cycle not in ["monthly", "yearly"]:
+        raise HTTPException(status_code=400, detail="Premium plan must have cycle set to 'monthly' or 'yearly'")
+    if subscription == "unlimited" and subscription_cycle is not None:
+        raise HTTPException(status_code=400, detail="Unlimited plan must not have a subscription cycle")
         
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
         
     user.subscription = subscription
+    user.subscription_cycle = subscription_cycle
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.put("/admin/users/{user_id}", response_model=UserResponse)
+def update_user_details_admin(
+    user_id: int,
+    user_in: UserUpdate,
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Admin user management: update a user's profile details (full_name, email).
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    if user_in.full_name is not None:
+        user.full_name = user_in.full_name.strip()
+    if user_in.email is not None:
+        email = user_in.email.strip().lower()
+        if email != user.email:
+            db_user = db.query(User).filter(User.email == email).first()
+            if db_user:
+                raise HTTPException(status_code=400, detail="Email already registered")
+            user.email = email
+            
     db.commit()
     db.refresh(user)
     return user

@@ -18,7 +18,8 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     full_name = Column(String, nullable=True)
     role = Column(String, default="listener") # admin, artist, listener
-    subscription = Column(String, default="free") # free, premium
+    subscription = Column(String, default="free") # free, premium, unlimited
+    subscription_cycle = Column(String, nullable=True) # monthly, yearly, null
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 

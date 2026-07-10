@@ -6,7 +6,9 @@ export interface User {
   full_name: string;
   role: 'listener' | 'studio_admin' | 'radio_admin' | 'admin';
   real_role?: 'listener' | 'studio_admin' | 'radio_admin' | 'admin';
-  subscription: 'free' | 'premium';
+  subscription: 'free' | 'premium' | 'unlimited';
+  subscription_cycle: 'monthly' | 'yearly' | null;
+  created_at?: string;
   artist_profile?: {
     id: number;
     user_id: number;
@@ -76,7 +78,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Check if role is admin -> set premium. Else default premium checking or custom mock.
         const userWithSub: User = {
           ...data,
-          subscription: data.role === 'admin' ? 'premium' : (data.subscription || 'free')
+          subscription: data.role === 'admin' ? 'premium' : (data.subscription || 'free'),
+          subscription_cycle: data.subscription_cycle || null
         };
         setCurrentUser(userWithSub);
         if (userWithSub.role === 'admin') {
@@ -93,19 +96,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.warn("Backend offline. Fallback to mock session validation.");
       // Fallback: decode basic JWT-like token or load mock user
       if (token === 'mock_admin_token') {
-        setCurrentUser({ id: 1, email: 'admin@verisonic.com', full_name: 'Platform Administrator', role: 'admin', subscription: 'premium' });
+        setCurrentUser({ id: 1, email: 'admin@verisonic.com', full_name: 'Platform Administrator', role: 'admin', subscription: 'unlimited', subscription_cycle: null });
         localStorage.setItem('userMode', 'admin');
         setUserMode('admin');
       } else if (token === 'mock_radio_admin_token') {
-        const mockUser: User = { id: 4, email: 'radio_admin@verisonic.com', full_name: 'Radio Administrator', role: 'radio_admin', real_role: 'radio_admin', subscription: 'premium' };
+        const mockUser: User = { id: 4, email: 'radio_admin@verisonic.com', full_name: 'Radio Administrator', role: 'radio_admin', real_role: 'radio_admin', subscription: 'premium', subscription_cycle: 'yearly' };
         setCurrentUser(mockUser);
         checkRadioStationStatus(mockUser);
       } else if (token === 'mock_studio_admin_token') {
-        setCurrentUser({ id: 5, email: 'studio_admin@verisonic.com', full_name: 'Studio Administrator', role: 'studio_admin', real_role: 'studio_admin', subscription: 'premium' });
+        setCurrentUser({ id: 5, email: 'studio_admin@verisonic.com', full_name: 'Studio Administrator', role: 'studio_admin', real_role: 'studio_admin', subscription: 'premium', subscription_cycle: 'yearly' });
       } else if (token === 'mock_listener_token') {
-        setCurrentUser({ id: 2, email: 'listener@verisonic.com', full_name: 'Audiophile User', role: 'listener', subscription: 'premium' });
+        setCurrentUser({ id: 2, email: 'listener@verisonic.com', full_name: 'Audiophile User', role: 'listener', subscription: 'premium', subscription_cycle: 'monthly' });
       } else if (token === 'mock_guest_token') {
-        setCurrentUser({ id: 3, email: 'guest@verisonic.com', full_name: 'Free Listener', role: 'listener', subscription: 'free' });
+        setCurrentUser({ id: 3, email: 'guest@verisonic.com', full_name: 'Free Listener', role: 'listener', subscription: 'free', subscription_cycle: null });
       } else {
         console.error("Network error during session validation. Preserving token.");
       }
@@ -264,7 +267,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const clearError = () => setAuthError(null);
 
-  const isPremium = currentUser?.subscription === 'premium' || currentUser?.role === 'admin' || currentUser?.role === 'studio_admin';
+  const isTrialActive = () => {
+    if (!currentUser?.created_at) return false;
+    const createdAt = new Date(currentUser.created_at);
+    const now = new Date();
+    const diffDays = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24);
+    return diffDays >= 0 && diffDays <= 7;
+  };
+
+  const isPremium = ['premium', 'unlimited'].includes(currentUser?.subscription || '') || 
+                    currentUser?.role === 'admin' || 
+                    currentUser?.role === 'studio_admin' ||
+                    (currentUser?.subscription === 'free' && isTrialActive());
 
   return (
     <AuthContext.Provider value={{
