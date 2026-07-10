@@ -275,6 +275,29 @@ def update_user_role_admin(
     return user
 
 
+@router.put("/admin/users/{user_id}/subscription", response_model=UserResponse)
+def update_user_subscription_admin(
+    user_id: int,
+    subscription: str,
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Admin user management: update a user's subscription tier.
+    """
+    if subscription not in ["free", "premium"]:
+        raise HTTPException(status_code=400, detail="Invalid subscription tier")
+        
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    user.subscription = subscription
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 @router.delete("/admin/users/{user_id}")
 def delete_user_admin(
     user_id: int,

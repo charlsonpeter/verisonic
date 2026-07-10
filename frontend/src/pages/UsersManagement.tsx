@@ -51,6 +51,27 @@ export const UsersManagement: React.FC = () => {
     }
   };
 
+  const handleSubscriptionChange = async (userId: number, newSubscription: string) => {
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/auth/admin/users/${userId}/subscription?subscription=${newSubscription}`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      if (res.ok) {
+        setMessage({ type: 'success', text: `Subscription updated to "${newSubscription}" successfully!` });
+        fetchUsers();
+      } else {
+        const data = await res.json();
+        setMessage({ type: 'error', text: data.detail || 'Failed to update subscription.' });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Connection failed.' });
+    }
+  };
+
   const handleDeleteUser = async (userId: number) => {
     const confirmed = await showConfirm(
       "Delete User Account?",
@@ -100,11 +121,13 @@ export const UsersManagement: React.FC = () => {
         ) : (
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-white/5 bg-slate-950/40 text-slate-400 uppercase font-bold tracking-wider">
+              <tr className="border-b border-white/5 bg-slate-955/40 text-slate-400 uppercase font-bold tracking-wider">
                 <th className="p-5">Name / Email</th>
                 <th className="p-5">Current Role</th>
+                <th className="p-5">Subscription</th>
                 <th className="p-5">Artist Request Details</th>
                 <th className="p-5">Manage Role</th>
+                <th className="p-5">Manage Sub</th>
                 <th className="p-5 text-center">Actions</th>
               </tr>
             </thead>
@@ -128,6 +151,15 @@ export const UsersManagement: React.FC = () => {
                       {u.role.replace('_', ' ')}
                     </span>
                   </td>
+                  <td className="p-5">
+                    <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${
+                      u.subscription === 'premium'
+                        ? 'bg-amber-500/10 border-amber-500/20 text-amber-450'
+                        : 'bg-slate-900 border-white/3 text-slate-500'
+                    }`}>
+                      {u.subscription || 'free'}
+                    </span>
+                  </td>
                   <td className="p-5 max-w-xs leading-relaxed">
                     {u.artist_profile ? (
                       <div className="bg-slate-950/45 p-3 border border-white/3 rounded-xl space-y-1">
@@ -143,12 +175,22 @@ export const UsersManagement: React.FC = () => {
                       value={u.role}
                       onChange={(e) => handleRoleChange(u.id, e.target.value)}
                       disabled={u.id === currentUser?.id}
-                      className="bg-slate-950 border border-white/5 text-[10px] p-2 rounded-xl outline-none focus:border-rose-500 text-rose-300 font-extrabold uppercase tracking-wide cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="bg-slate-955 border border-white/5 text-[10px] p-2 rounded-xl outline-none focus:border-rose-500 text-rose-300 font-extrabold uppercase tracking-wide cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <option value="listener" className="text-slate-300 bg-slate-950">Listener</option>
                       <option value="studio_admin" className="text-cyan-400 bg-slate-950">Studio Admin</option>
                       <option value="radio_admin" className="text-indigo-400 bg-slate-950">Radio Admin</option>
                       <option value="admin" className="text-rose-400 bg-slate-950">Admin</option>
+                    </select>
+                  </td>
+                  <td className="p-5">
+                    <select
+                      value={u.subscription || 'free'}
+                      onChange={(e) => handleSubscriptionChange(u.id, e.target.value)}
+                      className="bg-slate-955 border border-white/5 text-[10px] p-2 rounded-xl outline-none focus:border-amber-500 text-amber-300 font-extrabold uppercase tracking-wide cursor-pointer"
+                    >
+                      <option value="free" className="text-slate-300 bg-slate-950">Free</option>
+                      <option value="premium" className="text-amber-400 bg-slate-950">Premium</option>
                     </select>
                   </td>
                   <td className="p-5 text-center">

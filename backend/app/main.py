@@ -124,6 +124,14 @@ def startup_seeder():
                 except Exception:
                     db.rollback()
 
+        # SQL migration for users subscription column
+        try:
+            db.execute(text("ALTER TABLE users ADD COLUMN subscription VARCHAR DEFAULT 'free';"))
+            db.commit()
+            print("Migration: Added column subscription to users successfully.")
+        except Exception:
+            db.rollback()
+
         # 1. Seed Admin account if empty
         admin_user = db.query(User).filter(User.role == "admin").first()
         if not admin_user:

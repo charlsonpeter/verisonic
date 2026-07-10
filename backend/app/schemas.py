@@ -61,6 +61,7 @@ class UserResponse(BaseModel):
     email: EmailStr
     full_name: Optional[str] = None
     role: str
+    subscription: str
     real_role: Optional[str] = None
     is_active: bool
     created_at: datetime
