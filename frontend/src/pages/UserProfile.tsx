@@ -6,7 +6,7 @@ import { useAudio, Track } from '../context/AudioContext';
 import { TrackRow } from '../components/shared/TrackRow';
 
 interface UserProfileProps {
-  onViewReport: (track: Track) => void;
+  onViewReport?: (track: Track) => void;
   onViewDetails: (track: Track) => void;
 }
 

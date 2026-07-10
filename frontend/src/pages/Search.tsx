@@ -5,7 +5,7 @@ import { TrackRow } from '../components/shared/TrackRow';
 import { RadioCard } from '../components/shared/RadioCard';
 
 interface SearchProps {
-  onViewReport: (track: Track) => void;
+  onViewReport?: (track: Track) => void;
   onViewDetails: (track: Track) => void;
   searchQuery: string;
   setSearchQuery: (query: string) => void;

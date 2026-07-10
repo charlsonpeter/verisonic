@@ -8,7 +8,7 @@ import { TrackRow } from '../components/shared/TrackRow';
 
 interface HomeProps {
   onNavigate: (tab: string) => void;
-  onViewReport: (track: Track) => void;
+  onViewReport?: (track: Track) => void;
   onViewDetails: (track: Track) => void;
 }
 

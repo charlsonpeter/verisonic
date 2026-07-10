@@ -4,7 +4,7 @@ import { useAudio, Track } from '../context/AudioContext';
 import { TrackRow } from '../components/shared/TrackRow';
 
 interface PlaylistProps {
-  onViewReport: (track: Track) => void;
+  onViewReport?: (track: Track) => void;
   onViewDetails: (track: Track) => void;
 }
 
