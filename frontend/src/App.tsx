@@ -189,9 +189,6 @@ function DashboardContent() {
     setActiveTab('details');
   };
 
-  const canViewAcousticReport = !!currentUser && ['admin', 'studio_admin'].includes(currentUser.role);
-  const viewReportHandler = canViewAcousticReport ? viewQualityReport : undefined;
-
   // Helper circle chart render
   const renderCircularProgress = (score: number) => {
     const radius = 55;
@@ -226,22 +223,21 @@ function DashboardContent() {
       case 'landing':
         return <LandingPage onNavigate={setActiveTab} />;
       case 'home':
-        return <Home onNavigate={setActiveTab} onViewReport={viewReportHandler} onViewDetails={handleDetailsView} />;
+        return <Home onNavigate={setActiveTab} onViewDetails={handleDetailsView} />;
       case 'radio':
         return <RadioPage />;
       case 'search':
         return (
           <SearchPage 
-            onViewReport={viewReportHandler} 
             onViewDetails={handleDetailsView}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
           />
         );
       case 'favorites':
-        return <Favorites onViewReport={viewReportHandler} onViewDetails={handleDetailsView} />;
+        return <Favorites onViewDetails={handleDetailsView} />;
       case 'playlists':
-        return <PlaylistPage onViewReport={viewReportHandler} onViewDetails={handleDetailsView} />;
+        return <PlaylistPage onViewDetails={handleDetailsView} />;
       case 'details':
         return <MusicDetails track={selectedDetailsTrack} onNavigate={setActiveTab} />;
       case 'profile':
@@ -529,7 +525,7 @@ function DashboardContent() {
       <div className="absolute top-1/3 right-1/4 w-[35rem] h-[35rem] bg-pink-600/5 rounded-full blur-[130px] pointer-events-none animate-blob-2" />
       
       {/* 2. Main content viewport */}
-      <div className="flex-1 flex flex-col min-w-0 relative">
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 relative">
         {activeTab !== 'landing' && (
           <Header 
             searchQuery={searchQuery} 
@@ -539,11 +535,25 @@ function DashboardContent() {
           />
         )}
         
-        <main ref={mainRef} className={`flex-1 overflow-y-auto pb-36 ${activeTab === 'landing' ? 'px-0 py-0' : 'px-6 md:px-8'}`}>
+        <main ref={mainRef} className={`flex-1 overflow-y-auto min-h-0 md:pb-36 ${activeTab === 'landing' ? 'px-0 py-0' : 'px-6 md:px-8'}`}>
           <div key={activeTab} className="animate-page-entry w-full">
             {renderTabContent()}
           </div>
         </main>
+
+        {/* Mobile bottom chrome — in document flow so content never scrolls behind */}
+        <div className="md:hidden flex-shrink-0">
+          <AudioPlayer 
+            onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
+            isQueueOpen={isQueueOpen} 
+            onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
+            isLyricsOpen={isLyricsOpen}
+            activeTab={activeTab} 
+          />
+          {activeTab !== 'landing' && (
+            <MobileNav activeTab={activeTab} setActiveTab={setActiveTab} />
+          )}
+        </div>
       </div>
 
       {/* 3. Right Queue Drawer */}
@@ -552,19 +562,18 @@ function DashboardContent() {
       {/* 3.5. Center Lyrics Modal */}
       <LyricsModal isOpen={isLyricsOpen} onClose={() => setIsLyricsOpen(false)} />
 
-      {/* 4. Bottom Fixed Audio Player Controls */}
-      <AudioPlayer 
-        onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
-        isQueueOpen={isQueueOpen} 
-        onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
-        isLyricsOpen={isLyricsOpen}
-        activeTab={activeTab} 
-      />
+      {/* 4. Desktop audio player (fixed overlay) */}
+      <div className="hidden md:block">
+        <AudioPlayer 
+          onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
+          isQueueOpen={isQueueOpen} 
+          onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
+          isLyricsOpen={isLyricsOpen}
+          activeTab={activeTab} 
+        />
+      </div>
 
-      {/* 5. Mobile Navigation Sticky Tabs */}
-      {activeTab !== 'landing' && (
-        <MobileNav activeTab={activeTab} setActiveTab={setActiveTab} />
-      )}
+      {/* 5. Mobile nav moved into viewport column above */}
 
       {/* 6. VIP Upgrade Modal Overlay */}
       <PremiumModal onNavigate={setActiveTab} />

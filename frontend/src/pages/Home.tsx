@@ -8,11 +8,10 @@ import { TrackRow } from '../components/shared/TrackRow';
 
 interface HomeProps {
   onNavigate: (tab: string) => void;
-  onViewReport?: (track: Track) => void;
   onViewDetails: (track: Track) => void;
 }
 
-export const Home: React.FC<HomeProps> = ({ onNavigate, onViewReport, onViewDetails }) => {
+export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
   const { playTrack } = useAudio();
   const { currentUser, hasRadioStation } = useAuth();
 
@@ -146,7 +145,6 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewReport, onViewDeta
                 key={track.id} 
                 track={track} 
                 index={index}
-                onViewReport={onViewReport}
                 onViewDetails={onViewDetails}
               />
             ))}

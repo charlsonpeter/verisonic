@@ -14,11 +14,10 @@ interface PlaylistData {
 }
 
 interface PlaylistProps {
-  onViewReport?: (track: Track) => void;
   onViewDetails: (track: Track) => void;
 }
 
-export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails }) => {
+export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
   const { token, canUsePlaylists, isStaffInAdminMode } = useAuth();
   const { playTrack, addToQueue } = useAudio();
 
@@ -278,7 +277,6 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
                   <TrackRow
                     track={track}
                     index={idx}
-                    onViewReport={onViewReport}
                     onViewDetails={onViewDetails}
                     onRemove={() => handleRemoveTrack(track.id)}
                   />

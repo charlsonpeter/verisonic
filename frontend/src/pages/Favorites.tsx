@@ -5,11 +5,10 @@ import { useAudio, Track } from '../context/AudioContext';
 import { TrackRow } from '../components/shared/TrackRow';
 
 interface FavoritesProps {
-  onViewReport?: (track: Track) => void;
   onViewDetails: (track: Track) => void;
 }
 
-export const Favorites: React.FC<FavoritesProps> = ({ onViewReport, onViewDetails }) => {
+export const Favorites: React.FC<FavoritesProps> = ({ onViewDetails }) => {
   const { token } = useAuth();
   const { favorites } = useAudio();
   const [favoriteTracks, setFavoriteTracks] = React.useState<Track[]>([]);
@@ -77,7 +76,6 @@ export const Favorites: React.FC<FavoritesProps> = ({ onViewReport, onViewDetail
               key={track.id}
               track={track}
               index={idx}
-              onViewReport={onViewReport}
               onViewDetails={onViewDetails}
             />
           ))}

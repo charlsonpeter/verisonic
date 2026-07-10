@@ -5,14 +5,13 @@ import { TrackRow } from '../components/shared/TrackRow';
 import { RadioCard } from '../components/shared/RadioCard';
 
 interface SearchProps {
-  onViewReport?: (track: Track) => void;
   onViewDetails: (track: Track) => void;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
 }
 
 export const Search: React.FC<SearchProps> = ({ 
-  onViewReport, onViewDetails, searchQuery, setSearchQuery 
+  onViewDetails, searchQuery, setSearchQuery 
 }) => {
   const { playTrack } = useAudio();
 
@@ -193,7 +192,6 @@ export const Search: React.FC<SearchProps> = ({
                     key={track.id} 
                     track={track} 
                     index={idx}
-                    onViewReport={onViewReport}
                     onViewDetails={onViewDetails}
                   />
                 ))}

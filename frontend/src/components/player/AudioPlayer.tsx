@@ -1,7 +1,7 @@
 import React from 'react';
 import { 
   Play, Pause, SkipForward, SkipBack, Shuffle, Repeat, 
-  Volume2, VolumeX, ListMusic, Heart, CheckCircle2, Crown, Maximize2, Monitor, AlignLeft,
+  Volume2, VolumeX, ListMusic, Heart, Monitor, AlignLeft,
   ChevronDown
 } from 'lucide-react';
 import { useAudio } from '../../context/AudioContext';
@@ -115,19 +115,27 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
   return (
     <>
-      <footer className={`fixed ${activeTab !== 'landing' ? 'bottom-[76px] md:bottom-6' : 'bottom-6'} left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-full md:max-w-6xl h-20 md:h-24 floating-deck rounded-2xl md:rounded-3xl flex items-center justify-between px-4 md:px-6 z-30 transition-all duration-300`}>
+      <footer
+        className={`z-30 transition-all duration-300
+          max-md:relative max-md:flex-shrink-0 max-md:w-full max-md:flex-row max-md:items-center max-md:gap-2.5 max-md:py-2.5 max-md:px-3
+          md:fixed md:flex md:items-center md:justify-between md:px-6
+          md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-full md:max-w-6xl md:h-24 md:bottom-6
+          bg-slate-950/98 border-t border-white/10 backdrop-blur-lg
+          md:floating-deck md:rounded-3xl md:border md:bg-[rgba(6,8,20,0.72)]
+        `}
+      >
         {/* Background artwork blur effect */}
         {currentTrack?.cover_art_url && (
           <div 
-            className="absolute inset-0 bg-cover bg-center opacity-5 filter blur-3xl pointer-events-none rounded-2xl md:rounded-3xl -z-10" 
+            className="absolute inset-0 bg-cover bg-center opacity-5 filter blur-3xl pointer-events-none -z-10 md:rounded-3xl" 
             style={{ backgroundImage: `url(${currentTrack.cover_art_url})` }}
           />
         )}
 
-        {/* Meta Track details (cover art + title/artist) */}
+        {/* Meta Track details — desktop only */}
         <div 
           onClick={() => { if (window.innerWidth < 768) setIsMobileExpanded(true); }}
-          className="flex items-center gap-3 md:gap-4 w-auto md:w-80 min-w-0 cursor-pointer md:cursor-default flex-shrink-0"
+          className="hidden md:flex items-center gap-4 w-80 min-w-0 cursor-default flex-shrink-0"
         >
           <div className="w-12 h-12 md:w-14 md:h-14 bg-gradient-to-tr from-slate-900 to-rose-900 rounded-xl overflow-hidden flex items-center justify-center border border-white/5 shadow-md flex-shrink-0">
             {currentTrack?.cover_art_url ? (
@@ -136,7 +144,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               <Monitor className="w-5 h-5 md:w-6 md:h-6 text-slate-500" />
             )}
           </div>
-          <div className="min-w-0 hidden md:block">
+          <div className="min-w-0">
             <div className="flex items-center gap-1.5">
               <h4 className="font-bold text-white text-sm truncate max-w-[150px]">
                 {activeRadioStation ? getRadioDisplayInfo()?.title : currentTrack?.title}
@@ -162,60 +170,83 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           </div>
         </div>
 
-        {/* Mobile: center group — [metadata | controls] on top row, progress bar at bottom */}
-        <div className="flex md:hidden flex-1 min-w-0 flex-col justify-center gap-1.5 mx-2">
-          {/* Top Row: metadata (left) + controls (right) */}
-          <div className="flex items-center justify-between w-full gap-2">
-            {/* Metadata */}
-            <div 
+        {/* Mobile player: cover | metadata+seek | controls */}
+        <div className="md:hidden w-full flex items-center gap-2.5 min-w-0">
+          {/* Col 1 — cover art */}
+          <button
+            type="button"
+            onClick={() => setIsMobileExpanded(true)}
+            className="w-11 h-11 bg-gradient-to-tr from-slate-900 to-rose-900 rounded-xl overflow-hidden flex items-center justify-center border border-white/5 shadow-md flex-shrink-0 active:scale-95 transition"
+          >
+            {currentTrack?.cover_art_url ? (
+              <img src={currentTrack.cover_art_url} alt="Cover" className="w-full h-full object-cover" />
+            ) : (
+              <Monitor className="w-5 h-5 text-slate-500" />
+            )}
+          </button>
+
+          {/* Col 2 — metadata + seek bar */}
+          <div className="flex-1 min-w-0 flex flex-col justify-center gap-1.5">
+            <button
+              type="button"
               onClick={() => setIsMobileExpanded(true)}
-              className="flex-1 min-w-0 cursor-pointer"
+              className="min-w-0 text-left active:opacity-80 transition"
             >
-              <h4 className="font-bold text-white text-xs truncate leading-tight">
+              <h4 className="font-bold text-white text-sm truncate leading-snug">
                 {activeRadioStation ? getRadioDisplayInfo()?.title : currentTrack?.title}
               </h4>
-              <p className="text-[10px] text-slate-400 truncate leading-tight mt-0.5">
+              <p className="text-xs text-slate-400 truncate leading-snug mt-0.5">
                 {activeRadioStation ? getRadioDisplayInfo()?.subtitle : currentTrack?.artist_name}
               </p>
-            </div>
-
-            {/* Playback Controls */}
-            <div className="flex items-center gap-3 flex-shrink-0">
-              <button 
-                onClick={(e) => { e.stopPropagation(); playPrevious(); }} 
-                disabled={isRadioSync || isAdminMode}
-                className="text-slate-400 hover:text-white transition disabled:opacity-20"
-                title="Previous"
-              >
-                <SkipBack className="w-3.5 h-3.5 fill-current" />
-              </button>
-
-              <button
-                onClick={(e) => { e.stopPropagation(); togglePlay(); }}
-                disabled={isOffline}
-                className="w-8 h-8 bg-white hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none active:scale-95 rounded-full flex items-center justify-center text-slate-950 font-bold shadow-md transition"
-                title={isOffline ? "Station Offline" : isPlaying ? "Pause" : "Play"}
-              >
-                {isPlaying ? <Pause className="w-3.5 h-3.5 fill-current text-slate-950" /> : <Play className="w-3.5 h-3.5 fill-current text-slate-950 ml-0.5" />}
-              </button>
-
-              <button 
-                onClick={(e) => { e.stopPropagation(); playNext(); }} 
-                disabled={isRadioSync || isAdminMode}
-                className="text-slate-400 hover:text-white transition disabled:opacity-20"
-                title="Next"
-              >
-                <SkipForward className="w-3.5 h-3.5 fill-current" />
-              </button>
-            </div>
+            </button>
+            <input
+              type="range"
+              min="0"
+              max={isRadioSync ? 86400 : (duration || 100)}
+              value={isRadioSync ? secondsSinceMidnight : currentTime}
+              onChange={(e) => seek(parseFloat(e.target.value))}
+              disabled={isRadioSync}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full h-1 accent-rose-500 bg-white/10 rounded-full outline-none cursor-pointer audio-knob"
+              aria-label="Seek"
+            />
           </div>
 
-          {/* Progress bar — full width of center group */}
-          <div className="w-full h-[2px] bg-white/5 rounded-full overflow-hidden">
-            <div 
-              className="h-full bg-gradient-to-r from-rose-500 to-pink-500 transition-all duration-100" 
-              style={{ width: isRadioSync ? `${(secondsSinceMidnight / 86400) * 100}%` : `${(currentTime / (duration || 1)) * 100}%` }}
-            />
+          {/* Col 3 — playback controls */}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); playPrevious(); }}
+              disabled={isRadioSync || isAdminMode}
+              className="text-slate-400 active:text-white transition disabled:opacity-20"
+              title="Previous"
+            >
+              <SkipBack className="w-3.5 h-3.5 fill-current" />
+            </button>
+
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); togglePlay(); }}
+              disabled={isOffline}
+              className="w-8 h-8 bg-white hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none active:scale-95 rounded-full flex items-center justify-center text-slate-950 font-bold shadow-md transition"
+              title={isOffline ? 'Station Offline' : isPlaying ? 'Pause' : 'Play'}
+            >
+              {isPlaying ? (
+                <Pause className="w-3.5 h-3.5 fill-current text-slate-950" />
+              ) : (
+                <Play className="w-3.5 h-3.5 fill-current text-slate-950 ml-0.5" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); playNext(); }}
+              disabled={isRadioSync || isAdminMode}
+              className="text-slate-400 active:text-white transition disabled:opacity-20"
+              title="Next"
+            >
+              <SkipForward className="w-3.5 h-3.5 fill-current" />
+            </button>
           </div>
         </div>
 
@@ -355,14 +386,6 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           </div>
         </div>
 
-        {/* Mobile: Expand button (right side only) */}
-        <button 
-          onClick={(e) => { e.stopPropagation(); setIsMobileExpanded(true); }}
-          className="flex md:hidden p-1.5 bg-white/5 border border-white/5 rounded-lg text-slate-400 active:scale-95 transition flex-shrink-0"
-          title="Expand Details"
-        >
-          <Maximize2 className="w-3.5 h-3.5" />
-        </button>
       </footer>
 
       {/* MOBILE FULL-SCREEN EXPANDED PLAYER DECK */}
