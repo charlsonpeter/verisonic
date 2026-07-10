@@ -116,14 +116,6 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   return (
     <>
       <footer className={`fixed ${activeTab !== 'landing' ? 'bottom-[76px] md:bottom-6' : 'bottom-6'} left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-full md:max-w-6xl h-20 md:h-24 floating-deck rounded-2xl md:rounded-3xl flex items-center justify-between px-4 md:px-6 z-30 transition-all duration-300`}>
-        {/* Thin top progress line for mobile */}
-        <div className="absolute top-0 left-4 right-4 h-[2px] bg-white/5 rounded-full md:hidden overflow-hidden">
-          <div 
-            className="h-full bg-gradient-to-r from-rose-500 to-pink-500 transition-all duration-100" 
-            style={{ width: isRadioSync ? `${(secondsSinceMidnight / 86400) * 100}%` : `${(currentTime / (duration || 1)) * 100}%` }}
-          />
-        </div>
-
         {/* Background artwork blur effect */}
         {currentTrack?.cover_art_url && (
           <div 
@@ -132,10 +124,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           />
         )}
 
-        {/* Meta Track details */}
+        {/* Meta Track details (cover art + title/artist) */}
         <div 
           onClick={() => { if (window.innerWidth < 768) setIsMobileExpanded(true); }}
-          className="flex items-center gap-3 md:gap-4 w-full md:w-80 min-w-0 cursor-pointer md:cursor-default"
+          className="flex items-center gap-3 md:gap-4 w-auto md:w-80 min-w-0 cursor-pointer md:cursor-default flex-shrink-0"
         >
           <div className="w-12 h-12 md:w-14 md:h-14 bg-gradient-to-tr from-slate-900 to-rose-900 rounded-xl overflow-hidden flex items-center justify-center border border-white/5 shadow-md flex-shrink-0">
             {currentTrack?.cover_art_url ? (
@@ -144,9 +136,9 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               <Monitor className="w-5 h-5 md:w-6 md:h-6 text-slate-500" />
             )}
           </div>
-          <div className="min-w-0 flex-1 md:flex-none">
+          <div className="min-w-0 hidden md:block">
             <div className="flex items-center gap-1.5">
-              <h4 className="font-bold text-white text-xs md:text-sm truncate max-w-[120px] md:max-w-[150px]">
+              <h4 className="font-bold text-white text-sm truncate max-w-[150px]">
                 {activeRadioStation ? getRadioDisplayInfo()?.title : currentTrack?.title}
               </h4>
               {currentTrack && !isAdminMode && (
@@ -155,25 +147,81 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                   className={`flex-shrink-0 transition ${isFav ? 'text-rose-500 scale-110' : 'text-slate-500 hover:text-slate-350'}`}
                   title={isFav ? "Remove from Favorites" : "Add to Favorites"}
                 >
-                  <Heart className={`w-3.5 h-3.5 md:w-4 md:h-4 ${isFav ? 'fill-current' : ''}`} />
+                  <Heart className={`w-4 h-4 ${isFav ? 'fill-current' : ''}`} />
                 </button>
               )}
             </div>
-            <p className="text-[10px] md:text-xs text-slate-400 truncate max-w-[120px] md:max-w-[180px]">
+            <p className="text-xs text-slate-400 truncate max-w-[180px]">
               {activeRadioStation ? getRadioDisplayInfo()?.subtitle : currentTrack?.artist_name}
             </p>
             {badge && (
-              <span className={`inline-block text-[8px] md:text-[9px] font-extrabold px-1.5 py-0.5 rounded-full border mt-0.5 md:mt-1 uppercase ${badge.style}`}>
+              <span className={`inline-block text-[9px] font-extrabold px-1.5 py-0.5 rounded-full border mt-1 uppercase ${badge.style}`}>
                 {badge.text}
               </span>
             )}
           </div>
         </div>
 
-        {/* Primary media controls */}
+        {/* Mobile: center group — [metadata | controls] on top row, progress bar at bottom */}
+        <div className="flex md:hidden flex-1 min-w-0 flex-col justify-center gap-1.5 mx-2">
+          {/* Top Row: metadata (left) + controls (right) */}
+          <div className="flex items-center justify-between w-full gap-2">
+            {/* Metadata */}
+            <div 
+              onClick={() => setIsMobileExpanded(true)}
+              className="flex-1 min-w-0 cursor-pointer"
+            >
+              <h4 className="font-bold text-white text-xs truncate leading-tight">
+                {activeRadioStation ? getRadioDisplayInfo()?.title : currentTrack?.title}
+              </h4>
+              <p className="text-[10px] text-slate-400 truncate leading-tight mt-0.5">
+                {activeRadioStation ? getRadioDisplayInfo()?.subtitle : currentTrack?.artist_name}
+              </p>
+            </div>
+
+            {/* Playback Controls */}
+            <div className="flex items-center gap-3 flex-shrink-0">
+              <button 
+                onClick={(e) => { e.stopPropagation(); playPrevious(); }} 
+                disabled={isRadioSync || isAdminMode}
+                className="text-slate-400 hover:text-white transition disabled:opacity-20"
+                title="Previous"
+              >
+                <SkipBack className="w-3.5 h-3.5 fill-current" />
+              </button>
+
+              <button
+                onClick={(e) => { e.stopPropagation(); togglePlay(); }}
+                disabled={isOffline}
+                className="w-8 h-8 bg-white hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none active:scale-95 rounded-full flex items-center justify-center text-slate-950 font-bold shadow-md transition"
+                title={isOffline ? "Station Offline" : isPlaying ? "Pause" : "Play"}
+              >
+                {isPlaying ? <Pause className="w-3.5 h-3.5 fill-current text-slate-950" /> : <Play className="w-3.5 h-3.5 fill-current text-slate-950 ml-0.5" />}
+              </button>
+
+              <button 
+                onClick={(e) => { e.stopPropagation(); playNext(); }} 
+                disabled={isRadioSync || isAdminMode}
+                className="text-slate-400 hover:text-white transition disabled:opacity-20"
+                title="Next"
+              >
+                <SkipForward className="w-3.5 h-3.5 fill-current" />
+              </button>
+            </div>
+          </div>
+
+          {/* Progress bar — full width of center group */}
+          <div className="w-full h-[2px] bg-white/5 rounded-full overflow-hidden">
+            <div 
+              className="h-full bg-gradient-to-r from-rose-500 to-pink-500 transition-all duration-100" 
+              style={{ width: isRadioSync ? `${(secondsSinceMidnight / 86400) * 100}%` : `${(currentTime / (duration || 1)) * 100}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Desktop: Primary media controls */}
         <div className="hidden md:flex flex-col items-center gap-2.5 flex-1 max-w-2xl px-4">
           <div className="flex items-center gap-6">
-            {/* Shuffle button */}
             <button 
               onClick={toggleShuffle} 
               disabled={isRadioSync || isAdminMode}
@@ -183,7 +231,6 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               <Shuffle className="w-4 h-4" />
             </button>
 
-            {/* Previous song */}
             <button 
               onClick={playPrevious} 
               disabled={isRadioSync || isAdminMode}
@@ -193,17 +240,15 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               <SkipBack className="w-5 h-5 fill-current" />
             </button>
 
-            {/* Play/Pause */}
             <button
               onClick={togglePlay}
               disabled={isOffline}
-              className="w-11 h-11 bg-white hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none active:scale-95 rounded-full flex items-center justify-center text-slate-950 font-bold shadow-md hover:shadow-rose-500/10 transition-all duration-305"
+              className="w-11 h-11 bg-white hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none active:scale-95 rounded-full flex items-center justify-center text-slate-950 font-bold shadow-md hover:shadow-rose-500/10 transition-all duration-300"
               title={isOffline ? "Station Offline" : isPlaying ? "Pause" : "Play"}
             >
               {isPlaying ? <Pause className="w-5 h-5 fill-current text-slate-950" /> : <Play className="w-5 h-5 fill-current text-slate-950 ml-0.5" />}
             </button>
 
-            {/* Next song */}
             <button 
               onClick={playNext} 
               disabled={isRadioSync || isAdminMode}
@@ -213,7 +258,6 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               <SkipForward className="w-5 h-5 fill-current" />
             </button>
 
-            {/* Repeat mode toggler */}
             <button 
               onClick={() => {
                 if (repeatMode === 'none') setRepeatMode('all');
@@ -231,7 +275,6 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             </button>
           </div>
 
-          {/* Media progress bar */}
           <div className="w-full flex items-center gap-3 text-[10px] text-slate-500 font-bold font-sans">
             <span className="w-14 text-right tabular-nums">
               {isRadioSync ? format24hTime(secondsSinceMidnight) : formatTime(currentTime)}
@@ -251,12 +294,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           </div>
         </div>
 
-        {/* Volume / Auxiliary layout controls */}
+        {/* Desktop: Volume / Auxiliary controls */}
         <div className="hidden md:flex items-center gap-5 justify-end flex-1 max-w-[420px]">
-          {/* Equalizer animation */}
           <Equalizer />
 
-          {/* Playback speed toggle */}
           {!isRadioSync && (
             <select 
               value={playbackSpeed}
@@ -272,7 +313,6 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             </select>
           )}
 
-          {/* Volume controls */}
           <div className="flex items-center gap-2">
             <button 
               onClick={toggleMute} 
@@ -292,22 +332,19 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             />
           </div>
 
-          {/* Toggle Stack (Now Playing top, Lyrics bottom) */}
           <div className="flex flex-col gap-1.5 items-center justify-center border-l border-white/5 pl-4 ml-2">
-            {/* Right drawer toggle */}
             <button 
               onClick={onToggleQueue}
-              className={`transition ${isQueueOpen ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-300'}`}
+              className={`transition ${isQueueOpen ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'}`}
               title="Now Playing"
             >
               <ListMusic className="w-[18px] h-[18px]" />
             </button>
 
-            {/* Lyrics toggle */}
             {hasLyrics && !isAdminMode && (
               <button 
                 onClick={onToggleLyrics}
-                className={`transition ${isLyricsOpen ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-300'}`}
+                className={`transition ${isLyricsOpen ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'}`}
                 title="Lyrics"
               >
                 <AlignLeft className="w-[18px] h-[18px]" />
@@ -316,43 +353,14 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           </div>
         </div>
 
-        {/* Mobile controls (previous, play/pause, next, expand) */}
-        <div className="flex md:hidden items-center gap-2.5">
-          <button 
-            onClick={(e) => { e.stopPropagation(); playPrevious(); }} 
-            disabled={isRadioSync || isAdminMode}
-            className="text-slate-450 hover:text-white transition disabled:opacity-20 p-1"
-            title="Previous"
-          >
-            <SkipBack className="w-4 h-4 fill-current" />
-          </button>
-
-          <button
-            onClick={(e) => { e.stopPropagation(); togglePlay(); }}
-            disabled={isOffline}
-            className="w-9 h-9 bg-white hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none active:scale-95 rounded-full flex items-center justify-center text-slate-950 font-bold shadow-md transition"
-            title={isOffline ? "Station Offline" : isPlaying ? "Pause" : "Play"}
-          >
-            {isPlaying ? <Pause className="w-4 h-4 fill-current text-slate-950" /> : <Play className="w-4 h-4 fill-current text-slate-950 ml-0.5" />}
-          </button>
-          
-          <button 
-            onClick={(e) => { e.stopPropagation(); playNext(); }} 
-            disabled={isRadioSync || isAdminMode}
-            className="text-slate-450 hover:text-white transition disabled:opacity-20 p-1"
-            title="Next"
-          >
-            <SkipForward className="w-4 h-4 fill-current" />
-          </button>
-
-          <button 
-            onClick={(e) => { e.stopPropagation(); setIsMobileExpanded(true); }}
-            className="p-1.5 bg-white/5 border border-white/5 rounded-lg text-slate-400 active:scale-95 transition"
-            title="Expand Details"
-          >
-            <Maximize2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
+        {/* Mobile: Expand button (right side only) */}
+        <button 
+          onClick={(e) => { e.stopPropagation(); setIsMobileExpanded(true); }}
+          className="flex md:hidden p-1.5 bg-white/5 border border-white/5 rounded-lg text-slate-400 active:scale-95 transition flex-shrink-0"
+          title="Expand Details"
+        >
+          <Maximize2 className="w-3.5 h-3.5" />
+        </button>
       </footer>
 
       {/* MOBILE FULL-SCREEN EXPANDED PLAYER DECK */}
