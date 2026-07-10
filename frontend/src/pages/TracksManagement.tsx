@@ -510,15 +510,10 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     <div className="space-y-8 w-full max-w-6xl">
       {/* Title */}
       <div className="flex justify-between items-center">
-        <div>
+        <div className="hidden md:block">
           <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
             <Music className="w-8 h-8 text-rose-400 animate-pulse" /> Manage Tracks
           </h2>
-          <p className="text-sm text-slate-400 mt-1">
-            {currentUser?.role === 'admin' 
-              ? 'Upload audio master files, monitor spectral analysis validation, and override approvals.'
-              : 'Upload and monitor the status of your audio masters and manage your release catalog.'}
-          </p>
         </div>
         <button
           onClick={() => setIsUploadModalOpen(true)}

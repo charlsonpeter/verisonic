@@ -66,9 +66,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
           <h2 className="text-2xl font-extrabold text-gradient-premium tracking-tight leading-tight">
             {isRegistering ? "Create Audiophile Account" : "Access Studio Stage"}
           </h2>
-          <p className="text-[11px] text-slate-450 mt-1 uppercase tracking-widest font-bold">
-            VeriSonic Audio Nodes Gateway
-          </p>
         </div>
 
         {/* Error / Success logs */}

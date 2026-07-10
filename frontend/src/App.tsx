@@ -265,7 +265,7 @@ function DashboardContent() {
       case 'reports':
         return (
           <div className="space-y-6 font-sans">
-            <div>
+            <div className="hidden md:block">
               <h2 className="text-3xl font-extrabold tracking-tight text-white mb-1">Acoustic Reports</h2>
               <p className="text-sm text-slate-400">Cutoff ranges, spectral signatures, and upscaling warning results.</p>
             </div>
@@ -531,7 +531,10 @@ function DashboardContent() {
             searchQuery={searchQuery} 
             setSearchQuery={setSearchQuery} 
             activeTab={activeTab} 
-            setActiveTab={setActiveTab} 
+            setActiveTab={setActiveTab}
+            pageTitleOverride={
+              activeTab === 'details' ? selectedDetailsTrack?.title ?? 'Track Details' : undefined
+            }
           />
         )}
         

@@ -84,7 +84,7 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate })
 
         <div className="flex-1 min-w-0 w-full text-center sm:text-left space-y-5">
           <div className="space-y-2">
-            <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-gradient-premium tracking-tight leading-tight">
+            <h1 className="hidden md:block text-3xl sm:text-4xl md:text-5xl font-extrabold text-gradient-premium tracking-tight leading-tight">
               {track.title}
             </h1>
             <p className="text-sm text-slate-350 font-bold">

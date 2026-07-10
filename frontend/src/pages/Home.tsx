@@ -110,7 +110,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
               <div 
                 key={`continue-${track.id}`}
                 onClick={() => playTrack(track)}
-                className="bg-slate-900/20 hover:bg-slate-900/40 border border-white/3 rounded-3xl p-4 flex items-center gap-4 transition duration-200 cursor-pointer group hover:scale-[1.02] hover:border-rose-500/25 hover:shadow-lg"
+                className="bg-slate-900/20 hover:bg-slate-900/40 rounded-3xl p-4 flex items-center gap-4 transition duration-200 cursor-pointer group hover:scale-[1.02] hover:shadow-lg"
               >
                 <div className="w-12 h-12 bg-slate-800 rounded-xl overflow-hidden relative flex-shrink-0">
                   <img src={track.cover_art_url} alt="Cover" className="w-full h-full object-cover" />
@@ -139,13 +139,14 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
             </h3>
           </div>
 
-          <div className="space-y-2 bg-slate-950/40 backdrop-blur-md border border-white/5 p-5 rounded-3xl shadow-inner glow-rose/5">
+          <div className="space-y-2 bg-slate-950/40 backdrop-blur-md p-5 rounded-3xl shadow-inner glow-rose/5">
             {allTracks.map((track, index) => (
               <TrackRow 
                 key={track.id} 
                 track={track} 
                 index={index}
                 onViewDetails={onViewDetails}
+                borderless
               />
             ))}
           </div>
@@ -157,7 +158,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
             <Award className="w-5 h-5 text-rose-400" /> Popular Artists
           </h3>
 
-          <div className="space-y-4 bg-slate-950/40 backdrop-blur-md border border-white/5 p-6 rounded-3xl shadow-inner">
+          <div className="space-y-4 bg-slate-950/40 backdrop-blur-md p-6 rounded-3xl shadow-inner">
             {popularArtists.length === 0 ? (
               <p className="text-xs text-slate-500 text-center py-4">No artists available.</p>
             ) : (

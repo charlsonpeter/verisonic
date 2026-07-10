@@ -45,14 +45,14 @@
   background: rgba(8, 10, 22, 0.6);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  border: 1px solid rgba(255, 255, 255, 0.03);
+  border: 1px solid transparent;
 }
 
 .glass-card {
   background: rgba(15, 23, 42, 0.35);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border: 1px solid transparent;
 }
 
 .glass-card-hover {
@@ -71,7 +71,7 @@
   background: rgba(6, 8, 20, 0.72);
   backdrop-filter: blur(30px);
   -webkit-backdrop-filter: blur(30px);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid transparent;
   box-shadow: 0 30px 60px -15px rgba(0, 0, 0, 0.8), 
               0 0 50px -10px rgba(244, 63, 94, 0.15);
 }
@@ -324,4 +324,15 @@
 }
 .animate-slide-down {
   animation: slide-down 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Remove white borders app-wide */
+@layer utilities {
+  [class*="border-white"] {
+    border-color: transparent !important;
+  }
+
+  [class*="divide-white"] > :not([hidden]) ~ :not([hidden]) {
+    border-color: transparent !important;
+  }
 }

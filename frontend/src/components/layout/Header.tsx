@@ -5,16 +5,18 @@ import {
   ShieldCheck, BarChart2, Settings, LogOut, Disc, Mail, Laptop
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { getPageTitle } from '../../utils/pageTitles';
 
 interface HeaderProps {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  pageTitleOverride?: string | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
-  searchQuery, setSearchQuery, activeTab, setActiveTab 
+  searchQuery, setSearchQuery, activeTab, setActiveTab, pageTitleOverride
 }) => {
   const { currentUser, isPremium, logout, token, userMode, switchUserMode, canUsePlaylists } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -38,13 +40,13 @@ export const Header: React.FC<HeaderProps> = ({
 
   const navItems = isRadioAdminInAdminMode
     ? [
-        { id: 'radio', label: 'Radio Dashboard', icon: Radio },
+        { id: 'radio', label: 'Radio Stations', icon: Radio },
         { id: 'broadcaster-download', label: 'Broadcaster App', icon: Laptop },
         { id: 'contact', label: 'Contact Us', icon: Mail }
       ]
     : [
         { id: 'home', label: 'Home Feed', icon: Compass },
-        { id: 'radio', label: 'Live Radio', icon: Radio },
+        { id: 'radio', label: 'Radio Stations', icon: Radio },
         { id: 'search', label: 'Search', icon: Search },
         { id: 'favorites', label: 'Favorites', icon: Heart },
         ...(canUsePlaylists || !token ? [{ id: 'playlists', label: 'Playlists', icon: FolderHeart }] : []),
@@ -56,13 +58,32 @@ export const Header: React.FC<HeaderProps> = ({
     setDropdownOpen(false);
   };
 
+  const handleLogoClick = () => {
+    if (currentUser && userMode === 'admin') {
+      setActiveTab((currentUser.real_role || currentUser.role) === 'radio_admin' ? 'radio' : 'home');
+      return;
+    }
+    setActiveTab('home');
+  };
+
+  const mobilePageTitle =
+    pageTitleOverride !== undefined
+      ? pageTitleOverride
+      : getPageTitle(activeTab, { currentUser, userMode });
+
   return (
-    <header className="flex-shrink-0 px-4 md:px-8 py-3 md:py-4 flex items-center justify-between border-b border-white/5 bg-slate-950/45 backdrop-blur-md z-30">
+    <header className="relative flex-shrink-0 px-4 md:px-8 py-3 md:py-4 flex items-center justify-between border-b border-white/5 bg-slate-950/45 backdrop-blur-md z-30">
       
+      {mobilePageTitle && (
+        <h1 className="md:hidden absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-sm font-extrabold text-white truncate max-w-[42vw] pointer-events-none text-center">
+          {mobilePageTitle}
+        </h1>
+      )}
+
       {/* 1. Left: Brand Mark */}
       <div 
-        className="flex items-center gap-2.5 cursor-pointer" 
-        onClick={() => setActiveTab('landing')}
+        className="relative z-10 flex items-center gap-2.5 cursor-pointer flex-shrink-0" 
+        onClick={handleLogoClick}
       >
         <div className="bg-gradient-to-tr from-rose-600 via-rose-500 to-pink-600 p-2 rounded-xl shadow-lg border border-white/10 flex items-center justify-center">
           <Radio className="w-5 h-5 text-white animate-pulse" />
@@ -99,7 +120,7 @@ export const Header: React.FC<HeaderProps> = ({
       </nav>
 
       {/* 3. Right: Search & Profile & telemetry status */}
-      <div className="flex items-center gap-4">
+      <div className="relative z-10 flex items-center gap-4 flex-shrink-0 ml-auto">
         
         {/* Compact Search Trigger */}
         {activeTab !== 'search' && userMode !== 'admin' && (

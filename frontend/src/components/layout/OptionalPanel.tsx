@@ -170,13 +170,19 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
   if (!isOpen) return null;
 
   return (
-    <aside className="w-full sm:w-80 glass-card border-l border-white/5 flex flex-col z-20 h-[calc(100vh-73px)] fixed right-0 top-[73px] pt-4 pb-28 shadow-2xl">
+    <>
+      <div
+        className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-[1000] md:hidden"
+        onClick={onClose}
+        aria-hidden
+      />
+      <aside className="w-full sm:w-80 glass-card border-l border-white/5 flex flex-col z-[1001] shadow-2xl fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-auto max-md:h-[min(75dvh,520px)] max-md:rounded-t-3xl max-md:border-l-0 max-md:border-t max-md:border-white/10 max-md:pt-4 max-md:pb-[calc(1rem+env(safe-area-inset-bottom,0px))] md:right-0 md:top-[73px] md:h-[calc(100vh-73px)] md:pt-4 md:pb-28">
       {/* Header */}
       <div className="px-4 flex items-center justify-between border-b border-white/5 pb-4">
         <div className="flex items-center gap-2">
           <ListMusic className="w-4 h-4 text-rose-500" />
           <span className="text-xs font-bold text-white uppercase tracking-wider">
-            {activeRadioStation ? 'Station Schedule' : 'Play Queue'}
+            {activeRadioStation ? 'Programs' : 'Now Playing'}
           </span>
         </div>
         <button onClick={onClose} className="p-1 text-slate-500 hover:text-white transition">
@@ -329,5 +335,6 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
         </div>
       </div>
     </aside>
+    </>
   );
 };

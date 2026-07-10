@@ -16,7 +16,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
   const navItems = [
     { id: 'landing', label: 'Overview', icon: Disc },
     { id: 'home', label: 'Home Feed', icon: Compass },
-    { id: 'radio', label: 'Live Radio', icon: Radio },
+    { id: 'radio', label: 'Radio Stations', icon: Radio },
     { id: 'search', label: 'Search', icon: Search },
     { id: 'favorites', label: 'My Favorites', icon: Heart },
     { id: 'playlists', label: 'Playlists', icon: FolderHeart },

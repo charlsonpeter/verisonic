@@ -293,13 +293,10 @@ export const StudioProfile: React.FC = () => {
       <div className="space-y-10 w-full animate-page-entry font-sans">
         {/* Header */}
         <div className="flex justify-between items-center border-b border-white/5 pb-4">
-          <div>
+          <div className="hidden md:block">
             <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
               <Disc className="w-8 h-8 text-rose-400" /> Music Studios
             </h2>
-            <p className="text-sm text-slate-400 mt-1">
-              List, edit, enable, or disable registered music studios on the platform.
-            </p>
           </div>
         </div>
 

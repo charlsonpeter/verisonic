@@ -80,11 +80,10 @@ export const Contact: React.FC = () => {
   return (
     <div className="w-full max-w-4xl space-y-10 pb-10">
       {/* Title Header */}
-      <div>
+      <div className="hidden md:block">
         <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
           <Mail className="w-8 h-8 text-rose-400 animate-pulse" /> Contact Support Hub
         </h2>
-        <p className="text-sm text-slate-400 mt-1">Submit technical questions or request platform role upgrades to manage studios or live streams.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start">

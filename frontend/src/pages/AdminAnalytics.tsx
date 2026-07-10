@@ -16,9 +16,8 @@ interface AdminAnalyticsProps {
 
 export const AdminAnalytics: React.FC<AdminAnalyticsProps> = ({ analyticsData, onLoad }) => (
   <div className="space-y-6 font-sans">
-    <div>
+    <div className="hidden md:block">
       <h2 className="text-3xl font-extrabold tracking-tight text-white mb-1">System Metrics</h2>
-      <p className="text-sm text-slate-400">Acoustic check stats, unique listener counts, and bandwidth loads.</p>
     </div>
 
     {!analyticsData ? (

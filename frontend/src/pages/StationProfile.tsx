@@ -446,17 +446,10 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
       
       {/* Title Header */}
       <div className="flex justify-between items-center">
-        <div>
+        <div className="hidden md:block">
           <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
             <Radio className="w-8 h-8 text-rose-455 animate-pulse" /> Station Profiles
           </h2>
-          <p className="text-sm text-slate-400 mt-1">
-            {viewMode === 'list' 
-              ? 'Manage your registered live radio station nodes, credentials, and settings.' 
-              : viewMode === 'edit' 
-                ? 'Update location details and settings for your station node.'
-                : 'Register a new station node to stream live over the network.'}
-          </p>
         </div>
 
         {viewMode === 'list' && (

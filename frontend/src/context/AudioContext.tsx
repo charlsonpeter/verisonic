@@ -271,11 +271,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [token]);
 
-  // Stop library music/other stations playback when switching to Admin Mode for Radio Admins
-  // Pre-load station or stop other feeds when switching to Admin Mode
+  // Stop library music/other stations playback when switching to Admin Mode
   useEffect(() => {
     if (userMode === 'admin' && currentUser && ['radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role)) {
-      // Instantly pause and reset any running playback to prevent leakage
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = '';
@@ -284,39 +282,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setCurrentTrack(null);
       setActiveRadioStation(null);
       setIsRadioSync(false);
-
-      // If we are a radio_admin, pre-load their own station in a paused state so the player is always visible
-      if ((currentUser.real_role || currentUser.role) === 'radio_admin') {
-        const loadBroadcasterStation = async () => {
-          try {
-            const res = await fetch('/api/radio');
-            if (res.ok) {
-              const data = await res.json();
-              const myStation = data.find((s: any) => s.owner_id === currentUser.id);
-              if (myStation) {
-                setActiveRadioStation(myStation);
-                setIsRadioSync(true);
-                const virtualTrack: Track = {
-                  id: myStation.id * 100,
-                  title: myStation.current_track_title || "Standby Broadcast",
-                  artist_name: myStation.current_track_artist || myStation.name,
-                  duration: 0,
-                  stream_url: myStation.stream_url
-                };
-                setCurrentTrack(virtualTrack);
-                if (audioRef.current && myStation.stream_url) {
-                  audioRef.current.src = resolveStreamUrl(myStation.stream_url);
-                  audioRef.current.pause();
-                }
-                setIsPlaying(false);
-              }
-            }
-          } catch (e) {
-            console.warn("Failed to load radio admin station on admin mode enter.", e);
-          }
-        };
-        loadBroadcasterStation();
-      }
     }
   }, [userMode, currentUser]);
 

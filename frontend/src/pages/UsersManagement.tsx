@@ -153,11 +153,10 @@ export const UsersManagement: React.FC = () => {
   return (
     <div className="space-y-8 w-full max-w-5xl">
       {/* Title */}
-      <div>
+      <div className="hidden md:block">
         <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
           <Users className="w-8 h-8 text-rose-400 animate-pulse" /> User Management
         </h2>
-        <p className="text-sm text-slate-400 mt-1">Manage platform users, view artist requests, and assign roles.</p>
       </div>
 
       {message && (

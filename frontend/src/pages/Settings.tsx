@@ -181,15 +181,10 @@ export const Settings: React.FC = () => {
   return (
     <div className="space-y-10 w-full max-w-4xl pb-10">
       {/* Title */}
-      <div>
+      <div className="hidden md:block">
         <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
           <SettingsIcon className="w-8 h-8 text-rose-400" /> {showAdminSettings ? 'Broadcaster control Settings' : 'Platform Settings'}
         </h2>
-        <p className="text-sm text-slate-400 mt-1">
-          {showAdminSettings 
-            ? 'Configure broadcast ingestion credentials, copy stream key tokens, and fetch background plugins.' 
-            : 'Configure audio resolution streams, account subscriptions, and DAC devices.'}
-        </p>
       </div>
 
       {showAdminSettings ? (

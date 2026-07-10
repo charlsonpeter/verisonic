@@ -352,11 +352,10 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
           showTracksOnMobile ? 'max-md:hidden' : ''
         }`}
       >
-        <div>
+        <div className="hidden md:block">
           <h2 className="text-2xl font-extrabold text-white flex items-center gap-2">
             <FolderHeart className="w-6 h-6 text-rose-400" /> Playlists
           </h2>
-          <p className="text-xs text-slate-400 mt-1">Create collections and add tracks from the library using the folder icon on any track.</p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-6">

@@ -2,7 +2,7 @@ import React from 'react';
 import { 
   Play, Pause, SkipForward, SkipBack, Shuffle, Repeat, 
   Volume2, VolumeX, ListMusic, Heart, Monitor, AlignLeft,
-  ChevronDown
+  ChevronDown, ChevronsLeft, ChevronsRight
 } from 'lucide-react';
 import { useAudio } from '../../context/AudioContext';
 import { Equalizer } from './Equalizer';
@@ -15,6 +15,8 @@ interface AudioPlayerProps {
   isLyricsOpen: boolean;
   activeTab: string;
 }
+
+const SPEED_STEPS = [0.75, 1, 1.25, 1.5, 2] as const;
 
 export const AudioPlayer: React.FC<AudioPlayerProps> = ({ 
   onToggleQueue, 
@@ -32,6 +34,69 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   } = useAudio();
 
   const [isMobileExpanded, setIsMobileExpanded] = React.useState(false);
+  const [mobileLyricsOpen, setMobileLyricsOpen] = React.useState(false);
+  const mobilePlayerHistoryRef = React.useRef(false);
+
+  const openMobileExpanded = React.useCallback(() => {
+    setIsMobileExpanded(true);
+    if (!mobilePlayerHistoryRef.current) {
+      window.history.pushState(
+        { verisonicMobilePlayer: true },
+        '',
+        `${window.location.pathname}${window.location.search}${window.location.hash}`
+      );
+      mobilePlayerHistoryRef.current = true;
+    }
+  }, []);
+
+  const closeMobileExpanded = React.useCallback(() => {
+    if (mobilePlayerHistoryRef.current) {
+      mobilePlayerHistoryRef.current = false;
+      window.history.back();
+      return;
+    }
+    setIsMobileExpanded(false);
+    setMobileLyricsOpen(false);
+  }, []);
+
+  React.useEffect(() => {
+    const onPopState = () => {
+      mobilePlayerHistoryRef.current = false;
+      setIsMobileExpanded(false);
+      setMobileLyricsOpen(false);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  React.useEffect(() => {
+    if (!isMobileExpanded) setMobileLyricsOpen(false);
+  }, [isMobileExpanded]);
+
+  const speedStepIndex = SPEED_STEPS.findIndex(
+    step => Math.abs(step - playbackSpeed) < 0.01
+  );
+  const currentSpeedIndex = speedStepIndex >= 0 ? speedStepIndex : SPEED_STEPS.indexOf(1);
+
+  const decreaseSpeed = () => {
+    if (currentSpeedIndex > 0) {
+      setPlaybackSpeed(SPEED_STEPS[currentSpeedIndex - 1]);
+    }
+  };
+
+  const increaseSpeed = () => {
+    if (currentSpeedIndex < SPEED_STEPS.length - 1) {
+      setPlaybackSpeed(SPEED_STEPS[currentSpeedIndex + 1]);
+    }
+  };
+
+  const mobileLyricsLines = React.useMemo(() => {
+    if (!currentTrack?.lyrics) return [];
+    return currentTrack.lyrics
+      .split('\n')
+      .map(line => line.replace(/^\[\d{2}:\d{2}(?:\.\d{2})?\]\s*/, '').trim())
+      .filter(line => line.length > 0 && line !== 'None' && line !== 'null');
+  }, [currentTrack?.lyrics]);
 
   const { userMode, currentUser } = useAuth();
   const isAdminMode = !!(userMode === 'admin' && currentUser && ['radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role));
@@ -134,7 +199,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
         {/* Meta Track details — desktop only */}
         <div 
-          onClick={() => { if (window.innerWidth < 768) setIsMobileExpanded(true); }}
+          onClick={() => { if (window.innerWidth < 768) openMobileExpanded(); }}
           className="hidden md:flex items-center gap-4 w-80 min-w-0 cursor-default flex-shrink-0"
         >
           <div className="w-12 h-12 md:w-14 md:h-14 bg-gradient-to-tr from-slate-900 to-rose-900 rounded-xl overflow-hidden flex items-center justify-center border border-white/5 shadow-md flex-shrink-0">
@@ -175,7 +240,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           {/* Col 1 — cover art */}
           <button
             type="button"
-            onClick={() => setIsMobileExpanded(true)}
+            onClick={openMobileExpanded}
             className="w-10 h-10 bg-gradient-to-tr from-slate-900 to-rose-900 rounded-xl overflow-hidden flex items-center justify-center border border-white/5 shadow-md flex-shrink-0 active:scale-95 transition"
           >
             {currentTrack?.cover_art_url ? (
@@ -189,7 +254,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           <div className="flex-1 min-w-0 flex flex-col justify-center gap-1.5">
             <button
               type="button"
-              onClick={() => setIsMobileExpanded(true)}
+              onClick={openMobileExpanded}
               className="min-w-0 text-left active:opacity-80 transition"
             >
               <h4 className="font-bold text-white text-sm truncate leading-snug">
@@ -402,28 +467,93 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           {/* Header */}
           <div className="flex items-center justify-between w-full">
             <button 
-              onClick={() => setIsMobileExpanded(false)}
+              onClick={closeMobileExpanded}
               className="w-10 h-10 rounded-full bg-white/5 border border-white/5 flex items-center justify-center text-slate-300 active:scale-95 transition"
+              aria-label="Close player"
             >
               <ChevronDown className="w-5 h-5" />
             </button>
             <span className="text-[10px] font-bold text-slate-450 uppercase tracking-widest">Now Playing</span>
-            <div className="w-10" />
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onToggleQueue(); }}
+              className={`w-10 h-10 rounded-full border flex items-center justify-center active:scale-95 transition ${
+                isQueueOpen
+                  ? 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                  : 'bg-white/5 border-white/5 text-slate-300'
+              }`}
+              aria-label="Queue"
+              title="Queue"
+            >
+              <ListMusic className="w-5 h-5" />
+            </button>
           </div>
 
-          {/* Album Cover Visual Center */}
-          <div className="flex-1 flex flex-col items-center justify-center py-6">
-            <div className="w-60 h-60 sm:w-72 sm:h-72 rounded-3xl bg-gradient-to-tr from-slate-900 to-rose-950 overflow-hidden border border-white/10 shadow-2xl relative">
-              {currentTrack?.cover_art_url ? (
-                <img src={currentTrack.cover_art_url} alt="Cover" className="w-full h-full object-cover" />
-              ) : (
-                <Monitor className="w-14 h-14 text-slate-700" />
+          {/* Album Cover Visual Center — parent holds cover + full-area lyrics overlay */}
+          <div className="flex-1 flex flex-col items-center justify-center py-6 min-h-0 w-full relative">
+            {/* Inner div: cover art only */}
+            <div className="flex flex-col items-center flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  if (hasLyrics && !isAdminMode) {
+                    setMobileLyricsOpen(true);
+                  }
+                }}
+                className={`relative block p-0 w-60 h-60 sm:w-72 sm:h-72 rounded-3xl overflow-hidden border border-white/10 shadow-2xl transition active:scale-[0.98] ${
+                  hasLyrics && !isAdminMode ? 'cursor-pointer' : 'cursor-default'
+                }`}
+                aria-label={hasLyrics ? 'Show lyrics' : 'Album art'}
+              >
+                <div className="absolute inset-0 bg-gradient-to-tr from-slate-900 to-rose-950">
+                  {currentTrack?.cover_art_url ? (
+                    <img src={currentTrack.cover_art_url} alt="Cover" className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <Monitor className="w-14 h-14 text-slate-700" />
+                    </div>
+                  )}
+                </div>
+              </button>
+              {badge && (
+                <span className={`text-[8px] font-extrabold px-3 py-1 rounded-full border uppercase mt-5 tracking-wider ${badge.style}`}>
+                  {badge.text}
+                </span>
               )}
             </div>
-            {badge && (
-              <span className={`text-[8px] font-extrabold px-3 py-1 rounded-full border uppercase mt-5 tracking-wider ${badge.style}`}>
-                {badge.text}
-              </span>
+
+            {/* Lyrics overlay — sibling outside cover div, fills parent */}
+            {mobileLyricsOpen && hasLyrics && !isAdminMode && (
+              <button
+                type="button"
+                onClick={() => setMobileLyricsOpen(false)}
+                className="absolute z-10 top-4 bottom-4 left-1/2 -translate-x-1/2 w-screen max-w-[100vw] flex flex-col overflow-hidden active:scale-[0.99] transition"
+                aria-label="Hide lyrics"
+              >
+                {currentTrack?.cover_art_url && (
+                  <div
+                    className="absolute inset-0 bg-cover bg-center scale-110 blur-2xl opacity-20 pointer-events-none"
+                    style={{ backgroundImage: `url(${currentTrack.cover_art_url})` }}
+                    aria-hidden
+                  />
+                )}
+                <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-xl" aria-hidden />
+                <div
+                  className="relative z-10 w-full h-full min-h-0 overflow-y-auto overscroll-y-contain px-5 py-5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+                >
+                  <div className="space-y-2.5 text-center">
+                    {mobileLyricsLines.length > 0 ? (
+                      mobileLyricsLines.map((line, idx) => (
+                        <p key={idx} className="text-sm text-slate-100 leading-relaxed">
+                          {line}
+                        </p>
+                      ))
+                    ) : (
+                      <p className="text-xs text-slate-500">No lyrics available.</p>
+                    )}
+                  </div>
+                </div>
+              </button>
             )}
           </div>
 
@@ -448,10 +578,38 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               )}
             </div>
 
-            {/* Interactive Progress Slider */}
+            {/* Speed + seek bar */}
             <div className="space-y-2">
-              <input 
-                type="range" 
+              {!isRadioSync && (
+                <div className="flex items-center justify-center gap-4">
+                  <button
+                    type="button"
+                    onClick={decreaseSpeed}
+                    disabled={currentSpeedIndex <= 0}
+                    className="w-9 h-9 rounded-full flex items-center justify-center text-slate-400 active:scale-95 active:text-white transition disabled:opacity-30"
+                    aria-label="Decrease speed"
+                    title="Slower"
+                  >
+                    <ChevronsLeft className="w-4 h-4" />
+                  </button>
+                  <span className="text-xs font-bold text-slate-300 tabular-nums min-w-[3rem] text-center">
+                    {playbackSpeed}x
+                  </span>
+                  <button
+                    type="button"
+                    onClick={increaseSpeed}
+                    disabled={currentSpeedIndex >= SPEED_STEPS.length - 1}
+                    className="w-9 h-9 rounded-full flex items-center justify-center text-slate-400 active:scale-95 active:text-white transition disabled:opacity-30"
+                    aria-label="Increase speed"
+                    title="Faster"
+                  >
+                    <ChevronsRight className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
+              <input
+                type="range"
                 min="0"
                 max={isRadioSync ? 86400 : (duration || 100)}
                 value={isRadioSync ? secondsSinceMidnight : currentTime}
@@ -517,55 +675,6 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                   <span className="absolute top-0.5 right-0.5 text-[8px] bg-rose-500 text-white font-extrabold w-3 h-3 rounded-full flex items-center justify-center font-sans">1</span>
                 )}
               </button>
-            </div>
-
-            {/* Bottom Volume & Utility Dock */}
-            <div className="pt-3 border-t border-white/5 flex items-center justify-between gap-5">
-              <div className="flex items-center gap-2 flex-1">
-                <button onClick={toggleMute} className="text-slate-450 active:scale-90 transition">
-                  {isMuted || volume === 0 ? <VolumeX className="w-4 h-4 text-rose-500" /> : <Volume2 className="w-4 h-4" />}
-                </button>
-                <input 
-                  type="range" 
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={volume}
-                  onChange={(e) => adjustVolume(parseFloat(e.target.value))}
-                  className="w-full accent-rose-500 h-1 bg-slate-800 rounded-lg outline-none audio-knob"
-                />
-              </div>
-
-              <div className="flex items-center gap-2.5">
-                {!isRadioSync && (
-                  <select 
-                    value={playbackSpeed}
-                    onChange={(e) => setPlaybackSpeed(parseFloat(e.target.value))}
-                    className="bg-slate-900 border border-white/10 rounded-xl text-[9px] font-extrabold px-1.5 py-1 text-slate-300 outline-none cursor-pointer"
-                  >
-                    <option value="0.75">0.75x</option>
-                    <option value="1">1.0x</option>
-                    <option value="1.25">1.25x</option>
-                    <option value="1.5">1.5x</option>
-                    <option value="2">2.0x</option>
-                  </select>
-                )}
-
-                <button 
-                  onClick={() => { setIsMobileExpanded(false); onToggleQueue(); }}
-                  className={`p-1.5 rounded-lg border border-white/5 active:scale-95 transition ${isQueueOpen ? 'text-rose-400 bg-rose-500/10 border-rose-500/10' : 'text-slate-400'}`}
-                >
-                  <ListMusic className="w-3.5 h-3.5" />
-                </button>
-                {hasLyrics && !isAdminMode && (
-                  <button 
-                    onClick={() => { setIsMobileExpanded(false); onToggleLyrics(); }}
-                    className={`p-1.5 rounded-lg border border-white/5 active:scale-95 transition ${isLyricsOpen ? 'text-rose-400 bg-rose-500/10 border-rose-500/10' : 'text-slate-400'}`}
-                  >
-                    <AlignLeft className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
             </div>
           </div>
         </div>

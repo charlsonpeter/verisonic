@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Radio as RadioIcon, RadioIcon as LiveIcon, Plus, RefreshCw, Sparkles, X, Users, Calendar, Play, Pause, Wifi, MapPin } from 'lucide-react';
+import { Radio as RadioIcon, RadioIcon as LiveIcon, Plus, Sparkles, X, Users, Calendar, Play, Pause, Wifi, MapPin } from 'lucide-react';
 import { useAudio, RadioStation } from '../context/AudioContext';
 import { useAuth } from '../context/AuthContext';
 import { RadioCard } from '../components/shared/RadioCard';
@@ -358,21 +358,10 @@ export const Radio: React.FC = () => {
     <div className="space-y-10 w-full">
 
       {/* Page Title */}
-      <div className="flex justify-between items-end">
-        <div>
-          <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
-            <RadioIcon className="w-8 h-8 text-rose-400 animate-pulse" /> Live Radio Dashboard
-          </h2>
-          <p className="text-sm text-slate-400 mt-1">Tune into live digital radio streams and audiophile feeds.</p>
-        </div>
-        <button
-          onClick={fetchRadioStations}
-          disabled={isLoading}
-          className="p-2.5 bg-slate-900 hover:bg-slate-800 rounded-xl border border-white/5 text-slate-400 hover:text-white transition"
-          title="Refresh List"
-        >
-          <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-rose-400' : ''}`} />
-        </button>
+      <div className="hidden md:block">
+        <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
+          <RadioIcon className="w-8 h-8 text-rose-400 animate-pulse" /> Radio Stations
+        </h2>
       </div>
 
       {/* Radio Admin widgets */}

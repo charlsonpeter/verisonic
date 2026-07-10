@@ -22,6 +22,7 @@ interface TrackRowProps {
   index: number;
   onViewDetails?: (track: Track) => void;
   onRemove?: () => void;
+  borderless?: boolean;
 }
 
 interface PlaylistOption {
@@ -254,7 +255,7 @@ const MobileTrackMenu: React.FC<MobileTrackMenuProps> = ({
   );
 };
 
-export const TrackRow: React.FC<TrackRowProps> = ({ track, index, onViewDetails, onRemove }) => {
+export const TrackRow: React.FC<TrackRowProps> = ({ track, index, onViewDetails, onRemove, borderless = false }) => {
   const { playTrack, addToQueue, toggleFavorite, favorites, currentTrack, playQueue } = useAudio();
 
   const isCurrent = currentTrack?.id === track.id;
@@ -270,10 +271,14 @@ export const TrackRow: React.FC<TrackRowProps> = ({ track, index, onViewDetails,
 
   return (
     <div
-      className={`group flex items-center gap-2 p-3 rounded-2xl border transition duration-200 cursor-pointer ${
-        isCurrent
-          ? 'bg-rose-600/10 border-rose-500/20'
-          : 'bg-slate-900/15 border-white/3 hover:border-slate-800 hover:bg-slate-900/40'
+      className={`group flex items-center gap-2 p-3 rounded-2xl transition duration-200 cursor-pointer ${
+        borderless
+          ? isCurrent
+            ? 'bg-rose-600/10'
+            : 'hover:bg-slate-900/40'
+          : isCurrent
+            ? 'bg-rose-600/10 border border-rose-500/20'
+            : 'bg-slate-900/15 border border-white/3 hover:border-slate-800 hover:bg-slate-900/40'
       }`}
       onClick={() => playTrack(track)}
     >

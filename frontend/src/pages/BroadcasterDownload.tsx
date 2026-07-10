@@ -17,13 +17,10 @@ export const BroadcasterDownload: React.FC = () => {
     <div className="space-y-10 w-full animate-page-entry font-sans max-w-5xl">
       
       {/* Title */}
-      <div>
+      <div className="hidden md:block">
         <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
           <Laptop className="w-8 h-8 text-rose-455 animate-pulse" /> Desktop Broadcaster App
         </h2>
-        <p className="text-sm text-slate-400 mt-1">
-          Install the VeriSonic desktop client to stream live high-fidelity system audio or microphone inputs to the platform.
-        </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
