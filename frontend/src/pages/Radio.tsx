@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Radio as RadioIcon, RadioIcon as LiveIcon, Plus, RefreshCw, Sparkles, X, Users, Calendar, Play, Pause } from 'lucide-react';
+import { Radio as RadioIcon, RadioIcon as LiveIcon, Plus, RefreshCw, Sparkles, X, Users, Calendar, Play, Pause, Wifi } from 'lucide-react';
 import { useAudio, RadioStation } from '../context/AudioContext';
 import { useAuth } from '../context/AuthContext';
 import { RadioCard } from '../components/shared/RadioCard';
@@ -37,6 +37,66 @@ export const Radio: React.FC = () => {
 
   const [isCreating, setIsCreating] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+
+  // Connection credentials (broadcaster ingest)
+  const [showCredentialsMap, setShowCredentialsMap] = useState<Record<number, boolean>>({});
+  const [copiedKeyMap, setCopiedKeyMap] = useState<Record<number, boolean>>({});
+  const [isRegeneratingKey, setIsRegeneratingKey] = useState<Record<number, boolean>>({});
+
+  const getIngestWebSocketUrl = () => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${protocol}//${window.location.host}/api/radio/stream/ws`;
+  };
+
+  const fallbackCopyText = (text: string, onSuccess: () => void) => {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.top = '0';
+    textArea.style.left = '0';
+    textArea.style.position = 'fixed';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+    try {
+      if (document.execCommand('copy')) onSuccess();
+    } catch {
+      // ignore
+    }
+    document.body.removeChild(textArea);
+  };
+
+  const handleCopy = (text: string, id: number) => {
+    const onSuccess = () => {
+      setCopiedKeyMap(prev => ({ ...prev, [id]: true }));
+      setTimeout(() => setCopiedKeyMap(prev => ({ ...prev, [id]: false })), 2000);
+    };
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(onSuccess).catch(() => fallbackCopyText(text, onSuccess));
+    } else {
+      fallbackCopyText(text, onSuccess);
+    }
+  };
+
+  const handleRegenerateKey = async (stationId: number) => {
+    setIsRegeneratingKey(prev => ({ ...prev, [stationId]: true }));
+    try {
+      const res = await fetch(`${API_URL}/radio/${stationId}/regenerate-key`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token || localStorage.getItem('token') || ''}` },
+      });
+      if (res.ok) {
+        const updatedStation = await res.json();
+        setStations(prev => prev.map(s => (s.id === stationId ? updatedStation : s)));
+      } else {
+        const err = await res.json();
+        showError('Error', err.detail || 'Failed to regenerate key.');
+      }
+    } catch {
+      showError('Error', 'Connection failed.');
+    } finally {
+      setIsRegeneratingKey(prev => ({ ...prev, [stationId]: false }));
+    }
+  };
 
   // ── Program / Schedule editing ────────────────────────────────────────────
   interface ProgramDetail {
@@ -192,7 +252,9 @@ export const Radio: React.FC = () => {
   const fetchRadioStations = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch(`${API_URL}/radio`);
+      const authToken = token || localStorage.getItem('token');
+      const headers: HeadersInit = authToken ? { Authorization: `Bearer ${authToken}` } : {};
+      const res = await fetch(`${API_URL}/radio`, { headers });
       if (res.ok) {
         const data = await res.json();
         setStations(data);
@@ -207,10 +269,11 @@ export const Radio: React.FC = () => {
   };
 
   useEffect(() => {
+    if (isAuthLoading) return;
     fetchRadioStations();
     const interval = setInterval(fetchRadioStations, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [token, isAuthLoading]);
 
   useEffect(() => {
     if (editingStationId !== null) {
@@ -506,6 +569,81 @@ export const Radio: React.FC = () => {
                           <p className="text-sm font-extrabold text-white truncate">{(st as any).broadcast_frequency || '—'}</p>
                         </div>
                       </div>
+
+                      {/* Broadcaster connection settings */}
+                      {st.is_active && (
+                        <div className="border-t border-white/5 p-5 space-y-3 font-sans">
+                          <button
+                            type="button"
+                            onClick={() => setShowCredentialsMap(prev => ({ ...prev, [st.id]: !prev[st.id] }))}
+                            className={`w-full py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition cursor-pointer border ${
+                              showCredentialsMap[st.id]
+                                ? 'bg-rose-500/10 border-rose-500/25 text-rose-400'
+                                : 'bg-slate-900 hover:bg-slate-800 border-white/5 text-slate-300'
+                            }`}
+                          >
+                            <Wifi className="w-3.5 h-3.5" /> Connection Settings
+                          </button>
+
+                          {showCredentialsMap[st.id] && (
+                            <div className="space-y-4 animate-slide-down">
+                              <div className="space-y-1">
+                                <h4 className="text-xs font-bold text-rose-400 uppercase tracking-widest">Stream Ingestion Node</h4>
+                                <p className="text-[11px] text-slate-405 leading-normal">
+                                  Use these credentials in the PyQt5 desktop broadcaster or your encoder to go live.
+                                </p>
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[9.5px] font-bold text-slate-555 uppercase block">WebSocket URL</label>
+                                <div className="flex gap-2">
+                                  <input
+                                    type="text"
+                                    readOnly
+                                    value={getIngestWebSocketUrl()}
+                                    className="w-full bg-slate-950 border border-white/5 text-[10px] p-2.5 rounded-xl text-white font-mono font-semibold outline-none tracking-wider"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCopy(getIngestWebSocketUrl(), st.id + 10000)}
+                                    className="px-3 bg-slate-900 hover:bg-slate-800 border border-white/5 text-slate-405 hover:text-white rounded-xl transition cursor-pointer font-bold text-[10px]"
+                                  >
+                                    {copiedKeyMap[st.id + 10000] ? 'Copied' : 'Copy'}
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="space-y-1">
+                                <label className="text-[9.5px] font-bold text-slate-555 uppercase block">Connection Key (Stream Key)</label>
+                                <div className="flex gap-2">
+                                  <input
+                                    type="text"
+                                    readOnly
+                                    value={st.stream_key || ''}
+                                    className="w-full bg-slate-950 border border-white/5 text-[10px] p-2.5 rounded-xl text-white font-mono font-semibold outline-none tracking-wider"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCopy(st.stream_key || '', st.id)}
+                                    className="px-3 bg-slate-900 hover:bg-slate-800 border border-white/5 text-slate-405 hover:text-white rounded-xl transition cursor-pointer font-bold text-[10px]"
+                                  >
+                                    {copiedKeyMap[st.id] ? 'Copied' : 'Copy'}
+                                  </button>
+                                </div>
+                              </div>
+
+                              <button
+                                type="button"
+                                disabled={isRegeneratingKey[st.id]}
+                                onClick={() => handleRegenerateKey(st.id)}
+                                className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-rose-455 font-bold border border-rose-500/10 hover:border-rose-500/30 rounded-xl transition text-[10px] uppercase tracking-wider"
+                              >
+                                {isRegeneratingKey[st.id] ? 'Regenerating...' : 'Regenerate Connection Key'}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* Schedule editor modal for this station */}
                       {editingStationId === st.id && createPortal(

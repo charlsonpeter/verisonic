@@ -243,10 +243,7 @@ export const Header: React.FC<HeaderProps> = ({
                   My Profile
                 </button>
 
-                {currentUser && (
-                  (currentUser.real_role || currentUser.role) === 'admin' ||
-                  ((currentUser.real_role || currentUser.role) === 'radio_admin' && userMode === 'admin')
-                ) && (
+                {currentUser && ['admin', 'radio_admin'].includes(currentUser.real_role || currentUser.role) && (
                   <button 
                     onClick={() => handleDropdownSelect('station-profile')}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"

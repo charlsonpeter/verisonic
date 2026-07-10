@@ -28,7 +28,9 @@ export const Settings: React.FC = () => {
   const fetchUserStation = async () => {
     if (currentUser?.role !== 'radio_admin') return;
     try {
-      const res = await fetch('/api/radio');
+      const res = await fetch('/api/radio', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (res.ok) {
         const data = await res.json();
         const myStation = data.find((s: any) => s.owner_id === currentUser.id);
