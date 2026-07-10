@@ -1,20 +1,12 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { User as UserIcon, Crown, BarChart2, ShieldCheck, Heart, Clock, Activity, Key, X, Settings } from 'lucide-react';
+import { User as UserIcon, Activity, Key, X, Settings } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { useAudio, Track } from '../context/AudioContext';
-import { TrackRow } from '../components/shared/TrackRow';
+import { useAudio } from '../context/AudioContext';
 
-interface UserProfileProps {
-  onViewReport?: (track: Track) => void;
-  onViewDetails: (track: Track) => void;
-}
-
-export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDetails }) => {
+export const UserProfile: React.FC = () => {
   const { currentUser, isPremium, fetchCurrentUser } = useAuth();
   const { favorites } = useAudio();
-
-  const [favoriteTracks, setFavoriteTracks] = React.useState<Track[]>([]);
 
   // Profile details update states
   const [fullName, setFullName] = React.useState(currentUser?.full_name || '');
@@ -36,22 +28,6 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
       setEmail(currentUser.email || '');
     }
   }, [currentUser]);
-
-  React.useEffect(() => {
-    const loadFavoriteTracks = async () => {
-      try {
-        const res = await fetch('/api/music?approved_only=true');
-        if (res.ok) {
-          const data = await res.json();
-          const filtered = data.filter((t: Track) => favorites.includes(t.id));
-          setFavoriteTracks(filtered);
-        }
-      } catch (e) {
-        console.error("Failed to load favorite tracks:", e);
-      }
-    };
-    loadFavoriteTracks();
-  }, [favorites]);
 
   React.useEffect(() => {
     const mainEl = document.querySelector('main');
@@ -271,31 +247,6 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
           </button>
         </div>
       </form>
-
-      {/* 3. MY FAVORITES */}
-      <section className="space-y-4">
-        <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest px-1 flex items-center gap-1.5">
-          <Heart className="w-4 h-4 text-rose-500 fill-rose-500" /> Saved Favorites ({favoriteTracks.length})
-        </h3>
-        {favoriteTracks.length === 0 ? (
-          <div className="text-center py-14 bg-slate-900/10 border border-dashed border-white/5 rounded-3xl p-6">
-            <Heart className="w-8 h-8 mx-auto mb-2 text-slate-600 animate-pulse" />
-            <p className="text-xs text-slate-450">No favorite songs added yet.</p>
-          </div>
-        ) : (
-          <div className="space-y-2.5 bg-slate-900/10 border border-white/3 p-4 rounded-3xl shadow-inner">
-            {favoriteTracks.map((track, idx) => (
-              <TrackRow 
-                key={track.id} 
-                track={track} 
-                index={idx}
-                onViewReport={onViewReport}
-                onViewDetails={onViewDetails}
-              />
-            ))}
-          </div>
-        )}
-      </section>
 
       {/* Change Password Modal */}
       {isPasswordModalOpen && createPortal(

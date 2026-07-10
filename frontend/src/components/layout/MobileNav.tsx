@@ -8,9 +8,14 @@ interface MobileNavProps {
 }
 
 export const MobileNav: React.FC<MobileNavProps> = ({ activeTab, setActiveTab }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, userMode } = useAuth();
 
-  const items = (currentUser && currentUser.role === 'radio_admin')
+  const isRadioAdminInAdminMode =
+    !!currentUser &&
+    (currentUser.real_role || currentUser.role) === 'radio_admin' &&
+    userMode === 'admin';
+
+  const items = isRadioAdminInAdminMode
     ? [
         { id: 'radio', label: 'Radio', icon: Radio },
         { id: 'profile', label: 'Profile', icon: User }

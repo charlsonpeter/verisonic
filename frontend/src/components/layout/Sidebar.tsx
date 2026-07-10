@@ -1,6 +1,6 @@
 import React from 'react';
 import { 
-  Music, Radio, Search, Compass, Heart, FolderHeart, 
+  Radio, Search, Compass, Heart, FolderHeart, 
   UploadCloud, ShieldCheck, BarChart2, Settings, User, LogOut, Disc
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
@@ -11,12 +11,11 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
-  const { currentUser, logout, token } = useAuth();
+  const { currentUser, logout, token, canUsePlaylists } = useAuth();
 
   const navItems = [
     { id: 'landing', label: 'Overview', icon: Disc },
     { id: 'home', label: 'Home Feed', icon: Compass },
-    { id: 'discover', label: 'Discover Hub', icon: Music },
     { id: 'radio', label: 'Live Radio', icon: Radio },
     { id: 'search', label: 'Search', icon: Search },
     { id: 'favorites', label: 'My Favorites', icon: Heart },
@@ -77,7 +76,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
           <div>
             <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Navigation</p>
             <div className="space-y-1">
-              {navItems.map(renderNavButton)}
+              {navItems
+                .filter(item => item.id !== 'playlists' || canUsePlaylists || !token)
+                .map(renderNavButton)}
             </div>
           </div>
 

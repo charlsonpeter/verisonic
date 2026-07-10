@@ -1,6 +1,7 @@
 import React from 'react';
-import { Play, Plus, Heart, HelpCircle, ShieldCheck, MoreVertical, Disc } from 'lucide-react';
+import { Play, Plus, Heart, HelpCircle, ShieldCheck, Disc } from 'lucide-react';
 import { useAudio, Track } from '../../context/AudioContext';
+import { AddToPlaylistButton } from './AddToPlaylistButton';
 
 interface TrackRowProps {
   track: Track;
@@ -92,6 +93,10 @@ export const TrackRow: React.FC<TrackRowProps> = ({ track, index, onViewReport, 
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
+
+          <div onClick={(e) => e.stopPropagation()}>
+            <AddToPlaylistButton track={track} />
+          </div>
 
           {onViewReport && (
             <button

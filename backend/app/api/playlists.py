@@ -16,8 +16,6 @@ def create_playlist(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    if current_user.role == "radio_admin":
-        raise HTTPException(status_code=403, detail="Radio admins are not allowed to access playlists.")
     playlist = Playlist(
         name=playlist_in.name,
         user_id=current_user.id,
@@ -40,8 +38,6 @@ def list_playlists(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    if current_user.role == "radio_admin":
-        raise HTTPException(status_code=403, detail="Radio admins are not allowed to access playlists.")
     playlists = db.query(Playlist).filter(
         (Playlist.user_id == current_user.id) | (Playlist.is_public == True)
     ).all()
@@ -62,8 +58,6 @@ def list_playlists(
 
 @router.get("/{id}", response_model=PlaylistResponse)
 def get_playlist(id: int, db: Session = Depends(get_db), current_user = Depends(get_current_user)):
-    if current_user.role == "radio_admin":
-        raise HTTPException(status_code=403, detail="Radio admins are not allowed to access playlists.")
     p = db.query(Playlist).filter(Playlist.id == id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Playlist not found")
@@ -88,8 +82,6 @@ def add_track_to_playlist(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    if current_user.role == "radio_admin":
-        raise HTTPException(status_code=403, detail="Radio admins are not allowed to access playlists.")
     playlist = db.query(Playlist).filter(Playlist.id == id, Playlist.user_id == current_user.id).first()
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found or you are not the owner")
@@ -131,8 +123,6 @@ def delete_playlist(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user),
 ):
-    if current_user.role == "radio_admin":
-        raise HTTPException(status_code=403, detail="Radio admins are not allowed to access playlists.")
     playlist = db.query(Playlist).filter(Playlist.id == id, Playlist.user_id == current_user.id).first()
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found or you are not the owner")
@@ -148,8 +138,6 @@ def remove_track_from_playlist(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    if current_user.role == "radio_admin":
-        raise HTTPException(status_code=403, detail="Radio admins are not allowed to access playlists.")
     playlist = db.query(Playlist).filter(Playlist.id == id, Playlist.user_id == current_user.id).first()
     if not playlist:
         raise HTTPException(status_code=404, detail="Playlist not found or you are not the owner")

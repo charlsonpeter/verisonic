@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Play, Heart, Disc, Music, Flame, Award, ChevronRight, Sparkles, Plus, Clock 
+  Play, Flame, Award, Sparkles, Clock 
 } from 'lucide-react';
 import { useAudio, Track } from '../context/AudioContext';
 import { useAuth } from '../context/AuthContext';
@@ -13,13 +13,9 @@ interface HomeProps {
 }
 
 export const Home: React.FC<HomeProps> = ({ onNavigate, onViewReport, onViewDetails }) => {
-  const { playTrack, addToQueue, favorites, toggleFavorite } = useAudio();
+  const { playTrack } = useAudio();
   const { currentUser, hasRadioStation } = useAuth();
-  
-  // States for Hero Slider
-  const [activeSlide, setActiveSlide] = useState(0);
 
-  // Mock full song library for Home feed
   const [allTracks, setAllTracks] = useState<Track[]>([]);
 
   const popularArtists = Array.from(new Set(allTracks.map(t => t.artist_name))).map(name => {
@@ -51,21 +47,6 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewReport, onViewDeta
       }
     };
     loadTracks();
-  }, []);
-
-
-  const heroSlides = [
-    { title: "24-bit Lossless CD Masters", desc: "Experience uncompressed acoustic waveforms validated by FFT spectral cutoff algorithms.", artist: "Sarah Jenkins & Orchestra", bg: "https://images.unsplash.com/photo-1465847899084-d164df4dedc6?auto=format&fit=crop&q=80&w=800" },
-    { title: "Curated Live Radio Stations", desc: "Listen to globally synchronized broadcast feeds with latency timing under 1.5 seconds.", artist: "Live Broadcast Hub", bg: "https://images.unsplash.com/photo-1487180142328-054b783fc471?auto=format&fit=crop&q=80&w=800" },
-    { title: "Verified Spectrogram Analytics", desc: "Audit frequencies and reject fake upscaled MP3 files directly through report dashboards.", artist: "Librosa Analyzer Node", bg: "https://images.unsplash.com/photo-1507838153414-b4b713384a76?auto=format&fit=crop&q=80&w=800" }
-  ];
-
-  // Auto rotate carousel
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setActiveSlide(prev => (prev === heroSlides.length - 1 ? 0 : prev + 1));
-    }, 6000);
-    return () => clearInterval(timer);
   }, []);
 
   return (
@@ -115,63 +96,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewReport, onViewDeta
         </div>
       )}
 
-      {/* 1. HERO CAROUSEL */}
-      <section className="relative h-80 rounded-3xl overflow-hidden border border-white/5 shadow-2xl group">
-        {/* Carousel slides */}
-        {heroSlides.map((slide, idx) => {
-          const isActive = idx === activeSlide;
-          return (
-            <div 
-              key={idx}
-              className={`absolute inset-0 bg-cover bg-center transition-opacity duration-1000 flex flex-col justify-end p-8 md:p-12 ${
-                isActive ? 'opacity-100' : 'opacity-0 pointer-events-none'
-              }`}
-              style={{ backgroundImage: `linear-gradient(to top, rgba(2,6,23,0.95) 0%, rgba(2,6,23,0.4) 60%, rgba(2,6,23,0.1) 100%), url(${slide.bg})` }}
-            >
-              <div className="max-w-xl space-y-3">
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-rose-500 text-white text-[9px] font-extrabold uppercase rounded-full">
-                  <Sparkles className="w-3 h-3" /> Featured Spotlight
-                </span>
-                <h2 className="text-2xl md:text-4xl font-extrabold text-white leading-tight">
-                  {slide.title}
-                </h2>
-                <p className="text-xs text-slate-355 line-clamp-2 leading-relaxed">
-                  {slide.desc}
-                </p>
-                <div className="flex gap-3 pt-2">
-                  <button 
-                    onClick={() => onNavigate('discover')}
-                    className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl transition duration-300"
-                  >
-                    Browse Collections
-                  </button>
-                  <button 
-                    onClick={() => onNavigate('radio')}
-                    className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-slate-300 border border-white/5 font-bold text-xs rounded-xl transition"
-                  >
-                    Listen Radio
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-
-        {/* Carousel dots indicators */}
-        <div className="absolute bottom-6 right-8 flex gap-1.5 z-10">
-          {heroSlides.map((_, idx) => (
-            <button
-              key={idx}
-              onClick={() => setActiveSlide(idx)}
-              className={`w-2 h-2 rounded-full transition-all duration-300 ${
-                idx === activeSlide ? 'bg-rose-500 w-5' : 'bg-slate-850'
-              }`}
-            />
-          ))}
-        </div>
-      </section>
-
-      {/* 2. CONTINUE LISTENING */}
+      {/* Continue Listening */}
       {allTracks.length > 0 && (
         <section className="space-y-4">
           <div className="flex justify-between items-end">
@@ -204,7 +129,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewReport, onViewDeta
         </section>
       )}
 
-      {/* 3. TRENDING MUSIC GRIDS */}
+      {/* Trending */}
       <section className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         
         {/* Left column: Trending tracks */}
@@ -213,12 +138,6 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewReport, onViewDeta
             <h3 className="text-lg font-extrabold text-white flex items-center gap-1.5">
               <Flame className="w-5 h-5 text-rose-400 animate-pulse" /> Trending Now
             </h3>
-            <button 
-              onClick={() => onNavigate('discover')}
-              className="text-xs font-semibold text-rose-400 hover:text-rose-300 transition"
-            >
-              See All
-            </button>
           </div>
 
           <div className="space-y-2 bg-slate-950/40 backdrop-blur-md border border-white/5 p-5 rounded-3xl shadow-inner glow-rose/5">
@@ -247,17 +166,15 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewReport, onViewDeta
               popularArtists.map((art, idx) => (
                 <div 
                   key={idx} 
-                  onClick={() => onNavigate('discover')}
-                  className="flex items-center gap-4 group cursor-pointer p-2 rounded-3xl hover:bg-white/[0.02] transition duration-300"
+                  className="flex items-center gap-4 p-2 rounded-3xl"
                 >
                   <div className="w-11 h-11 rounded-full overflow-hidden border border-white/5 flex-shrink-0">
-                    <img src={art.avatar} alt="Avatar" className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
+                    <img src={art.avatar} alt="Avatar" className="w-full h-full object-cover" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h4 className="text-xs font-bold text-slate-200 truncate group-hover:text-rose-400 transition">{art.name}</h4>
+                    <h4 className="text-xs font-bold text-slate-200 truncate">{art.name}</h4>
                     <p className="text-[10px] text-slate-550 truncate mt-0.5">{art.genre} • {art.tracks} Tracks</p>
                   </div>
-                  <span className="text-[9px] font-bold text-rose-455 hover:text-rose-350 transition">View</span>
                 </div>
               ))
             )}

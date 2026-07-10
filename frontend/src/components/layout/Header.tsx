@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   Search, Crown, Signal, User, ShieldAlert, ChevronDown, 
-  Compass, Music, Radio, Heart, FolderHeart, UploadCloud, 
+  Compass, Radio, Heart, FolderHeart, UploadCloud,
   ShieldCheck, BarChart2, Settings, LogOut, Disc, Mail, Laptop
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
@@ -16,7 +16,7 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({ 
   searchQuery, setSearchQuery, activeTab, setActiveTab 
 }) => {
-  const { currentUser, isPremium, logout, token, userMode, switchUserMode } = useAuth();
+  const { currentUser, isPremium, logout, token, userMode, switchUserMode, canUsePlaylists } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -31,7 +31,12 @@ export const Header: React.FC<HeaderProps> = ({
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
-  const navItems = (currentUser && currentUser.role === 'radio_admin')
+  const isRadioAdminInAdminMode =
+    !!currentUser &&
+    (currentUser.real_role || currentUser.role) === 'radio_admin' &&
+    userMode === 'admin';
+
+  const navItems = isRadioAdminInAdminMode
     ? [
         { id: 'radio', label: 'Radio Dashboard', icon: Radio },
         { id: 'broadcaster-download', label: 'Broadcaster App', icon: Laptop },
@@ -39,11 +44,10 @@ export const Header: React.FC<HeaderProps> = ({
       ]
     : [
         { id: 'home', label: 'Home Feed', icon: Compass },
-        { id: 'discover', label: 'Discover Hub', icon: Music },
         { id: 'radio', label: 'Live Radio', icon: Radio },
         { id: 'search', label: 'Search', icon: Search },
         { id: 'favorites', label: 'Favorites', icon: Heart },
-        { id: 'playlists', label: 'Playlists', icon: FolderHeart },
+        ...(canUsePlaylists || !token ? [{ id: 'playlists', label: 'Playlists', icon: FolderHeart }] : []),
         { id: 'contact', label: 'Contact Us', icon: Mail }
       ];
 

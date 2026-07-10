@@ -26,13 +26,13 @@ import { LyricsModal } from './components/shared/LyricsModal';
 // Page components
 import { LandingPage } from './pages/LandingPage';
 import { Home } from './pages/Home';
-import { Discover } from './pages/Discover';
 import { Radio as RadioPage } from './pages/Radio';
 import { Search as SearchPage } from './pages/Search';
 import { Artist as ArtistPage } from './pages/Artist';
 import { Playlist as PlaylistPage } from './pages/Playlist';
 import { MusicDetails } from './pages/MusicDetails';
 import { UserProfile } from './pages/UserProfile';
+import { Favorites } from './pages/Favorites';
 import { StationProfile } from './pages/StationProfile';
 import { StudioProfile } from './pages/StudioProfile';
 import { Settings } from './pages/Settings';
@@ -101,6 +101,12 @@ function DashboardContent() {
       }
     }
   }, [currentUser, activeTab, hasRadioStation]);
+
+  useEffect(() => {
+    if (activeTab === 'discover') {
+      setActiveTab('home');
+    }
+  }, [activeTab]);
 
   // Scroll main view container to top on tab change
   const mainRef = useRef<HTMLElement>(null);
@@ -221,8 +227,6 @@ function DashboardContent() {
         return <LandingPage onNavigate={setActiveTab} />;
       case 'home':
         return <Home onNavigate={setActiveTab} onViewReport={viewReportHandler} onViewDetails={handleDetailsView} />;
-      case 'discover':
-        return <Discover onNavigate={setActiveTab} />;
       case 'radio':
         return <RadioPage />;
       case 'search':
@@ -235,13 +239,13 @@ function DashboardContent() {
           />
         );
       case 'favorites':
-        return <UserProfile onViewReport={viewReportHandler} onViewDetails={handleDetailsView} />;
+        return <Favorites onViewReport={viewReportHandler} onViewDetails={handleDetailsView} />;
       case 'playlists':
         return <PlaylistPage onViewReport={viewReportHandler} onViewDetails={handleDetailsView} />;
       case 'details':
         return <MusicDetails track={selectedDetailsTrack} onNavigate={setActiveTab} />;
       case 'profile':
-        return <UserProfile onViewReport={viewReportHandler} onViewDetails={handleDetailsView} />;
+        return <UserProfile />;
       case 'station-profile':
         return <StationProfile onNavigate={setActiveTab} />;
       case 'studio-profile':
