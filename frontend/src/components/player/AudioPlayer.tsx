@@ -117,7 +117,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     <>
       <footer className={`fixed ${activeTab !== 'landing' ? 'bottom-[76px] md:bottom-6' : 'bottom-6'} left-4 right-4 md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-full md:max-w-6xl h-20 md:h-24 floating-deck rounded-2xl md:rounded-3xl flex items-center justify-between px-4 md:px-6 z-30 transition-all duration-300`}>
         {/* Thin top progress line for mobile */}
-        <div className="absolute top-0 left-0 right-0 h-[2px] bg-white/5 rounded-t-2xl md:hidden overflow-hidden">
+        <div className="absolute top-0 left-4 right-4 h-[2px] bg-white/5 rounded-full md:hidden overflow-hidden">
           <div 
             className="h-full bg-gradient-to-r from-rose-500 to-pink-500 transition-all duration-100" 
             style={{ width: isRadioSync ? `${(secondsSinceMidnight / 86400) * 100}%` : `${(currentTime / (duration || 1)) * 100}%` }}
