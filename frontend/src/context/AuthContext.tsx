@@ -29,6 +29,7 @@ interface AuthContextType {
   isPremium: boolean;
   userMode: 'admin' | 'listener';
   canUsePlaylists: boolean;
+  isStaffInAdminMode: boolean;
   switchUserMode: (mode: 'admin' | 'listener') => void;
   login: (email: string, password: string) => Promise<boolean>;
   register: (email: string, password: string, fullName: string) => Promise<boolean>;
@@ -229,8 +230,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     (currentUser?.subscription === 'free' && isTrialActive());
 
   const userRole = currentUser?.real_role || currentUser?.role;
-  const isRadioAdminInAdminMode = userRole === 'radio_admin' && userMode === 'admin';
-  const canUsePlaylists = !!token && !isRadioAdminInAdminMode;
+  const isStaffInAdminMode =
+    (userRole === 'radio_admin' || userRole === 'studio_admin') && userMode === 'admin';
+  const canUsePlaylists = !!token && !isStaffInAdminMode;
 
   return (
     <AuthContext.Provider value={{
@@ -241,6 +243,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isPremium,
       userMode,
       canUsePlaylists,
+      isStaffInAdminMode,
       hasRadioStation,
       switchUserMode,
       login,

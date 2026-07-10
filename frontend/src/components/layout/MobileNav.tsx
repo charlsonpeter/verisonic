@@ -1,5 +1,5 @@
 import React from 'react';
-import { Compass, Radio, Search, Heart, User } from 'lucide-react';
+import { Compass, Radio, Search, Heart, FolderHeart, UploadCloud } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 interface MobileNavProps {
@@ -8,24 +8,34 @@ interface MobileNavProps {
 }
 
 export const MobileNav: React.FC<MobileNavProps> = ({ activeTab, setActiveTab }) => {
-  const { currentUser, userMode } = useAuth();
+  const { currentUser, userMode, canUsePlaylists, token } = useAuth();
 
   const isRadioAdminInAdminMode =
     !!currentUser &&
     (currentUser.real_role || currentUser.role) === 'radio_admin' &&
     userMode === 'admin';
 
+  const isStudioAdminInAdminMode =
+    !!currentUser &&
+    (currentUser.real_role || currentUser.role) === 'studio_admin' &&
+    userMode === 'admin';
+
   const items = isRadioAdminInAdminMode
-    ? [
-        { id: 'radio', label: 'Radio', icon: Radio },
-        { id: 'profile', label: 'Profile', icon: User }
-      ]
-    : [
+    ? [{ id: 'radio', label: 'Radio', icon: Radio }]
+    : isStudioAdminInAdminMode
+      ? [
+          { id: 'tracks', label: 'Studio', icon: UploadCloud },
+          { id: 'home', label: 'Home', icon: Compass },
+          { id: 'search', label: 'Search', icon: Search },
+        ]
+      : [
         { id: 'home', label: 'Home', icon: Compass },
         { id: 'radio', label: 'Radio', icon: Radio },
         { id: 'search', label: 'Search', icon: Search },
         { id: 'favorites', label: 'Favorites', icon: Heart },
-        { id: 'profile', label: 'Profile', icon: User }
+        ...(canUsePlaylists || !token
+          ? [{ id: 'playlists', label: 'Playlists', icon: FolderHeart }]
+          : []),
       ];
 
   return (

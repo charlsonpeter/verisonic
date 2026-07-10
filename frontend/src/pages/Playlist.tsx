@@ -19,7 +19,7 @@ interface PlaylistProps {
 }
 
 export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails }) => {
-  const { token, canUsePlaylists, userMode } = useAuth();
+  const { token, canUsePlaylists, isStaffInAdminMode } = useAuth();
   const { playTrack, addToQueue } = useAudio();
 
   const [playlists, setPlaylists] = useState<PlaylistData[]>([]);
@@ -148,12 +148,12 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewReport, onViewDetails 
     return `${mins} min`;
   };
 
-  if (!canUsePlaylists && token && userMode === 'admin') {
+  if (isStaffInAdminMode) {
     return (
       <div className="text-center py-20 bg-slate-900/10 border border-dashed border-white/5 rounded-3xl p-8 max-w-xl mx-auto">
         <FolderHeart className="w-12 h-12 text-slate-650 mx-auto mb-4" />
         <h4 className="text-sm font-bold text-slate-350">Switch to Listen mode</h4>
-        <p className="text-xs text-slate-500 mt-1">Playlists are available when you are listening as a user, not managing your station.</p>
+        <p className="text-xs text-slate-500 mt-1">Playlists are available in Listen mode, not while managing your station or studio.</p>
       </div>
     );
   }
