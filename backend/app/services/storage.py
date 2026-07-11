@@ -156,3 +156,32 @@ def delete_file(key: str):
         s3_client.delete_object(Bucket=settings.S3_BUCKET_NAME, Key=key)
     except Exception as e:
         logger.error(f"Error deleting file from S3: {e}")
+
+
+def guess_content_type(key: str) -> str:
+    ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
+    return {
+        "flac": "audio/flac",
+        "wav": "audio/wav",
+        "mp3": "audio/mpeg",
+        "aac": "audio/aac",
+        "m4a": "audio/mp4",
+        "alac": "audio/mp4",
+        "aiff": "audio/aiff",
+        "aif": "audio/aiff",
+    }.get(ext, "application/octet-stream")
+
+
+def get_object_size(key: str) -> int:
+    ensure_bucket_exists()
+    head = s3_client.head_object(Bucket=settings.S3_BUCKET_NAME, Key=key)
+    return int(head["ContentLength"])
+
+
+def open_object_stream(key: str, start: int, end: int):
+    ensure_bucket_exists()
+    return s3_client.get_object(
+        Bucket=settings.S3_BUCKET_NAME,
+        Key=key,
+        Range=f"bytes={start}-{end}",
+    )

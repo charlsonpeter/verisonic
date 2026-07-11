@@ -127,6 +127,7 @@ export { QUALITY_LABELS } from '../utils/streamQuality';
 
 const resolveStreamUrl = (url?: string): string => {
   if (!url) return "";
+  if (url.startsWith("/api/")) return url;
   return url.replace("http://localhost/storage", `${window.location.protocol}//${window.location.host}/storage`);
 };
 
@@ -755,7 +756,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           trackToPlay,
           getEffectiveQuality(qualityLevelSettingRef.current, canConfigureStreamQualityRef.current),
           isPremiumRef.current,
-          resumePosition,
+          token,
         );
 
     if (!isRadio && candidates.length === 0) {
@@ -822,7 +823,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               return false;
             }
           }
-          return Math.abs(audio.currentTime - seekTo) <= 0.5;
+          return Math.abs(audio.currentTime - seekTo) <= 0.75;
         };
 
         const cleanup = () => {
@@ -843,18 +844,24 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           if (seekToTarget()) finish();
         };
 
-        const seekEvents = ['loadedmetadata', 'canplay', 'durationchange', 'seeked'] as const;
+        const seekEvents = ['loadedmetadata', 'canplay', 'canplaythrough', 'durationchange', 'seeked'] as const;
         seekEvents.forEach((event) => audio.addEventListener(event, onMediaEvent));
 
         if (isHls && hlsRef.current) {
-          hlsRef.current.on(Hls.Events.FRAG_BUFFERED, onHlsBuffered);
-          hlsRef.current.on(Hls.Events.LEVEL_LOADED, onHlsBuffered);
+          const hls = hlsRef.current;
+          hls.on(Hls.Events.FRAG_BUFFERED, onHlsBuffered);
+          hls.on(Hls.Events.LEVEL_LOADED, onHlsBuffered);
+          hls.stopLoad();
+          hls.startLoad(target);
         }
 
         const timeoutId = setTimeout(() => {
+          if (isHls && hlsRef.current) {
+            hlsRef.current.startLoad(target);
+          }
           seekToTarget();
           finish();
-        }, isHls ? 12000 : 3000);
+        }, isHls ? 15000 : 3000);
 
         seekRestoreCleanup = cleanup;
         seekToTarget();
@@ -926,8 +933,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           hls.loadSource(streamUrl);
           hls.attachMedia(audioRef.current);
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            if (shouldRestorePosition && seekAfterLoad !== null) {
-              hls.startLoad(seekAfterLoad);
+            if (shouldRestorePosition && seekAfterLoad !== null && hlsRef.current) {
+              hlsRef.current.stopLoad();
+              hlsRef.current.startLoad(seekAfterLoad);
             }
             onStreamReady(true);
           });

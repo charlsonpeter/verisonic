@@ -1,4 +1,5 @@
 export type StreamQualityTrack = {
+  id?: number;
   original_file_path?: string;
   hls_playlist_path?: string;
   mp3_320_path?: string;
@@ -70,91 +71,67 @@ function uniquePaths(paths: Array<string | undefined | null>): string[] {
   return result;
 }
 
-function isHlsPath(path: string): boolean {
-  const lower = path.toLowerCase();
-  return lower.includes('.m3u8') || lower.includes('/hls/');
-}
-
-function reorderForResume(paths: string[], resumeAt: number | null): string[] {
-  const shouldPreferProgressive =
-    resumeAt !== null && Number.isFinite(resumeAt) && resumeAt > 0.25;
-  if (!shouldPreferProgressive) return paths;
-  const progressive = paths.filter((path) => !isHlsPath(path));
-  const hls = paths.filter((path) => isHlsPath(path));
-  return uniquePaths([...progressive, ...hls]);
+export function buildMasterStreamUrl(trackId: number | undefined, accessToken: string | null): string | null {
+  if (!trackId || !accessToken) return null;
+  return `/api/music/${trackId}/stream/master?access_token=${encodeURIComponent(accessToken)}`;
 }
 
 export function getStreamCandidatesForQuality(
   track: StreamQualityTrack,
   quality: QualityLevelSetting,
   isPremium: boolean,
-  resumeAt: number | null = null,
+  accessToken: string | null = null,
 ): string[] {
   if (!isPremium) {
     return track.aac_128_path ? [track.aac_128_path] : [];
   }
 
+  const masterUrl = buildMasterStreamUrl(track.id, accessToken);
+
   switch (quality) {
     case 'lossless':
-      // Original masters are not served publicly via /storage; prefer public HLS/transcodes.
-      return reorderForResume(
-        uniquePaths([
-          track.hls_playlist_path,
-          track.mp3_320_path,
-          track.aac_256_path,
-          track.aac_128_path,
-          track.stream_url,
-          track.original_file_path,
-        ]),
-        resumeAt,
-      );
+      return uniquePaths([
+        masterUrl,
+        track.hls_playlist_path,
+        track.mp3_320_path,
+        track.aac_256_path,
+        track.stream_url,
+      ]);
     case 'hires':
-      return reorderForResume(
-        uniquePaths([
-          track.hls_playlist_path,
-          track.aac_256_path,
-          track.mp3_320_path,
-          track.aac_128_path,
-          track.stream_url,
-          track.original_file_path,
-        ]),
-        resumeAt,
-      );
+      return uniquePaths([
+        track.hls_playlist_path,
+        masterUrl,
+        track.aac_256_path,
+        track.mp3_320_path,
+        track.stream_url,
+      ]);
     case 'high':
-      return reorderForResume(
-        uniquePaths([
-          track.mp3_320_path,
-          track.aac_256_path,
-          track.hls_playlist_path,
-          track.aac_128_path,
-          track.stream_url,
-        ]),
-        resumeAt,
-      );
+      return uniquePaths([
+        track.mp3_320_path,
+        track.aac_256_path,
+        track.hls_playlist_path,
+        track.aac_128_path,
+        track.stream_url,
+      ]);
     case 'normal':
-      return reorderForResume(
-        uniquePaths([
-          track.aac_128_path,
-          track.mp3_320_path,
-          track.stream_url,
-        ]),
-        resumeAt,
-      );
+      return uniquePaths([
+        track.aac_128_path,
+        track.mp3_320_path,
+        track.stream_url,
+      ]);
     default:
-      return reorderForResume(
-        uniquePaths([
-          track.hls_playlist_path,
-          track.mp3_320_path,
-          track.aac_128_path,
-          track.stream_url,
-        ]),
-        resumeAt,
-      );
+      return uniquePaths([
+        track.hls_playlist_path,
+        track.mp3_320_path,
+        track.aac_128_path,
+        track.stream_url,
+      ]);
   }
 }
 
 export function describeStreamPath(path: string): string {
   const lower = path.toLowerCase();
+  if (lower.includes('/stream/master')) return 'Lossless master';
   if (lower.includes('.m3u8') || lower.includes('/hls/')) return 'HLS adaptive';
   if (lower.includes('/originals/') || lower.endsWith('.flac')) return 'Lossless master';
   if (lower.endsWith('.wav') || lower.endsWith('.aiff') || lower.endsWith('.alac')) return 'Lossless master';

@@ -3,17 +3,33 @@ import shutil
 import tempfile
 import asyncio
 from fastapi import Request, APIRouter, Depends, HTTPException, UploadFile, File, Form, status, WebSocket, WebSocketDisconnect, Query
+from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Tuple
+from jose import jwt, JWTError
 
 from app.db.session import get_db, SessionLocal
 from app.models import Track, Artist, Album, Genre, AudioAnalysisReport, ListeningHistory, StreamingLog
 from app.schemas import TrackResponse, AudioAnalysisReportResponse
 from app.api.auth import get_current_user, get_current_studio_admin, get_current_admin, get_optional_current_user
-from app.services.storage import generate_presigned_url, delete_file, upload_file, delete_prefix
+from app.services.storage import (
+    generate_presigned_url,
+    delete_file,
+    upload_file,
+    delete_prefix,
+    guess_content_type,
+    get_object_size,
+    open_object_stream,
+)
 from app.tasks.tasks import analyze_audio_task
 from app.core.premium import user_has_premium
+from app.core.config import settings
+from app.core.security import ALGORITHM
 from app.models import User
+
+router = APIRouter(prefix="/music", tags=["music"])
+stream_auth = HTTPBearer(auto_error=False)
 
 def normalize_optional_string(val: Optional[str]) -> Optional[str]:
     if val is None:
@@ -23,13 +39,56 @@ def normalize_optional_string(val: Optional[str]) -> Optional[str]:
         return None
     return stripped
 
-router = APIRouter(prefix="/music", tags=["music"])
-
 def _user_can_manage_track(user: User, track: Track, db: Session) -> bool:
     if user.role == "admin":
         return True
     artist = db.query(Artist).filter(Artist.user_id == user.id).first()
     return bool(artist and track.artist_id == artist.id)
+
+
+def _parse_byte_range(range_header: Optional[str], file_size: int) -> Tuple[int, int]:
+    if not range_header or not range_header.startswith("bytes="):
+        return 0, file_size - 1
+    spec = range_header.replace("bytes=", "").strip()
+    if "," in spec:
+        spec = spec.split(",", 1)[0].strip()
+    if "-" not in spec:
+        return 0, file_size - 1
+    start_str, end_str = spec.split("-", 1)
+    if start_str == "":
+        suffix = int(end_str)
+        start = max(0, file_size - suffix)
+        end = file_size - 1
+    else:
+        start = int(start_str)
+        end = int(end_str) if end_str else file_size - 1
+    if start >= file_size:
+        raise HTTPException(status_code=416, detail="Range not satisfiable")
+    end = min(end, file_size - 1)
+    if end < start:
+        raise HTTPException(status_code=416, detail="Range not satisfiable")
+    return start, end
+
+
+def _resolve_stream_user(
+    access_token: Optional[str],
+    credentials: Optional[HTTPAuthorizationCredentials],
+    db: Session,
+) -> User:
+    token = credentials.credentials if credentials else access_token
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        user = db.query(User).filter(User.id == int(user_id)).first()
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        return user
+    except JWTError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
 
 # Helper to serialize Track into response with pre-signed URLs
 def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) -> dict:
@@ -496,6 +555,70 @@ def manage_tracks(
         tracks = db.query(Track).filter(Track.artist_id == artist.id).order_by(Track.created_at.desc()).all()
         
     return [serialize_track(t, db) for t in tracks]
+
+@router.get("/{id}/stream/master")
+def stream_master(
+    id: int,
+    request: Request,
+    access_token: Optional[str] = Query(None),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(stream_auth),
+    db: Session = Depends(get_db),
+):
+    """Stream the original studio master with HTTP Range support (premium only)."""
+    current_user = _resolve_stream_user(access_token, credentials, db)
+    if not user_has_premium(current_user):
+        raise HTTPException(status_code=403, detail="Premium subscription required")
+
+    track = db.query(Track).filter(Track.id == id).first()
+    if not track or not track.approved or not track.original_file_path:
+        raise HTTPException(status_code=404, detail="Track master not available")
+
+    if track.artist and not track.artist.is_active and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Track is currently unavailable")
+
+    try:
+        file_size = get_object_size(track.original_file_path)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Track master not found") from exc
+
+    range_header = request.headers.get("range")
+    try:
+        start, end = _parse_byte_range(range_header, file_size)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=416, detail="Invalid range") from exc
+
+    try:
+        obj = open_object_stream(track.original_file_path, start, end)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Track master not found") from exc
+
+    content_type = guess_content_type(track.original_file_path)
+    content_length = end - start + 1
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(content_length),
+        "Content-Type": content_type,
+        "Cache-Control": "private, max-age=3600",
+    }
+    status_code = status.HTTP_200_OK
+    if range_header:
+        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+        status_code = status.HTTP_206_PARTIAL_CONTENT
+
+    def iter_body():
+        body = obj["Body"]
+        try:
+            while True:
+                chunk = body.read(1024 * 256)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            body.close()
+
+    return StreamingResponse(iter_body(), status_code=status_code, headers=headers)
 
 @router.get("/{id}", response_model=TrackResponse)
 def get_track(
