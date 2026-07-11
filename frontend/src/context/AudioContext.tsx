@@ -740,6 +740,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const seekAfterLoad = pendingSeekRef.current;
     pendingSeekRef.current = null;
+    let seekRestoreCleanup: (() => void) | null = null;
 
     const beginPlayback = () => {
       if (epoch !== playbackEpochRef.current || !audioRef.current) return;
@@ -756,22 +757,79 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setIsPlaying(true);
     };
 
-    const onStreamReady = () => {
-      applySeekIfNeeded();
-      if (autoPlay) {
-        beginPlayback();
-      } else if (audioRef.current) {
-        audioRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
-        userPausedRef.current = true;
-        isPlayingRef.current = false;
-        setIsPlaying(false);
-      }
+    const restorePlaybackPosition = (isHls = false): Promise<void> => {
+      return new Promise((resolve) => {
+        seekRestoreCleanup?.();
+        seekRestoreCleanup = null;
+
+        if (seekAfterLoad === null || seekAfterLoad < 0 || !audioRef.current) {
+          resolve();
+          return;
+        }
+
+        const audio = audioRef.current;
+        const target = seekAfterLoad;
+        let settled = false;
+
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          setCurrentTime(audio.currentTime);
+          resolve();
+        };
+
+        const trySeek = () => {
+          if (settled || !audioRef.current) return;
+          const maxTime =
+            audio.duration && Number.isFinite(audio.duration) ? audio.duration : target;
+          const seekTo = Math.min(target, maxTime);
+          if (Math.abs(audio.currentTime - seekTo) > 0.25) {
+            try {
+              audio.currentTime = seekTo;
+            } catch {
+              // Buffer not ready yet — retry on media events.
+            }
+          }
+          if (Math.abs(audio.currentTime - seekTo) <= 0.5) {
+            finish();
+          }
+        };
+
+        const cleanup = () => {
+          seekEvents.forEach((event) => audio.removeEventListener(event, trySeek));
+          hlsRef.current?.off(Hls.Events.FRAG_BUFFERED, onFragBuffered);
+          clearTimeout(timeoutId);
+          if (seekRestoreCleanup === cleanup) {
+            seekRestoreCleanup = null;
+          }
+        };
+
+        const seekEvents = ['loadedmetadata', 'canplay', 'durationchange', 'seeked'] as const;
+        seekEvents.forEach((event) => audio.addEventListener(event, trySeek));
+
+        const onFragBuffered = () => trySeek();
+        if (isHls && hlsRef.current) {
+          hlsRef.current.on(Hls.Events.FRAG_BUFFERED, onFragBuffered);
+        }
+
+        const timeoutId = setTimeout(finish, isHls ? 5000 : 2000);
+        seekRestoreCleanup = cleanup;
+        trySeek();
+      });
     };
 
-    const applySeekIfNeeded = () => {
-      if (!audioRef.current || seekAfterLoad === null || seekAfterLoad < 0) return;
-      const maxTime = audioRef.current.duration || seekAfterLoad;
-      audioRef.current.currentTime = Math.min(seekAfterLoad, maxTime);
+    const onStreamReady = (isHls = false) => {
+      void restorePlaybackPosition(isHls).then(() => {
+        if (autoPlay) {
+          beginPlayback();
+        } else if (audioRef.current) {
+          audioRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
+          userPausedRef.current = true;
+          isPlayingRef.current = false;
+          setIsPlaying(false);
+        }
+      });
     };
 
     const tryCandidate = (index: number) => {
@@ -806,16 +864,22 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       if (streamUrl.includes('.m3u8')) {
         if (Hls.isSupported()) {
-          const hls = new Hls();
+          const hlsOptions =
+            seekAfterLoad !== null && seekAfterLoad > 0
+              ? { startPosition: seekAfterLoad }
+              : undefined;
+          const hls = new Hls(hlsOptions);
           hlsRef.current = hls;
           hls.loadSource(streamUrl);
           hls.attachMedia(audioRef.current);
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            onStreamReady();
+            onStreamReady(true);
           });
           hls.on(Hls.Events.ERROR, (_event, data) => {
             if (!data.fatal) return;
             console.warn('HLS fatal error, trying next quality candidate:', data);
+            seekRestoreCleanup?.();
+            seekRestoreCleanup = null;
             hls.destroy();
             hlsRef.current = null;
             tryCandidate(index + 1);
@@ -833,7 +897,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             'loadedmetadata',
             () => {
               audio.removeEventListener('error', onNativeError);
-              onStreamReady();
+              onStreamReady(true);
             },
             { once: true }
           );
@@ -856,7 +920,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         'loadedmetadata',
         () => {
           audio.removeEventListener('error', onDirectError);
-          onStreamReady();
+          onStreamReady(false);
         },
         { once: true }
       );
