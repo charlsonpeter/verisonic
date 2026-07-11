@@ -106,9 +106,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
           <div>
             <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Configuration</p>
             <div className="space-y-1">
-              {settingsItems
-                .filter(item => !(item.id === 'settings' && currentUser?.role === 'radio_admin'))
-                .map(renderNavButton)}
+              {settingsItems.map(renderNavButton)}
             </div>
           </div>
         </div>

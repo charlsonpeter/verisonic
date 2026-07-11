@@ -317,13 +317,15 @@ export const Header: React.FC<HeaderProps> = ({
                   </button>
                 )}
 
-                {currentUser && (currentUser.real_role || currentUser.role) !== 'radio_admin' && (
+                {currentUser && (
                   <button 
                     onClick={() => handleDropdownSelect('settings')}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
                   >
                     <Settings className="w-4 h-4 text-slate-450" />
-                    Platform Settings
+                    {userMode === 'admin' && (currentUser.real_role || currentUser.role) === 'radio_admin'
+                      ? 'Broadcaster Settings'
+                      : 'Platform Settings'}
                   </button>
                 )}
 
