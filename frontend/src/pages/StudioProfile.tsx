@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Disc, Settings, Edit2, Info, BookOpen, AlertTriangle, MapPin, Globe, Sparkles } from 'lucide-react';
+import { Disc, Settings, Edit2, Info, BookOpen, AlertTriangle, MapPin, Sparkles } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { showConfirm, showError, showSuccess } from '../utils/swal';
 import Swal from 'sweetalert2';
@@ -7,7 +7,6 @@ import Swal from 'sweetalert2';
 const emptyStudioForm = {
   stage_name: '',
   bio: '',
-  category: '',
   licence: '',
   street_address: '',
   city: '',
@@ -17,7 +16,6 @@ const emptyStudioForm = {
   phone: '',
   email: '',
   website: '',
-  languages: '',
   social_twitter: '',
   social_instagram: '',
   is_active: true,
@@ -26,7 +24,6 @@ const emptyStudioForm = {
 const studioFormFromProfile = (profile: Record<string, unknown> | null | undefined, fallbackName = '') => ({
   stage_name: (profile?.stage_name as string) || fallbackName,
   bio: (profile?.bio as string) || '',
-  category: (profile?.category as string) || '',
   licence: (profile?.licence as string) || '',
   street_address: (profile?.street_address as string) || '',
   city: (profile?.city as string) || '',
@@ -36,7 +33,6 @@ const studioFormFromProfile = (profile: Record<string, unknown> | null | undefin
   phone: (profile?.phone as string) || '',
   email: (profile?.email as string) || '',
   website: (profile?.website as string) || '',
-  languages: (profile?.languages as string) || '',
   social_twitter: (profile?.social_twitter as string) || '',
   social_instagram: (profile?.social_instagram as string) || '',
   is_active: profile?.is_active !== undefined ? Boolean(profile.is_active) : true,
@@ -337,32 +333,6 @@ export const StudioProfile: React.FC = () => {
                 required
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-400 uppercase tracking-wider block">Category</label>
-                <input
-                  type="text"
-                  name="category"
-                  placeholder="e.g. Recording Studio, Label"
-                  value={formValues.category}
-                  onChange={handleInputChange}
-                  disabled={disabled}
-                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 outline-none focus:border-rose-500 text-slate-200 transition disabled:opacity-30"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-400 uppercase tracking-wider block">Languages</label>
-                <input
-                  type="text"
-                  name="languages"
-                  placeholder="e.g. English, Hindi"
-                  value={formValues.languages}
-                  onChange={handleInputChange}
-                  disabled={disabled}
-                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 outline-none focus:border-rose-500 text-slate-200 transition disabled:opacity-30"
-                />
-              </div>
-            </div>
             <div className="space-y-1.5">
               <label className="font-bold text-slate-400 uppercase tracking-wider block">Licence Info</label>
               <input
@@ -597,14 +567,10 @@ export const StudioProfile: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="border-t border-white/5 pt-3 grid grid-cols-2 gap-3 text-[10px] text-slate-400">
+                    <div className="border-t border-white/5 pt-3 flex gap-3 text-[10px] text-slate-400">
                       <div className="flex items-center gap-1.5 min-w-0">
                         <MapPin className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
                         <span className="truncate">{studio.city ? `${studio.city}, ${studio.country || ''}` : 'No address set'}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <Globe className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-                        <span className="truncate">{studio.category || 'General Studio'}</span>
                       </div>
                     </div>
 
