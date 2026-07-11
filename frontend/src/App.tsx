@@ -123,6 +123,16 @@ function DashboardContent() {
     }
   }, [activeTab, canAccessStationProfile]);
 
+  // Hide studio admin manage menus in listen mode
+  useEffect(() => {
+    const role = currentUser?.real_role || currentUser?.role;
+    if (currentUser && role === 'studio_admin' && userMode === 'listener') {
+      if (activeTab === 'tracks' || activeTab === 'studio-profile') {
+        setActiveTab('home');
+      }
+    }
+  }, [currentUser, activeTab, userMode]);
+
   // Route protection redirect for Radio Admins who do NOT have a station yet (admin mode only)
   useEffect(() => {
     const role = currentUser?.real_role || currentUser?.role;

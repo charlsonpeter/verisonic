@@ -86,6 +86,11 @@ export const Header: React.FC<HeaderProps> = ({
     setActiveTab('home');
   };
 
+  const isStudioAdminInAdminMode =
+    !!currentUser &&
+    (currentUser.real_role || currentUser.role) === 'studio_admin' &&
+    userMode === 'admin';
+
   const mobilePageTitle =
     pageTitleOverride !== undefined
       ? pageTitleOverride
@@ -324,7 +329,7 @@ export const Header: React.FC<HeaderProps> = ({
                   </button>
                 )}
 
-                {currentUser && ['studio_admin', 'admin'].includes(currentUser.real_role || currentUser.role) && (
+                {(currentUser?.real_role || currentUser?.role) === 'admin' || isStudioAdminInAdminMode ? (
                   <button 
                     onClick={() => handleDropdownSelect('studio-profile')}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
@@ -332,9 +337,9 @@ export const Header: React.FC<HeaderProps> = ({
                     <Disc className="w-4 h-4 text-slate-450" />
                     {(currentUser.real_role || currentUser.role) === 'admin' ? 'Music Studios' : 'Studio Profile'}
                   </button>
-                )}
+                ) : null}
 
-                {(currentUser.role === 'studio_admin' || currentUser.role === 'admin') && (
+                {((currentUser?.real_role || currentUser?.role) === 'admin' || isStudioAdminInAdminMode) && (
                   <button 
                     onClick={() => handleDropdownSelect('tracks')}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-455 hover:bg-slate-800 hover:text-white transition"
