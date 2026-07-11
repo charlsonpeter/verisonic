@@ -51,7 +51,7 @@ const API_URL = '/api';
 
 // Headless UI Router Core
 function DashboardContent() {
-  const { currentUser, token, hasRadioStation, mustResetPassword, canAccessPlatformSettings, canAccessStationProfile, userMode } = useAuth();
+  const { currentUser, token, hasRadioStation, hasStudioProfileComplete, mustResetPassword, canAccessPlatformSettings, canAccessStationProfile, userMode } = useAuth();
   const { playTrack, playQueue, addToQueue, favorites } = useAudio();
 
   // Route/Tab Switcher state
@@ -147,20 +147,29 @@ function DashboardContent() {
   useEffect(() => {
     const role = currentUser?.real_role || currentUser?.role;
     if (currentUser && role === 'studio_admin' && userMode === 'admin') {
-      const allowed = new Set([
-        'track-list',
+      const onboardingAllowed = new Set([
+        'studio-profile',
         'contact',
         'profile',
-        'studio-profile',
-        'tracks',
-        'reports',
+        'settings',
         'admin-password-reset',
       ]);
+      const allowed = hasStudioProfileComplete
+        ? new Set([
+            'track-list',
+            'contact',
+            'profile',
+            'studio-profile',
+            'tracks',
+            'reports',
+            'admin-password-reset',
+          ])
+        : onboardingAllowed;
       if (!allowed.has(activeTab)) {
-        setActiveTab('track-list');
+        setActiveTab(hasStudioProfileComplete ? 'track-list' : 'studio-profile');
       }
     }
-  }, [currentUser, activeTab, userMode]);
+  }, [currentUser, activeTab, userMode, hasStudioProfileComplete]);
 
   useEffect(() => {
     if (activeTab === 'discover') {

@@ -113,7 +113,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
     <div className="space-y-8 md:space-y-12 w-full">
       
       {/* Promoted Studio Admin Setup Banner */}
-      {currentUser?.role === 'studio_admin' && (!currentUser.artist_profile?.bio || currentUser.artist_profile.bio === '') && (
+      {currentUser?.role === 'studio_admin' && !currentUser.artist_profile?.profile_complete && (
         <div className="relative overflow-hidden bg-gradient-to-r from-slate-900 via-slate-950 to-slate-900 border border-cyan-500/20 p-6 rounded-3xl flex flex-col md:flex-row items-center justify-between gap-6 shadow-2xl animate-fade-in group">
           <div className="absolute top-0 left-0 w-32 h-32 bg-cyan-500/5 rounded-full blur-3xl pointer-events-none group-hover:bg-cyan-500/10 transition-all duration-700" />
           <div className="space-y-2 relative z-10">
@@ -122,14 +122,14 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
             </span>
             <h3 className="text-lg font-extrabold text-white tracking-tight leading-tight">Complete Your Studio Admin Registration</h3>
             <p className="text-xs text-slate-400 max-w-2xl leading-relaxed font-sans font-medium">
-              Welcome to the team! Before uploading your first track, please configure your Stage Name/Studio Brand and Bio in the Studio Space.
+              Welcome to the team! Please complete your studio profile with contact and location details before uploading tracks.
             </p>
           </div>
           <button 
-            onClick={() => onNavigate('tracks')}
+            onClick={() => onNavigate('studio-profile')}
             className="relative z-10 flex-shrink-0 px-6 py-3 bg-gradient-to-r from-cyan-600 to-cyan-500 text-slate-950 font-black text-xs rounded-xl shadow-lg shadow-cyan-550/20 hover:scale-[1.02] hover:shadow-cyan-550/30 transition duration-300 uppercase tracking-wider cursor-pointer"
           >
-            Register Studio Details
+            Complete Studio Profile
           </button>
         </div>
       )}

@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from app.db.session import get_db
 from app.models import User, Artist
-from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, UserSettingsUpdate, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, RequestReactivationSchema
+from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, UserSettingsUpdate, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, StudioProfileUpdate, RequestReactivationSchema
 from app.core.security import verify_password, get_password_hash, create_access_token, create_refresh_token, validate_refresh_token, revoke_refresh_token, ALGORITHM
 from app.core.config import settings
 from app.core.password_policy import validate_password
@@ -19,6 +19,34 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 DEFAULT_ADMIN_PASSWORD = "admin12345"
 VALID_STREAM_QUALITIES = {"normal", "high", "hires", "lossless"}
+STUDIO_PROFILE_TEXT_FIELDS = (
+    "stage_name", "bio", "category", "licence", "street_address", "city",
+    "state_province", "postal_code", "country", "phone", "email", "website",
+    "languages", "social_twitter", "social_instagram",
+)
+STUDIO_ONBOARDING_REQUIRED_FIELDS = (
+    "stage_name", "bio", "city", "country", "phone", "email",
+)
+
+
+def _normalize_text(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _studio_profile_is_complete(artist: Artist) -> bool:
+    return all(_normalize_text(getattr(artist, field)) for field in STUDIO_ONBOARDING_REQUIRED_FIELDS)
+
+
+def _apply_studio_profile_fields(artist: Artist, profile_in) -> None:
+    for field in STUDIO_PROFILE_TEXT_FIELDS:
+        if hasattr(profile_in, field):
+            value = getattr(profile_in, field)
+            if value is not None:
+                setattr(artist, field, _normalize_text(value))
+    artist.profile_complete = _studio_profile_is_complete(artist)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login-form")
 security = HTTPBearer(auto_error=False)
@@ -313,6 +341,32 @@ def request_artist(
     return current_user
 
 
+@router.put("/studio-profile", response_model=UserResponse)
+def update_studio_profile(
+    profile_in: StudioProfileUpdate,
+    current_user: User = Depends(get_current_studio_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Studio admin: update full studio profile and mark onboarding complete when required fields are filled.
+    """
+    artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+    if not artist:
+        artist = Artist(
+            user_id=current_user.id,
+            stage_name=profile_in.stage_name.strip(),
+            bio=profile_in.bio.strip(),
+            profile_complete=False,
+        )
+        db.add(artist)
+
+    _apply_studio_profile_fields(artist, profile_in)
+    db.commit()
+    db.refresh(artist)
+    db.refresh(current_user)
+    return current_user
+
+
 @router.get("/admin/users", response_model=List[UserResponse])
 def get_users_admin(
     current_user: User = Depends(get_current_admin),
@@ -351,9 +405,12 @@ def update_user_role_admin(
             artist = Artist(
                 user_id=user.id,
                 stage_name=user.full_name or user.email.split("@")[0],
-                bio=""
+                bio="",
+                profile_complete=False,
             )
             db.add(artist)
+        else:
+            artist.profile_complete = _studio_profile_is_complete(artist)
             
     db.commit()
     db.refresh(user)
@@ -586,6 +643,36 @@ def update_studio_admin(
         artist.stage_name = artist_in.stage_name
     if artist_in.bio is not None:
         artist.bio = artist_in.bio
+    if artist_in.category is not None:
+        artist.category = artist_in.category
+    if artist_in.licence is not None:
+        artist.licence = artist_in.licence
+    if artist_in.street_address is not None:
+        artist.street_address = artist_in.street_address
+    if artist_in.city is not None:
+        artist.city = artist_in.city
+    if artist_in.state_province is not None:
+        artist.state_province = artist_in.state_province
+    if artist_in.postal_code is not None:
+        artist.postal_code = artist_in.postal_code
+    if artist_in.country is not None:
+        artist.country = artist_in.country
+    if artist_in.phone is not None:
+        artist.phone = artist_in.phone
+    if artist_in.email is not None:
+        artist.email = artist_in.email
+    if artist_in.website is not None:
+        artist.website = artist_in.website
+    if artist_in.languages is not None:
+        artist.languages = artist_in.languages
+    if artist_in.social_twitter is not None:
+        artist.social_twitter = artist_in.social_twitter
+    if artist_in.social_instagram is not None:
+        artist.social_instagram = artist_in.social_instagram
+    if artist_in.profile_complete is not None:
+        artist.profile_complete = artist_in.profile_complete
+    else:
+        artist.profile_complete = _studio_profile_is_complete(artist)
     if artist_in.is_active is not None:
         artist.is_active = artist_in.is_active
         if artist.is_active:

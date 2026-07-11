@@ -33,6 +33,20 @@ export interface User {
     disabled_reason?: string | null;
     reactivation_reason?: string | null;
     reactivation_requested?: boolean;
+    profile_complete?: boolean;
+    category?: string | null;
+    licence?: string | null;
+    street_address?: string | null;
+    city?: string | null;
+    state_province?: string | null;
+    postal_code?: string | null;
+    country?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    website?: string | null;
+    languages?: string | null;
+    social_twitter?: string | null;
+    social_instagram?: string | null;
   } | null;
 }
 
@@ -58,6 +72,7 @@ interface AuthContextType {
   fetchCurrentUser: () => Promise<void>;
   updateStreamQuality: (quality: QualityLevelSetting) => Promise<boolean>;
   hasRadioStation: boolean;
+  hasStudioProfileComplete: boolean;
   checkRadioStationStatus: (user?: User | null) => Promise<boolean>;
 }
 
@@ -282,6 +297,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const mustResetPassword = !!(
     currentUser?.role === 'admin' && currentUser?.must_reset_password
   );
+  const hasStudioProfileComplete = !!currentUser?.artist_profile?.profile_complete;
 
   return (
     <AuthContext.Provider value={{
@@ -298,6 +314,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isStaffInAdminMode,
       mustResetPassword,
       hasRadioStation,
+      hasStudioProfileComplete,
       switchUserMode,
       login,
       register,

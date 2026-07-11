@@ -34,6 +34,23 @@ class ResetInitialPasswordRequest(BaseModel):
     new_password: str
 
 # --- Artist Schemas ---
+class ArtistProfileFields(BaseModel):
+    stage_name: Optional[str] = None
+    bio: Optional[str] = None
+    category: Optional[str] = None
+    licence: Optional[str] = None
+    street_address: Optional[str] = None
+    city: Optional[str] = None
+    state_province: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    website: Optional[str] = None
+    languages: Optional[str] = None
+    social_twitter: Optional[str] = None
+    social_instagram: Optional[str] = None
+
 class ArtistCreate(BaseModel):
     stage_name: str
     bio: Optional[str] = None
@@ -47,17 +64,34 @@ class ArtistResponse(BaseModel):
     disabled_reason: Optional[str] = None
     reactivation_reason: Optional[str] = None
     reactivation_requested: Optional[bool] = None
+    profile_complete: bool = False
+    category: Optional[str] = None
+    licence: Optional[str] = None
+    street_address: Optional[str] = None
+    city: Optional[str] = None
+    state_province: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    website: Optional[str] = None
+    languages: Optional[str] = None
+    social_twitter: Optional[str] = None
+    social_instagram: Optional[str] = None
 
     class Config:
         from_attributes = True
 
-class ArtistUpdate(BaseModel):
-    stage_name: Optional[str] = None
-    bio: Optional[str] = None
+class ArtistUpdate(ArtistProfileFields):
     is_active: Optional[bool] = None
     disabled_reason: Optional[str] = None
     reactivation_reason: Optional[str] = None
     reactivation_requested: Optional[bool] = None
+    profile_complete: Optional[bool] = None
+
+class StudioProfileUpdate(ArtistProfileFields):
+    stage_name: str
+    bio: str
 
 class UserResponse(BaseModel):
     id: int

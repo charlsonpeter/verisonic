@@ -90,6 +90,23 @@ MIGRATIONS = [
     ("012_users_subscription_activated_at", """
         ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_activated_at TIMESTAMP;
     """),
+    ("013_artists_profile_cols", """
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS profile_complete BOOLEAN DEFAULT FALSE;
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS category VARCHAR;
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS licence VARCHAR;
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS street_address VARCHAR;
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS city VARCHAR;
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS state_province VARCHAR;
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS postal_code VARCHAR;
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS country VARCHAR;
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS phone VARCHAR;
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS email VARCHAR;
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS website VARCHAR;
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS languages VARCHAR;
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS social_twitter VARCHAR;
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS social_instagram VARCHAR;
+        UPDATE artists SET profile_complete = TRUE WHERE bio IS NOT NULL AND TRIM(bio) != '';
+    """),
 ]
 
 
