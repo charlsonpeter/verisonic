@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { Radio as RadioIcon, RadioIcon as LiveIcon, Plus, Sparkles, X, Users, Calendar, Play, Pause, Wifi, MapPin } from 'lucide-react';
 import { useAudio, RadioStation } from '../context/AudioContext';
 import { useAuth } from '../context/AuthContext';
 import { RadioCard, RadioTile } from '../components/shared/RadioCard';
+import { AppModal } from '../components/shared/AppModal';
 import { showError } from '../utils/swal';
 
 const API_URL = '/api';
@@ -622,25 +622,39 @@ export const Radio: React.FC = () => {
                         </span>
                       </div>
 
-                      {/* Schedule editor modal for this station */}
-                      {editingStationId === st.id && createPortal(
-                        <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4">
-                          <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm cursor-pointer" onClick={() => setEditingStationId(null)} />
-                          <div className="bg-slate-900 border border-white/10 rounded-3xl p-6 shadow-2xl relative w-full max-w-4xl max-h-[85vh] h-[85vh] flex flex-col animate-scale-up font-sans">
-
-                            {/* Modal Header */}
-                            <div className="flex items-center justify-between border-b border-white/5 pb-4">
-                              <h3 className="text-sm font-black text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
-                                <Sparkles className="w-4 h-4 text-rose-455" /> Edit Schedule — {st.name}
-                              </h3>
-                              <button onClick={() => setEditingStationId(null)}
-                                className="p-1.5 hover:bg-white/5 rounded-lg text-slate-400 hover:text-white transition cursor-pointer">
-                                <X className="w-5 h-5" />
-                              </button>
-                            </div>
-
-                            {/* Modal Body */}
-                            <div className="flex-1 flex flex-col min-h-0 my-4 border border-white/5 bg-slate-950/40 p-4 rounded-2xl">
+                      <AppModal
+                        open={editingStationId === st.id}
+                        onClose={() => setEditingStationId(null)}
+                        maxWidth="4xl"
+                        showGradient={false}
+                        panelClassName="bg-slate-900 max-h-[85vh] h-[85vh] flex flex-col animate-scale-up font-sans"
+                        bodyClassName="flex-1 flex flex-col min-h-0 p-0"
+                        header={(
+                          <h3 className="text-sm font-black text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
+                            <Sparkles className="w-4 h-4 text-rose-455" /> Edit Schedule — {st.name}
+                          </h3>
+                        )}
+                        footer={(
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setEditingStationId(null)}
+                              className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 border border-white/5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition text-slate-400 cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isSavingMetadata}
+                              onClick={() => handleSaveMetadata(st.id)}
+                              className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 rounded-xl text-[10px] font-bold uppercase tracking-wider transition text-white cursor-pointer"
+                            >
+                              {isSavingMetadata ? 'Saving...' : 'Save Schedule'}
+                            </button>
+                          </>
+                        )}
+                      >
+                            <div className="flex-1 flex flex-col min-h-0 mx-6 my-4 border border-white/5 bg-slate-950/40 p-4 rounded-2xl">
                               <div className="flex justify-between items-center pb-3 border-b border-white/5 mb-3 flex-shrink-0">
                                 <h4 className="text-[10px] font-extrabold text-rose-455 uppercase tracking-widest font-sans">Program Details List</h4>
                                 <button type="button"
@@ -698,23 +712,7 @@ export const Radio: React.FC = () => {
                                 })()}
                               </div>
                             </div>
-
-                            {/* Modal Footer */}
-                            <div className="flex gap-3 justify-end border-t border-white/5 pt-4">
-                              <button type="button" onClick={() => setEditingStationId(null)}
-                                className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 border border-white/5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition text-slate-400 cursor-pointer">
-                                Cancel
-                              </button>
-                              <button type="button" disabled={isSavingMetadata} onClick={() => handleSaveMetadata(st.id)}
-                                className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 rounded-xl text-[10px] font-bold uppercase tracking-wider transition text-white cursor-pointer">
-                                {isSavingMetadata ? 'Saving...' : 'Save Schedule'}
-                              </button>
-                            </div>
-
-                          </div>
-                        </div>,
-                        document.body
-                      )}
+                      </AppModal>
                     </div>
                   );
                 })}

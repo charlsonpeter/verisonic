@@ -1,8 +1,8 @@
 import React from 'react';
-import { createPortal } from 'react-dom';
-import { User as UserIcon, Activity, Key, X, Settings } from 'lucide-react';
+import { User as UserIcon, Activity, Key, Settings } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
+import { AppModal } from '../components/shared/AppModal';
 import {
   getAccountTierLabel,
   hasPaidSubscription,
@@ -35,20 +35,13 @@ export const UserProfile: React.FC = () => {
     }
   }, [currentUser]);
 
-  React.useEffect(() => {
-    const mainEl = document.querySelector('main');
-    if (isPasswordModalOpen) {
-      document.body.style.overflow = 'hidden';
-      if (mainEl) mainEl.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-      if (mainEl) mainEl.style.overflow = '';
-    }
-    return () => {
-      document.body.style.overflow = '';
-      if (mainEl) mainEl.style.overflow = '';
-    };
-  }, [isPasswordModalOpen]);
+  const closePasswordModal = () => {
+    setIsPasswordModalOpen(false);
+    setPasswordMessage(null);
+    setOldPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+  };
 
   const handleUpdateAllProfileDetails = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -269,98 +262,82 @@ export const UserProfile: React.FC = () => {
         </div>
       </form>
 
-      {/* Change Password Modal */}
-      {isPasswordModalOpen && createPortal(
-        <div className="fixed inset-0 z-55 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in overflow-y-auto">
-          <div className="glass-card w-full max-w-md p-6 rounded-3xl border border-white/10 space-y-4 shadow-2xl relative animate-scale-up m-4">
+      <AppModal
+        open={isPasswordModalOpen}
+        onClose={closePasswordModal}
+        maxWidth="md"
+        showGradient={false}
+        panelClassName="glass-card animate-scale-up"
+        header={(
+          <h3 className="text-sm font-extrabold text-white uppercase tracking-widest flex items-center gap-1.5 font-sans">
+            <Key className="w-4 h-4 text-rose-500 animate-pulse" /> Change Password
+          </h3>
+        )}
+        footer={(
+          <>
             <button
-              onClick={() => {
-                setIsPasswordModalOpen(false);
-                setPasswordMessage(null);
-                setOldPassword('');
-                setNewPassword('');
-                setConfirmPassword('');
-              }}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white transition"
+              type="button"
+              onClick={closePasswordModal}
+              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 border border-white/5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition text-slate-400"
             >
-              <X className="w-5 h-5" />
+              Cancel
             </button>
-            
-            <h3 className="text-sm font-extrabold text-white uppercase tracking-widest flex items-center gap-1.5 font-sans">
-              <Key className="w-4 h-4 text-rose-500 animate-pulse" /> Change Password
-            </h3>
-
-            {passwordMessage && (
-              <div className={`p-3 rounded-xl text-xs font-semibold ${
-                passwordMessage.type === 'success' 
-                  ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-450' 
-                  : 'bg-rose-500/10 border border-rose-500/20 text-rose-400'
-              }`}>
-                {passwordMessage.text}
-              </div>
-            )}
-
-            <form onSubmit={handleChangePassword} className="space-y-4 text-xs">
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-400 uppercase tracking-wider block">Current Password</label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  value={oldPassword}
-                  onChange={(e) => setOldPassword(e.target.value)}
-                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                />
-              </div>
-              
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-400 uppercase tracking-wider block">New Password</label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                />
-              </div>
-              
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-400 uppercase tracking-wider block">Confirm New Password</label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                />
-              </div>
-
-              <div className="flex gap-3 justify-end pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsPasswordModalOpen(false);
-                    setPasswordMessage(null);
-                    setOldPassword('');
-                    setNewPassword('');
-                    setConfirmPassword('');
-                  }}
-                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 border border-white/5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition text-slate-400"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingPassword}
-                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-[10px] rounded-xl shadow-md transition uppercase tracking-wider cursor-pointer"
-                >
-                  {isSavingPassword ? 'Updating...' : 'Update Password'}
-                </button>
-              </div>
-            </form>
+            <button
+              type="submit"
+              form="change-password-form"
+              disabled={isSavingPassword}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-[10px] rounded-xl shadow-md transition uppercase tracking-wider cursor-pointer"
+            >
+              {isSavingPassword ? 'Updating...' : 'Update Password'}
+            </button>
+          </>
+        )}
+      >
+        {passwordMessage && (
+          <div className={`p-3 rounded-xl text-xs font-semibold ${
+            passwordMessage.type === 'success'
+              ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-450'
+              : 'bg-rose-500/10 border border-rose-500/20 text-rose-400'
+          }`}>
+            {passwordMessage.text}
           </div>
-        </div>,
-        document.body
-      )}
+        )}
+
+        <form id="change-password-form" onSubmit={handleChangePassword} className="space-y-4 text-xs">
+          <div className="space-y-1.5">
+            <label className="font-bold text-slate-400 uppercase tracking-wider block">Current Password</label>
+            <input
+              type="password"
+              placeholder="••••••••"
+              value={oldPassword}
+              onChange={(e) => setOldPassword(e.target.value)}
+              className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="font-bold text-slate-400 uppercase tracking-wider block">New Password</label>
+            <input
+              type="password"
+              placeholder="••••••••"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="font-bold text-slate-400 uppercase tracking-wider block">Confirm New Password</label>
+            <input
+              type="password"
+              placeholder="••••••••"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
+            />
+          </div>
+        </form>
+      </AppModal>
 
     </div>
   );

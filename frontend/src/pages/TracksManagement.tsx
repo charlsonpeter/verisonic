@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { Music, Trash2, CheckCircle2, XCircle, RefreshCw, Star, Play, Ban, Check, Edit3, X, UploadCloud, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
+import { AppModal } from '../components/shared/AppModal';
 import { showError, showConfirm } from '../utils/swal';
 
 interface UploadQueueItem {
@@ -567,30 +567,56 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
         </form>
       )}
 
-      {/* Upload Master Modal */}
-      {/* Upload Master Modal */}
-      {isUploadModalOpen && createPortal(
-        <div className="fixed inset-0 z-50 flex justify-center items-start overflow-y-auto p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
-          <div className="bg-slate-900 border border-white/10 rounded-3xl w-full max-w-4xl max-h-[90vh] flex flex-col relative shadow-2xl my-auto overflow-hidden">
-            {/* Header (Sticky/Static, no scroll) */}
-            <div className="p-6 pb-4 border-b border-white/5 relative flex-shrink-0">
-              <button 
-                onClick={() => setIsUploadModalOpen(false)}
-                className="absolute top-6 right-6 p-2 bg-slate-950/50 hover:bg-slate-950 rounded-full text-slate-400 hover:text-white transition"
-                title="Close modal"
-              >
-                <X className="w-4 h-4" />
-              </button>
-              <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                <UploadCloud className="w-6 h-6 text-rose-400" /> Upload Studio Master
-              </h3>
-              <p className="text-xs text-slate-400 mt-1 font-sans">
-                Process acoustic FLAC/WAV/MP3 files through live Librosa spectral checks.
-              </p>
-            </div>
-
-            {/* Scrollable Content Area */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <AppModal
+        open={isUploadModalOpen}
+        onClose={() => setIsUploadModalOpen(false)}
+        maxWidth="4xl"
+        align="start"
+        showGradient={false}
+        panelClassName="bg-slate-900 max-h-[90vh] flex flex-col overflow-hidden"
+        bodyClassName="flex-1 overflow-y-auto p-6 space-y-6 min-h-0"
+        header={(
+          <div className="border-b border-white/5 pb-4">
+            <h3 className="text-xl font-bold text-white flex items-center gap-2">
+              <UploadCloud className="w-6 h-6 text-rose-400" /> Upload Studio Master
+            </h3>
+            <p className="text-xs text-slate-400 mt-1 font-sans">
+              Process acoustic FLAC/WAV/MP3 files through live Librosa spectral checks.
+            </p>
+          </div>
+        )}
+        footer={uploadQueue.length > 0 ? (
+          isQueueUploading ? (
+            <button
+              type="button"
+              disabled
+              className="w-full bg-slate-900 border border-white/5 text-slate-500 font-bold py-3 rounded-xl transition text-xs font-sans cursor-not-allowed text-center"
+            >
+              Uploading queue... {uploadQueue.filter(q => q.status === 'completed' || q.status === 'failed').length} / {uploadQueue.length} done
+            </button>
+          ) : uploadQueue.some(q => q.status === 'completed' || q.status === 'failed') ? (
+            <button
+              type="button"
+              onClick={() => {
+                setUploadQueue([]);
+                setIsUploadModalOpen(false);
+              }}
+              className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-xl transition text-xs shadow flex items-center justify-center gap-1.5 font-sans"
+            >
+              Close & Finish
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleUploadQueue}
+              className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-xl transition text-xs shadow flex items-center justify-center gap-1.5 font-sans"
+            >
+              Verify and Upload Queue
+            </button>
+          )
+        ) : undefined}
+        footerClassName="w-full flex-shrink-0 !justify-stretch px-6 py-4"
+      >
               {uploadMessage && (
                 <div className={`p-4 rounded-xl text-xs flex items-center gap-2 font-semibold ${uploadMessage.type === 'success' ? 'bg-emerald-500/10 border border-emerald-500/25 text-emerald-400' : 'bg-rose-500/10 border border-rose-500/25 text-rose-400'}`}>
                   {uploadMessage.type === 'success' ? <CheckCircle2 className="w-5 h-5 flex-shrink-0" /> : <AlertTriangle className="w-5 h-5 flex-shrink-0" />}
@@ -850,42 +876,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                   </div>
                 </div>
               )}
-            </div>
-
-            {/* Footer (Sticky/Static with Action Button) */}
-            {uploadQueue.length > 0 && (
-              <div className="p-6 pt-4 border-t border-white/5 bg-slate-950/20 flex-shrink-0">
-                {isQueueUploading ? (
-                  <button 
-                    disabled 
-                    className="w-full bg-slate-900 border border-white/5 text-slate-500 font-bold py-3 rounded-xl transition text-xs font-sans cursor-not-allowed text-center"
-                  >
-                    Uploading queue... {uploadQueue.filter(q => q.status === 'completed' || q.status === 'failed').length} / {uploadQueue.length} done
-                  </button>
-                ) : uploadQueue.some(q => q.status === 'completed' || q.status === 'failed') ? (
-                  <button 
-                    onClick={() => {
-                      setUploadQueue([]);
-                      setIsUploadModalOpen(false);
-                    }}
-                    className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-xl transition text-xs shadow flex items-center justify-center gap-1.5 font-sans"
-                  >
-                    Close & Finish
-                  </button>
-                ) : (
-                  <button 
-                    onClick={handleUploadQueue}
-                    className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-xl transition text-xs shadow flex items-center justify-center gap-1.5 font-sans"
-                  >
-                    Verify and Upload Queue
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        </div>,
-        document.body
-      )}
+      </AppModal>
 
       {message && (
         <div className={`p-4 rounded-xl text-xs flex items-center gap-2 font-semibold font-sans ${
@@ -1029,31 +1020,35 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
         )}
       </div>
 
-      {/* Edit Modal Overlay */}
-      {editingTrack && createPortal(
-        <div className="fixed inset-0 z-50 flex justify-center items-start overflow-y-auto p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in font-sans">
-          <div className="glass-card max-w-3xl w-full rounded-3xl border border-white/10 shadow-2xl relative bg-gradient-to-br from-slate-950 to-slate-900 max-h-[90vh] flex flex-col overflow-hidden my-auto">
-            {/* Soft background glow */}
-            <div className="absolute -top-24 -right-24 w-48 h-48 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
-            
-            {/* Header (Sticky/Static) */}
-            <div className="p-6 pb-4 border-b border-white/5 relative flex-shrink-0">
-              <button 
-                onClick={() => setEditingTrack(null)}
-                className="absolute top-6 right-6 p-2 text-slate-400 hover:text-white rounded-xl hover:bg-white/5 transition"
-                title="Close"
-              >
-                <X className="w-4.5 h-4.5" />
-              </button>
-              
-              <div>
-                <h3 className="text-xl font-extrabold text-white">Edit Track Details</h3>
-                <p className="text-xs text-slate-400">Update track information, upload custom artwork, or edit lyrics transcription.</p>
-              </div>
-            </div>
-
-            {/* Scrollable Content Area & Form Wrapper */}
+      <AppModal
+        open={!!editingTrack}
+        onClose={() => setEditingTrack(null)}
+        maxWidth="3xl"
+        align="start"
+        showGradient={false}
+        hideHeaderSection
+        panelClassName="glass-card max-h-[90vh] flex flex-col overflow-hidden bg-gradient-to-br from-slate-950 to-slate-900"
+        bodyClassName="flex-1 flex flex-col overflow-hidden p-0 min-h-0"
+      >
             <form onSubmit={handleEditSubmit} className="flex-1 flex flex-col overflow-hidden">
+              <div className="p-6 pb-4 border-b border-white/5 relative flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setEditingTrack(null)}
+                  className="absolute top-6 right-6 p-2 text-slate-400 hover:text-white rounded-xl hover:bg-white/5 transition"
+                  title="Close"
+                >
+                  <X className="w-4.5 h-4.5" />
+                </button>
+
+                <div>
+                  <h3 className="text-xl font-extrabold text-white">Edit Track Details</h3>
+                  <p className="text-xs text-slate-400">Update track information, upload custom artwork, or edit lyrics transcription.</p>
+                </div>
+              </div>
+
+              <div className="absolute -top-24 -right-24 w-48 h-48 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
+
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 {editError && (
                   <div className="p-3 bg-rose-500/10 border border-rose-500/25 text-rose-455 rounded-xl text-[11px] font-semibold text-center">
@@ -1285,10 +1280,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                 </button>
               </div>
             </form>
-          </div>
-        </div>,
-        document.body
-      )}
+      </AppModal>
 
       {/* Autocomplete Suggestions Datalists */}
       <datalist id="artists-suggestions">

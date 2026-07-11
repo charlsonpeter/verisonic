@@ -1,6 +1,7 @@
 import React, { useRef, useEffect, useMemo } from 'react';
 import { X, Music } from 'lucide-react';
 import { useAudio } from '../../context/AudioContext';
+import { AppModal } from './AppModal';
 
 interface LyricsModalProps {
   isOpen: boolean;
@@ -14,30 +15,15 @@ interface ParsedLine {
 }
 
 export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => {
-  const { currentTrack, currentTime, duration, activeRadioStation, isPlaying } = useAudio();
+  const { currentTrack, currentTime, activeRadioStation, isPlaying } = useAudio();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const activeLineRef = useRef<HTMLDivElement | null>(null);
 
-  // Close when pressing Esc
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    if (isOpen) {
-      window.addEventListener('keydown', handleKeyDown);
-    }
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
-
-  // Parse lyrics from the track
   const parsedLines = useMemo((): ParsedLine[] => {
     if (!currentTrack) return [];
-    
-    const lyricsText = currentTrack.lyrics;
 
-    if (!lyricsText || lyricsText.trim() === '') {
-      return [];
-    }
+    const lyricsText = currentTrack.lyrics;
+    if (!lyricsText || lyricsText.trim() === '') return [];
 
     const rawLines = lyricsText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
     const timestampRegex = /^\[(\d{2}):(\d{2})(?:\.(\d{2}))?\]\s*(.*)$/;
@@ -45,25 +31,22 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
 
     if (hasTimestamps) {
       return parseLyricsLines(rawLines);
-    } else {
-      // Just map raw text lines with time: -1 (indicating not synchronized)
-      return rawLines.map(lineText => ({
-        time: -1,
-        text: lineText,
-        words: []
-      }));
     }
+
+    return rawLines.map(lineText => ({
+      time: -1,
+      text: lineText,
+      words: [],
+    }));
   }, [currentTrack]);
 
-  // Determine if the lyrics have real timestamps for synchronization
   const isSynchronized = useMemo(() => {
     return parsedLines.length > 0 && parsedLines.every(l => l.time >= 0);
   }, [parsedLines]);
 
-  // Find active line index based on current playback time (only if synchronized)
   const activeLineIndex = useMemo(() => {
     if (!isSynchronized || parsedLines.length === 0) return -1;
-    
+
     let activeIdx = -1;
     for (let i = 0; i < parsedLines.length; i++) {
       if (currentTime >= parsedLines[i].time) {
@@ -75,56 +58,19 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
     return activeIdx;
   }, [parsedLines, currentTime, isSynchronized]);
 
-  // Scroll active line into center view (only if synchronized)
   useEffect(() => {
     if (isSynchronized && activeLineRef.current && containerRef.current) {
       activeLineRef.current.scrollIntoView({
         behavior: 'smooth',
-        block: 'center'
+        block: 'center',
       });
     }
   }, [activeLineIndex, isSynchronized]);
 
-  if (!isOpen) return null;
-
-  // Render Live Radio message if streaming radio
-  if (activeRadioStation) {
-    return (
-      <div className="fixed inset-0 bg-slate-950/95 backdrop-blur-3xl flex items-center justify-center z-50 p-4 animate-fade-in">
-        
-        {/* Floating gradient blobs for premium backdrop */}
-        <div className="absolute top-1/4 left-1/4 w-[35rem] h-[35rem] bg-rose-600/10 rounded-full blur-[130px] pointer-events-none animate-pulse" />
-        <div className="absolute bottom-1/4 right-1/4 w-[35rem] h-[35rem] bg-pink-600/10 rounded-full blur-[130px] pointer-events-none animate-pulse" />
-
-        <div className="relative max-w-xl w-full bg-slate-900/60 border border-white/5 backdrop-blur-xl rounded-[2.5rem] p-8 md:p-12 shadow-2xl flex flex-col items-center justify-center text-center h-[50vh] z-10">
-          <button 
-            onClick={onClose}
-            className="absolute top-6 right-6 p-2.5 text-slate-400 hover:text-white rounded-xl bg-white/5 hover:bg-white/10 transition duration-305"
-          >
-            <X className="w-5 h-5" />
-          </button>
-          
-          <div className="relative mb-6">
-            <div className="absolute inset-0 bg-rose-500/20 rounded-full blur-xl scale-125 animate-pulse" />
-            <div className="relative bg-gradient-to-tr from-rose-600 to-pink-600 p-5 rounded-full shadow-lg flex items-center justify-center border border-white/10">
-              <Music className="w-8 h-8 text-white animate-pulse" />
-            </div>
-          </div>
-          
-          <h3 className="text-2xl font-black text-white tracking-tight mb-3">Live Stream Mode</h3>
-          <p className="text-slate-400 text-xs md:text-sm max-w-sm leading-relaxed">
-            Real-time audio telemetry validation is active. Lyrics synchronization is unavailable for continuous live broadcast feeds.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  // Parse lines helper
   function parseLyricsLines(lines: string[]): ParsedLine[] {
     const timestampRegex = /^\[(\d{2}):(\d{2})(?:\.(\d{2}))?\]\s*(.*)$/;
     const parsed: ParsedLine[] = [];
-    
+
     lines.forEach((line) => {
       const match = line.match(timestampRegex);
       if (match) {
@@ -136,14 +82,14 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
         parsed.push({
           time,
           text,
-          words: text.split(/\s+/).filter(w => w.length > 0)
+          words: text.split(/\s+/).filter(w => w.length > 0),
         });
       } else {
         const prevTime = parsed.length > 0 ? parsed[parsed.length - 1].time + 3.5 : 0;
         parsed.push({
           time: prevTime,
           text: line,
-          words: line.split(/\s+/).filter(w => w.length > 0)
+          words: line.split(/\s+/).filter(w => w.length > 0),
         });
       }
     });
@@ -151,27 +97,63 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
     return parsed.sort((a, b) => a.time - b.time);
   }
 
+  if (activeRadioStation) {
+    return (
+      <AppModal
+        open={isOpen}
+        onClose={onClose}
+        variant="fullscreen"
+        overlayClassName="items-center justify-center p-4"
+        hideHeaderSection
+      >
+        <div className="absolute top-1/4 left-1/4 w-[35rem] h-[35rem] bg-rose-600/10 rounded-full blur-[130px] pointer-events-none animate-pulse" />
+        <div className="absolute bottom-1/4 right-1/4 w-[35rem] h-[35rem] bg-pink-600/10 rounded-full blur-[130px] pointer-events-none animate-pulse" />
+
+        <div className="relative max-w-xl w-full mx-auto bg-slate-900/60 border border-white/5 backdrop-blur-xl rounded-[2.5rem] p-8 md:p-12 shadow-2xl flex flex-col items-center justify-center text-center h-[50vh] z-10">
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute top-6 right-6 p-2.5 text-slate-400 hover:text-white rounded-xl bg-white/5 hover:bg-white/10 transition duration-305"
+          >
+            <X className="w-5 h-5" />
+          </button>
+
+          <div className="relative mb-6">
+            <div className="absolute inset-0 bg-rose-500/20 rounded-full blur-xl scale-125 animate-pulse" />
+            <div className="relative bg-gradient-to-tr from-rose-600 to-pink-600 p-5 rounded-full shadow-lg flex items-center justify-center border border-white/10">
+              <Music className="w-8 h-8 text-white animate-pulse" />
+            </div>
+          </div>
+
+          <h3 className="text-2xl font-black text-white tracking-tight mb-3">Live Stream Mode</h3>
+          <p className="text-slate-400 text-xs md:text-sm max-w-sm leading-relaxed">
+            Real-time audio telemetry validation is active. Lyrics synchronization is unavailable for continuous live broadcast feeds.
+          </p>
+        </div>
+      </AppModal>
+    );
+  }
+
   return (
-    <div 
-      className="fixed inset-0 bg-slate-950/95 backdrop-blur-3xl flex items-center justify-center z-50 p-6 md:p-12 overflow-hidden animate-fade-in"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <AppModal
+      open={isOpen}
+      onClose={onClose}
+      variant="fullscreen"
+      overlayClassName="items-center justify-center p-6 md:p-12"
+      hideHeaderSection
     >
-      {/* Immersive animated background blobs */}
       <div className="absolute top-1/4 left-1/4 w-[35rem] h-[35rem] bg-rose-600/10 rounded-full blur-[150px] pointer-events-none animate-blob-1" />
       <div className="absolute bottom-1/4 right-1/4 w-[35rem] h-[35rem] bg-pink-600/10 rounded-full blur-[150px] pointer-events-none animate-blob-2" />
 
-      {/* Giant stretched blurred album cover backdrop */}
       {currentTrack?.cover_art_url && (
-        <div 
-          className="absolute inset-0 bg-cover bg-center opacity-[0.08] scale-125 filter blur-[100px] pointer-events-none mix-blend-screen transition-all duration-1000" 
+        <div
+          className="absolute inset-0 bg-cover bg-center opacity-[0.08] scale-125 filter blur-[100px] pointer-events-none mix-blend-screen transition-all duration-1000"
           style={{ backgroundImage: `url(${currentTrack.cover_art_url})` }}
         />
       )}
 
-      {/* Floating close action */}
-      <button 
+      <button
+        type="button"
         onClick={onClose}
         className="absolute top-8 right-8 p-3 text-slate-400 hover:text-white rounded-full bg-white/5 hover:bg-white/10 hover:scale-105 border border-white/5 transition-all duration-300 z-50 shadow-lg"
         title="Close Lyrics"
@@ -179,18 +161,15 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
         <X className="w-5 h-5" />
       </button>
 
-      {/* Split Columns Content Container */}
       <div className="max-w-6xl w-full mx-auto my-auto flex flex-col md:grid md:grid-cols-12 gap-6 md:gap-16 items-center z-10 h-full max-h-[85vh] overflow-hidden md:overflow-visible">
-        
-        {/* Left Column: Track Info Showcase */}
         <div className="w-full md:col-span-5 flex flex-col items-center md:items-start text-center md:text-left space-y-4 md:space-y-6">
           {currentTrack?.cover_art_url ? (
             <div className="relative group hidden md:block">
               <div className="absolute -inset-1 bg-gradient-to-r from-rose-500 to-pink-500 rounded-[2rem] blur-xl opacity-30 group-hover:opacity-45 transition duration-500" />
-              <img 
-                src={currentTrack.cover_art_url} 
-                alt={currentTrack.title} 
-                className="relative w-60 h-60 md:w-80 md:h-80 rounded-[2rem] object-cover shadow-[0_20px_50px_rgba(0,0,0,0.4)] border border-white/10 transition duration-500 scale-100 group-hover:scale-[1.02]" 
+              <img
+                src={currentTrack.cover_art_url}
+                alt={currentTrack.title}
+                className="relative w-60 h-60 md:w-80 md:h-80 rounded-[2rem] object-cover shadow-[0_20px_50px_rgba(0,0,0,0.4)] border border-white/10 transition duration-500 scale-100 group-hover:scale-[1.02]"
               />
             </div>
           ) : (
@@ -198,7 +177,7 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
               <Music className="w-16 h-16" />
             </div>
           )}
-          
+
           <div className="space-y-1.5 md:space-y-2 max-w-sm">
             <h2 className="text-xl md:text-4xl font-black text-white tracking-tight leading-tight bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-300">
               {currentTrack?.title}
@@ -208,7 +187,6 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
             </p>
           </div>
 
-          {/* Mini Wave Animation to verify active stream status */}
           {isPlaying && (
             <div className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-500/10 border border-rose-500/20 rounded-full text-[10px] text-rose-400 font-extrabold uppercase tracking-widest shadow-inner">
               <span className="w-1 h-3.5 bg-rose-500 rounded-full animate-bounce duration-[600ms]" style={{ animationDelay: '0.1s' }} />
@@ -219,15 +197,11 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
           )}
         </div>
 
-        {/* Right Column: Immersive scrolling lyrics */}
         <div className="flex-1 w-full md:col-span-7 flex flex-col h-full overflow-hidden relative min-h-[45vh] md:min-h-0">
-          
-          {/* Edge fades for Apple Music style mask overlay */}
           <div className="absolute top-0 left-0 right-0 h-20 md:h-28 bg-gradient-to-b from-slate-950/95 via-slate-950/50 to-transparent pointer-events-none z-20" />
           <div className="absolute bottom-0 left-0 right-0 h-20 md:h-28 bg-gradient-to-t from-slate-950/95 via-slate-950/50 to-transparent pointer-events-none z-20" />
 
-          {/* Scrollable sheet */}
-          <div 
+          <div
             ref={containerRef}
             className={`flex-1 overflow-y-auto px-4 space-y-12 scrollbar-hide scroll-smooth relative z-10 ${
               isSynchronized ? 'py-[35vh]' : 'py-6'
@@ -243,20 +217,20 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
                 const isActive = isSynchronized && idx === activeLineIndex;
 
                 return (
-                  <div 
+                  <div
                     key={idx}
                     ref={isActive ? activeLineRef : null}
                     className={`text-left transition-all duration-500 cursor-pointer ${
-                      isActive 
-                        ? 'opacity-100 filter blur-0' 
+                      isActive
+                        ? 'opacity-100 filter blur-0'
                         : isSynchronized
                           ? 'opacity-30 filter blur-[0.5px] hover:opacity-100 hover:blur-0'
                           : 'opacity-85 hover:opacity-100'
                     }`}
                   >
                     <p className={`text-base md:text-xl leading-relaxed max-w-xl transition-all duration-300 ${
-                      isActive 
-                        ? 'text-rose-400 font-extrabold' 
+                      isActive
+                        ? 'text-rose-400 font-extrabold'
                         : isSynchronized
                           ? 'text-slate-400 font-bold'
                           : 'text-slate-200 font-bold'
@@ -269,8 +243,7 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
             )}
           </div>
         </div>
-
       </div>
-    </div>
+    </AppModal>
   );
 };
