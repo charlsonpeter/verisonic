@@ -86,11 +86,6 @@ export const Header: React.FC<HeaderProps> = ({
     setActiveTab('home');
   };
 
-  const isStudioAdminInAdminMode =
-    !!currentUser &&
-    (currentUser.real_role || currentUser.role) === 'studio_admin' &&
-    userMode === 'admin';
-
   const mobilePageTitle =
     pageTitleOverride !== undefined
       ? pageTitleOverride
