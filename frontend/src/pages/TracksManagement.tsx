@@ -1020,8 +1020,9 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
         )}
       </div>
 
+      {editingTrack && (
       <AppModal
-        open={!!editingTrack}
+        open
         onClose={() => setEditingTrack(null)}
         maxWidth="3xl"
         align="start"
@@ -1281,6 +1282,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
               </div>
             </form>
       </AppModal>
+      )}
 
       {/* Autocomplete Suggestions Datalists */}
       <datalist id="artists-suggestions">
