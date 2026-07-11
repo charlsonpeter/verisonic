@@ -927,39 +927,40 @@ class PyQtBroadcasterApp(QMainWindow):
             QMessageBox.critical(self, "Invalid Key Format", "The connection key format is invalid. Please copy it directly from your radio station dashboard.")
             return
 
-        # Fetch the latest stations from server to ensure key is synchronized
+        # Verify the key belongs to the selected station (keys are no longer in list responses)
+        matched = False
+        if self.selected_station_id and self.auth_token:
+            try:
+                result, _ = api_request(
+                    f"/radio/{self.selected_station_id}/verify-broadcast-key",
+                    method="POST",
+                    data={"stream_key": stream_key},
+                    token=self.auth_token,
+                )
+                matched = result.get("valid", False)
+            except Exception as e:
+                print("Failed to verify broadcast key:", e)
+
+        if not matched:
+            self.key_entry.clear()
+            if time.time() - timestamp > 330:
+                QMessageBox.critical(
+                    self, "Connection Key Expired",
+                    "This connection key has expired. Please regenerate a new key in your web dashboard, copy it, and paste it here."
+                )
+            else:
+                QMessageBox.critical(
+                    self, "Invalid Key",
+                    "The connection key does not match the selected radio station. "
+                    "Please ensure you have selected the correct station and pasted the key accurately."
+                )
+            return
+
         try:
             stations, _ = api_request("/radio", method="GET", token=self.auth_token)
             self.user_stations = stations
         except Exception as e:
-            print("Failed to sync stations during key validation:", e)
-
-        # Verify the key belongs to the selected station
-        matched = False
-        if self.selected_station_id:
-            for st in self.user_stations:
-                if st.get("id") == self.selected_station_id:
-                    if st.get("stream_key") == stream_key:
-                        matched = True
-                        break
-                        
-        if not matched:
-            self.key_entry.clear()
-            QMessageBox.critical(
-                self, "Invalid Key", 
-                "The connection key does not match the selected radio station. "
-                "Please ensure you have selected the correct station and pasted the key accurately."
-            )
-            return
-
-        # Check key expiration (validity is 5 minutes from generation, with 30s clock skew tolerance)
-        if time.time() - timestamp > 330:
-            self.key_entry.clear()
-            QMessageBox.critical(
-                self, "Connection Key Expired", 
-                "This connection key has expired. Please regenerate a new key in your web dashboard, copy it, and paste it here."
-            )
-            return
+            print("Failed to sync stations:", e)
             
         station_name = "VeriSonic Radio"
         if self.selected_station_id:

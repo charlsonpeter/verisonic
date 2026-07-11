@@ -336,6 +336,12 @@ class RadioStationResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class VerifyBroadcastKeyRequest(BaseModel):
+    stream_key: str
+
+class VerifyBroadcastKeyResponse(BaseModel):
+    valid: bool
+
 class RadioScheduleCreate(BaseModel):
     track_id: int
 

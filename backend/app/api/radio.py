@@ -25,7 +25,15 @@ from typing import List, Dict, Set, Optional
 
 from app.db.session import get_db
 from app.models import RadioStation, RadioSchedule, Track, Artist, User
-from app.schemas import RadioStationCreate, RadioStationUpdate, RadioStationResponse, RadioScheduleCreate, RadioScheduleResponse
+from app.schemas import (
+    RadioStationCreate,
+    RadioStationUpdate,
+    RadioStationResponse,
+    RadioScheduleCreate,
+    RadioScheduleResponse,
+    VerifyBroadcastKeyRequest,
+    VerifyBroadcastKeyResponse,
+)
 from app.api.auth import get_current_admin, get_current_user, get_current_radio_admin, get_optional_current_user
 from app.core.rate_limit import enforce_rate_limit
 from app.core.stream_url import validate_radio_stream_url
@@ -277,6 +285,22 @@ def _ensure_stream_key_fresh(station: RadioStation, db: Session) -> None:
         station.stream_key = "rs_key_" + secrets.token_hex(16) + "_" + str(int(time.time()))
         db.commit()
         db.refresh(station)
+
+
+def _verify_station_stream_key(station: RadioStation, stream_key: str) -> bool:
+    provided = stream_key.strip()
+    if not provided or not station.stream_key or station.stream_key != provided:
+        return False
+    try:
+        parts = provided.split("_")
+        if len(parts) < 4 or not provided.startswith("rs_key_"):
+            return False
+        timestamp = int(parts[-1])
+        if time.time() - timestamp > 330:
+            return False
+        return True
+    except Exception:
+        return False
 
 
 def serialize_station(
@@ -892,6 +916,20 @@ def get_broadcast_key(
         raise HTTPException(status_code=403, detail="Not authorized")
     _ensure_stream_key_fresh(station, db)
     return {"stream_key": station.stream_key}
+
+@router.post("/{id}/verify-broadcast-key", response_model=VerifyBroadcastKeyResponse)
+def verify_broadcast_key(
+    id: int,
+    body: VerifyBroadcastKeyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_radio_admin),
+):
+    station = db.query(RadioStation).filter(RadioStation.id == id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail="Radio station not found")
+    if current_user.role != "admin" and station.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return {"valid": _verify_station_stream_key(station, body.stream_key)}
 
 @router.post("/{id}/regenerate-key", response_model=RadioStationResponse)
 def regenerate_stream_key(
