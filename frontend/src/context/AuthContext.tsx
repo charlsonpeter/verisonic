@@ -221,6 +221,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     const accessToken = getAccessToken();
+    clearAuthTokens();
+    setToken(null);
+    setCurrentUser(null);
+    setAuthError(null);
+    setHasRadioStation(false);
+
     if (accessToken) {
       try {
         await fetch(`${API_URL}/auth/logout`, {
@@ -231,11 +237,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Best-effort server-side refresh token revocation
       }
     }
-    clearAuthTokens();
-    setToken(null);
-    setCurrentUser(null);
-    setAuthError(null);
-    setHasRadioStation(false);
   };
 
   const clearError = () => setAuthError(null);
