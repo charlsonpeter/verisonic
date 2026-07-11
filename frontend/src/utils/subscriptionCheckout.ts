@@ -24,6 +24,25 @@ export interface CreateOrderResponse {
   key_id: string;
   plan_id: string;
   plan_label: string;
+  queued?: boolean;
+}
+
+export interface SubscriptionStatus {
+  subscription: string;
+  subscription_cycle: 'monthly' | 'yearly' | null;
+  subscription_expires_at: string | null;
+  is_active: boolean;
+  current_plan_id: string | null;
+  pending_plan_id: string | null;
+  pending_plan_label: string | null;
+  pending_plan_paid: boolean;
+  cancel_at_period_end: boolean;
+}
+
+export interface VerifyPaymentResult {
+  message: string;
+  queued?: boolean;
+  pending_plan_id?: string | null;
 }
 
 export function formatInr(amountRupees: number): string {
@@ -34,12 +53,32 @@ export function formatInr(amountRupees: number): string {
   }).format(amountRupees);
 }
 
+export function formatExpiryDate(iso: string | null | undefined): string {
+  if (!iso) return '';
+  return new Date(iso).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
 export async function fetchSubscriptionPlans(): Promise<SubscriptionPlan[]> {
   const res = await fetch('/api/subscriptions/plans');
   if (!res.ok) {
     throw new Error('Could not load subscription plans.');
   }
   return res.json();
+}
+
+export async function fetchSubscriptionStatus(token: string): Promise<SubscriptionStatus> {
+  const res = await fetch('/api/subscriptions/status', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.detail || 'Could not load subscription status.');
+  }
+  return data;
 }
 
 export async function createSubscriptionOrder(
@@ -68,7 +107,7 @@ export async function verifySubscriptionPayment(
     razorpay_signature: string;
   },
   token: string,
-): Promise<{ message: string }> {
+): Promise<VerifyPaymentResult> {
   const res = await fetch('/api/subscriptions/verify', {
     method: 'POST',
     headers: {
@@ -80,6 +119,61 @@ export async function verifySubscriptionPayment(
   const data = await res.json();
   if (!res.ok) {
     throw new Error(data.detail || 'Payment verification failed.');
+  }
+  return data;
+}
+
+export async function scheduleSubscriptionChange(
+  planId: string,
+  token: string,
+): Promise<{ message: string }> {
+  const res = await fetch('/api/subscriptions/schedule-change', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ plan_id: planId }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.detail || 'Could not schedule plan change.');
+  }
+  return data;
+}
+
+export async function cancelSubscription(token: string): Promise<{ message: string }> {
+  const res = await fetch('/api/subscriptions/cancel', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.detail || 'Could not cancel subscription.');
+  }
+  return data;
+}
+
+export async function reactivateSubscription(token: string): Promise<{ message: string }> {
+  const res = await fetch('/api/subscriptions/reactivate', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.detail || 'Could not reactivate subscription.');
+  }
+  return data;
+}
+
+export async function clearScheduledChange(token: string): Promise<{ message: string }> {
+  const res = await fetch('/api/subscriptions/clear-scheduled-change', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.detail || 'Could not remove scheduled change.');
   }
   return data;
 }
@@ -111,7 +205,7 @@ export async function openSubscriptionCheckout(options: {
   userEmail?: string;
   userName?: string;
   token: string;
-}): Promise<{ message: string }> {
+}): Promise<VerifyPaymentResult> {
   const loaded = await loadRazorpayScript();
   const Razorpay = window.Razorpay;
   if (!loaded || !Razorpay) {
@@ -124,7 +218,9 @@ export async function openSubscriptionCheckout(options: {
       amount: options.order.amount_paise,
       currency: options.order.currency,
       name: 'VeriSonic',
-      description: options.order.plan_label,
+      description: options.order.queued
+        ? `${options.order.plan_label} (starts after current plan)`
+        : options.order.plan_label,
       order_id: options.order.order_id,
       prefill: {
         email: options.userEmail || '',
@@ -154,4 +250,10 @@ export async function openSubscriptionCheckout(options: {
 
     rzp.open();
   });
+}
+
+export function planIdForCycle(cycle: 'monthly' | 'yearly' | null | undefined): string | null {
+  if (cycle === 'monthly') return 'premium_monthly';
+  if (cycle === 'yearly') return 'premium_yearly';
+  return null;
 }

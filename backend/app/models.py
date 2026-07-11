@@ -24,6 +24,10 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     must_reset_password = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    stream_quality = Column(String, nullable=True)  # normal, high, hires, lossless
+    pending_plan_id = Column(String, nullable=True)
+    pending_plan_paid = Column(Boolean, default=False)
+    subscription_cancel_at_period_end = Column(Boolean, default=False)
 
     @property
     def real_role(self) -> str:

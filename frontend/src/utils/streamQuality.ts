@@ -11,6 +11,40 @@ export type QualityLevelSetting = 'normal' | 'high' | 'hires' | 'lossless';
 
 export const QUALITY_STORAGE_KEY = 'qualityLevelSetting';
 
+const VALID_QUALITY_LEVELS: QualityLevelSetting[] = ['normal', 'high', 'hires', 'lossless'];
+
+function qualityStorageKey(userId?: number | null): string {
+  return userId ? `${QUALITY_STORAGE_KEY}:${userId}` : QUALITY_STORAGE_KEY;
+}
+
+export function loadStoredQuality(userId?: number | null): QualityLevelSetting | null {
+  const stored = localStorage.getItem(qualityStorageKey(userId)) as QualityLevelSetting | null;
+  if (stored && VALID_QUALITY_LEVELS.includes(stored)) {
+    return stored;
+  }
+
+  if (userId) {
+    const legacy = localStorage.getItem(QUALITY_STORAGE_KEY) as QualityLevelSetting | null;
+    if (legacy && VALID_QUALITY_LEVELS.includes(legacy)) {
+      localStorage.setItem(qualityStorageKey(userId), legacy);
+      return legacy;
+    }
+  }
+
+  return null;
+}
+
+export function saveStoredQuality(quality: QualityLevelSetting, userId?: number | null): void {
+  localStorage.setItem(qualityStorageKey(userId), quality);
+}
+
+export function getEffectiveQuality(
+  preferred: QualityLevelSetting,
+  canConfigureStreamQuality: boolean
+): QualityLevelSetting {
+  return canConfigureStreamQuality ? preferred : 'normal';
+}
+
 export const QUALITY_LABELS: Record<QualityLevelSetting, string> = {
   lossless: 'Lossless',
   hires: 'Hi-Res Master',

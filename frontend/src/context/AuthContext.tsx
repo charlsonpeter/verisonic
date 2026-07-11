@@ -1,10 +1,12 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { hasPaidSubscription } from '../utils/accountTier';
 import {
   clearAuthTokens,
   getAccessToken,
   setAuthTokens,
 } from '../utils/authTokens';
+import type { QualityLevelSetting } from '../utils/streamQuality';
+import { saveUserStreamQuality } from '../utils/userSettings';
 
 export interface User {
   id: number;
@@ -17,6 +19,10 @@ export interface User {
   subscription_expires_at?: string | null;
   must_reset_password?: boolean;
   created_at?: string;
+  stream_quality?: QualityLevelSetting | null;
+  pending_plan_id?: string | null;
+  pending_plan_paid?: boolean;
+  subscription_cancel_at_period_end?: boolean;
   artist_profile?: {
     id: number;
     user_id: number;
@@ -49,6 +55,7 @@ interface AuthContextType {
   socialLogin: (provider: 'google' | 'apple') => Promise<boolean>;
   clearError: () => void;
   fetchCurrentUser: () => Promise<void>;
+  updateStreamQuality: (quality: QualityLevelSetting) => Promise<boolean>;
   hasRadioStation: boolean;
   checkRadioStationStatus: (user?: User | null) => Promise<boolean>;
 }
@@ -241,6 +248,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const clearError = () => setAuthError(null);
 
+  const updateStreamQuality = useCallback(async (quality: QualityLevelSetting): Promise<boolean> => {
+    const ok = await saveUserStreamQuality(quality);
+    if (ok) {
+      setCurrentUser((prev) => (prev ? { ...prev, stream_quality: quality } : prev));
+    }
+    return ok;
+  }, []);
+
   const isTrialActive = () => {
     if (!currentUser?.created_at) return false;
     const createdAt = new Date(currentUser.created_at);
@@ -294,6 +309,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       socialLogin,
       clearError,
       fetchCurrentUser,
+      updateStreamQuality,
       checkRadioStationStatus
     }}>
       {children}

@@ -71,10 +71,18 @@ class UserResponse(BaseModel):
     is_active: bool
     must_reset_password: bool = False
     created_at: datetime
+    stream_quality: Optional[str] = None
+    pending_plan_id: Optional[str] = None
+    pending_plan_paid: bool = False
+    subscription_cancel_at_period_end: bool = False
     artist_profile: Optional[ArtistResponse] = None
 
     class Config:
         from_attributes = True
+
+
+class UserSettingsUpdate(BaseModel):
+    stream_quality: Optional[str] = None
 
 # --- Album Schemas ---
 class AlbumCreate(BaseModel):

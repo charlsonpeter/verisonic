@@ -6,15 +6,17 @@ from typing import List, Optional
 
 from app.db.session import get_db
 from app.models import User, Artist
-from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, RequestReactivationSchema
+from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, UserSettingsUpdate, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, RequestReactivationSchema
 from app.core.security import verify_password, get_password_hash, create_access_token, create_refresh_token, validate_refresh_token, revoke_refresh_token, ALGORITHM
 from app.core.config import settings
 from app.core.password_policy import validate_password
 from app.core.rate_limit import enforce_rate_limit, REFRESH_LIMIT, REFRESH_WINDOW_SEC
+from app.core.premium import paid_subscription_is_active
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 DEFAULT_ADMIN_PASSWORD = "admin12345"
+VALID_STREAM_QUALITIES = {"normal", "high", "hires", "lossless"}
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login-form")
 security = HTTPBearer(auto_error=False)
@@ -238,7 +240,41 @@ def login_google(body: dict, db: Session = Depends(get_db)):
     }
 
 @router.get("/me", response_model=UserResponse)
-def read_current_user(current_user: User = Depends(get_current_user)):
+def read_current_user(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from app.services.subscription_service import apply_pending_subscription_if_due
+
+    apply_pending_subscription_if_due(current_user, db)
+    db.refresh(current_user)
+    return current_user
+
+
+@router.put("/me/settings", response_model=UserResponse)
+def update_user_settings(
+    settings_in: UserSettingsUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _ensure_password_reset_not_required(current_user)
+
+    if settings_in.stream_quality is not None:
+        quality = settings_in.stream_quality.strip().lower()
+        if quality not in VALID_STREAM_QUALITIES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid stream quality setting",
+            )
+        if quality != "normal" and not paid_subscription_is_active(current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Premium subscription required for this stream quality",
+            )
+        current_user.stream_quality = quality
+
+    db.commit()
+    db.refresh(current_user)
     return current_user
 
 

@@ -1,5 +1,5 @@
 import datetime
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -15,6 +15,16 @@ from app.services.razorpay_service import (
     create_order,
     new_receipt,
     verify_payment_signature,
+)
+from app.services.subscription_service import (
+    apply_pending_subscription_if_due,
+    apply_plan_immediately,
+    clear_cancellation,
+    premium_is_active,
+    queue_plan_change,
+    schedule_cancellation,
+    validate_checkout_plan,
+    validate_schedule_change,
 )
 
 router = APIRouter(prefix="/subscriptions", tags=["subscriptions"])
@@ -41,6 +51,7 @@ class CreateOrderResponse(BaseModel):
     key_id: str
     plan_id: str
     plan_label: str
+    queued: bool = False
 
 
 class VerifyPaymentRequest(BaseModel):
@@ -54,23 +65,64 @@ class VerifyPaymentResponse(BaseModel):
     subscription_cycle: str
     subscription_expires_at: datetime.datetime
     message: str
+    queued: bool = False
+    pending_plan_id: Optional[str] = None
 
 
-def _apply_plan_to_user(user: User, plan) -> None:
-    if plan.subscription != "premium":
-        raise HTTPException(status_code=400, detail="Invalid checkout plan")
-    now = datetime.datetime.utcnow()
-    if (
-        user.subscription == "premium"
-        and user.subscription_expires_at
-        and user.subscription_expires_at > now
-    ):
-        base = user.subscription_expires_at
-    else:
-        base = now
-    user.subscription = plan.subscription
-    user.subscription_cycle = plan.cycle
-    user.subscription_expires_at = base + datetime.timedelta(days=plan.duration_days)
+class ScheduleChangeRequest(BaseModel):
+    plan_id: str
+
+
+class SubscriptionStatusResponse(BaseModel):
+    subscription: str
+    subscription_cycle: Optional[str] = None
+    subscription_expires_at: Optional[datetime.datetime] = None
+    is_active: bool
+    current_plan_id: Optional[str] = None
+    pending_plan_id: Optional[str] = None
+    pending_plan_label: Optional[str] = None
+    pending_plan_paid: bool = False
+    cancel_at_period_end: bool = False
+
+
+class SubscriptionActionResponse(BaseModel):
+    message: str
+    pending_plan_id: Optional[str] = None
+    pending_plan_paid: bool = False
+    cancel_at_period_end: bool = False
+
+
+def _sync_user_subscription(user: User, db: Session) -> None:
+    apply_pending_subscription_if_due(user, db)
+    db.refresh(user)
+
+
+def _pending_plan_label(plan_id: Optional[str]) -> Optional[str]:
+    if not plan_id:
+        return None
+    plan = get_plan(plan_id)
+    return plan.label if plan else None
+
+
+@router.get("/status", response_model=SubscriptionStatusResponse)
+def get_subscription_status(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _sync_user_subscription(current_user, db)
+    from app.services.subscription_service import current_plan_id
+
+    return SubscriptionStatusResponse(
+        subscription=current_user.subscription,
+        subscription_cycle=current_user.subscription_cycle,
+        subscription_expires_at=current_user.subscription_expires_at,
+        is_active=premium_is_active(current_user),
+        current_plan_id=current_plan_id(current_user),
+        pending_plan_id=current_user.pending_plan_id,
+        pending_plan_label=_pending_plan_label(current_user.pending_plan_id),
+        pending_plan_paid=bool(current_user.pending_plan_paid),
+        cancel_at_period_end=bool(current_user.subscription_cancel_at_period_end),
+    )
 
 
 @router.get("/plans", response_model=List[SubscriptionPlanResponse])
@@ -95,9 +147,13 @@ def create_subscription_order(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    _sync_user_subscription(current_user, db)
     plan = get_plan(body.plan_id)
     if plan is None:
         raise HTTPException(status_code=400, detail="Invalid subscription plan")
+
+    validate_checkout_plan(current_user, plan)
+    queued = premium_is_active(current_user)
 
     try:
         receipt = new_receipt()
@@ -108,6 +164,7 @@ def create_subscription_order(
             notes={
                 "user_id": str(current_user.id),
                 "plan_id": plan.id,
+                "queued": "true" if queued else "false",
             },
         )
     except RazorpayNotConfiguredError as exc:
@@ -133,6 +190,7 @@ def create_subscription_order(
         key_id=settings.RAZORPAY_KEY_ID,
         plan_id=plan.id,
         plan_label=plan.label,
+        queued=queued,
     )
 
 
@@ -142,6 +200,7 @@ def verify_subscription_payment(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    _sync_user_subscription(current_user, db)
     payment = (
         db.query(SubscriptionPayment)
         .filter(
@@ -162,7 +221,9 @@ def verify_subscription_payment(
             subscription=current_user.subscription,
             subscription_cycle=current_user.subscription_cycle or plan.cycle,
             subscription_expires_at=current_user.subscription_expires_at or datetime.datetime.utcnow(),
-            message="Subscription already active.",
+            message="Payment already processed.",
+            queued=bool(current_user.pending_plan_id == plan.id),
+            pending_plan_id=current_user.pending_plan_id,
         )
 
     try:
@@ -180,13 +241,127 @@ def verify_subscription_payment(
     payment.status = "paid"
     payment.razorpay_payment_id = body.razorpay_payment_id
     payment.paid_at = datetime.datetime.utcnow()
-    _apply_plan_to_user(current_user, plan)
+
+    if premium_is_active(current_user):
+        queue_plan_change(current_user, plan, prepaid=True)
+        message = (
+            f"{plan.label} is scheduled to start when your current subscription ends on "
+            f"{current_user.subscription_expires_at.strftime('%d %b %Y')}."
+        )
+        queued = True
+    else:
+        apply_plan_immediately(current_user, plan)
+        message = f"{plan.label} activated successfully."
+        queued = False
+
     db.commit()
     db.refresh(current_user)
 
     return VerifyPaymentResponse(
         subscription=current_user.subscription,
         subscription_cycle=current_user.subscription_cycle or plan.cycle,
-        subscription_expires_at=current_user.subscription_expires_at,
-        message=f"{plan.label} activated successfully.",
+        subscription_expires_at=current_user.subscription_expires_at or datetime.datetime.utcnow(),
+        message=message,
+        queued=queued,
+        pending_plan_id=current_user.pending_plan_id,
+    )
+
+
+@router.post("/schedule-change", response_model=SubscriptionActionResponse)
+def schedule_subscription_change(
+    body: ScheduleChangeRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _sync_user_subscription(current_user, db)
+    plan = get_plan(body.plan_id)
+    if plan is None:
+        raise HTTPException(status_code=400, detail="Invalid subscription plan")
+
+    validate_schedule_change(current_user, plan)
+    queue_plan_change(current_user, plan, prepaid=False)
+    db.commit()
+
+    expiry = current_user.subscription_expires_at
+    expiry_label = expiry.strftime("%d %b %Y") if expiry else "the end of your billing period"
+    return SubscriptionActionResponse(
+        message=(
+            f"Your plan will switch to {plan.label} on {expiry_label}. "
+            "Subscribe to Monthly before then to avoid interruption, or prepay from the plan card."
+        ),
+        pending_plan_id=current_user.pending_plan_id,
+        pending_plan_paid=False,
+        cancel_at_period_end=False,
+    )
+
+
+@router.post("/cancel", response_model=SubscriptionActionResponse)
+def cancel_subscription(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _sync_user_subscription(current_user, db)
+    if not premium_is_active(current_user):
+        raise HTTPException(status_code=400, detail="No active subscription to cancel.")
+
+    schedule_cancellation(current_user)
+    db.commit()
+
+    expiry = current_user.subscription_expires_at
+    expiry_label = expiry.strftime("%d %b %Y") if expiry else "the end of your billing period"
+    return SubscriptionActionResponse(
+        message=f"Your subscription will end on {expiry_label}. Premium access continues until then.",
+        pending_plan_id=None,
+        pending_plan_paid=False,
+        cancel_at_period_end=True,
+    )
+
+
+@router.post("/reactivate", response_model=SubscriptionActionResponse)
+def reactivate_subscription(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _sync_user_subscription(current_user, db)
+    if not premium_is_active(current_user):
+        raise HTTPException(status_code=400, detail="No active subscription to reactivate.")
+
+    if not current_user.subscription_cancel_at_period_end:
+        raise HTTPException(status_code=400, detail="Subscription is not scheduled for cancellation.")
+
+    clear_cancellation(current_user)
+    db.commit()
+
+    return SubscriptionActionResponse(
+        message="Cancellation removed. Your subscription will renew as usual.",
+        pending_plan_id=current_user.pending_plan_id,
+        pending_plan_paid=bool(current_user.pending_plan_paid),
+        cancel_at_period_end=False,
+    )
+
+
+@router.post("/clear-scheduled-change", response_model=SubscriptionActionResponse)
+def clear_scheduled_change(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _sync_user_subscription(current_user, db)
+    if not current_user.pending_plan_id:
+        raise HTTPException(status_code=400, detail="No scheduled plan change to remove.")
+
+    if current_user.pending_plan_paid:
+        raise HTTPException(
+            status_code=400,
+            detail="This scheduled change was prepaid and cannot be removed online. Contact support if needed.",
+        )
+
+    current_user.pending_plan_id = None
+    current_user.pending_plan_paid = False
+    db.commit()
+
+    return SubscriptionActionResponse(
+        message="Scheduled plan change removed.",
+        pending_plan_id=None,
+        pending_plan_paid=False,
+        cancel_at_period_end=bool(current_user.subscription_cancel_at_period_end),
     )

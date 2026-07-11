@@ -3,11 +3,14 @@ import { useAuth } from './AuthContext';
 import Hls from 'hls.js';
 import {
   describeStreamPath,
+  getEffectiveQuality,
   getStreamCandidatesForQuality,
+  loadStoredQuality,
+  saveStoredQuality,
   QUALITY_LABELS,
-  QUALITY_STORAGE_KEY,
   type QualityLevelSetting,
 } from '../utils/streamQuality';
+import { parseStoredStreamQuality } from '../utils/userSettings';
 import { showError } from '../utils/swal';
 
 export interface Track {
@@ -94,7 +97,7 @@ interface AudioContextType {
   activeStreamLabel: string | null;
   analyser: AnalyserNode | null;
 
-  playTrack: (track: Track, isRadio?: boolean) => void | Promise<void>;
+  playTrack: (track: Track, isRadio?: boolean, autoPlay?: boolean) => void | Promise<void>;
   playRadioStation: (station: RadioStation) => void;
   togglePlay: () => void;
   seek: (time: number) => void;
@@ -128,7 +131,7 @@ const resolveStreamUrl = (url?: string): string => {
 };
 
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { token, isPremium, canConfigureStreamQuality, userMode, currentUser } = useAuth();
+  const { token, isPremium, canConfigureStreamQuality, userMode, currentUser, updateStreamQuality } = useAuth();
 
   // State variables
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
@@ -146,12 +149,14 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [playQueue, setPlayQueue] = useState<Track[]>([]);
   const [currentQueueIndex, setCurrentQueueIndex] = useState<number>(-1);
   const [showPremiumModal, setShowPremiumModal] = useState<boolean>(false);
-  const [qualityLevelSetting, setQualityLevelSettingState] = useState<QualityLevelSetting>('normal');
+  const [qualityLevelSetting, setQualityLevelSettingState] = useState<QualityLevelSetting>(() => {
+    return loadStoredQuality(null) ?? 'normal';
+  });
   const [activeStreamLabel, setActiveStreamLabel] = useState<string | null>(null);
   const qualityLevelSettingRef = useRef<QualityLevelSetting>('normal');
   const pendingSeekRef = useRef<number | null>(null);
   const applyQualityChangeRef = useRef<(quality: QualityLevelSetting) => void>(() => {});
-  const playTrackRef = useRef<(track: Track, isRadio?: boolean) => void | Promise<void>>(async () => {});
+  const playTrackRef = useRef<(track: Track, isRadio?: boolean, autoPlay?: boolean) => void | Promise<void>>(async () => {});
   const [equalizerBars, setEqualizerBars] = useState<number[]>(new Array(20).fill(0));
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
 
@@ -241,20 +246,34 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { qualityLevelSettingRef.current = qualityLevelSetting; }, [qualityLevelSetting]);
 
   useEffect(() => {
-    if (!canConfigureStreamQuality) {
+    if (token && currentUser) {
+      const fromDb = parseStoredStreamQuality(currentUser.stream_quality ?? null);
+      if (fromDb) {
+        setQualityLevelSettingState(fromDb);
+        qualityLevelSettingRef.current = fromDb;
+        return;
+      }
+      if (canConfigureStreamQuality && currentUser.stream_quality == null) {
+        setQualityLevelSettingState('lossless');
+        qualityLevelSettingRef.current = 'lossless';
+        void updateStreamQuality('lossless');
+        return;
+      }
       setQualityLevelSettingState('normal');
-      localStorage.setItem(QUALITY_STORAGE_KEY, 'normal');
+      qualityLevelSettingRef.current = 'normal';
       return;
     }
 
-    const stored = localStorage.getItem(QUALITY_STORAGE_KEY) as QualityLevelSetting | null;
-    if (stored && ['normal', 'high', 'hires', 'lossless'].includes(stored)) {
+    const stored = loadStoredQuality(null);
+    if (stored) {
       setQualityLevelSettingState(stored);
-    } else {
-      setQualityLevelSettingState('lossless');
-      localStorage.setItem(QUALITY_STORAGE_KEY, 'lossless');
+      qualityLevelSettingRef.current = stored;
+      return;
     }
-  }, [canConfigureStreamQuality]);
+
+    setQualityLevelSettingState('normal');
+    qualityLevelSettingRef.current = 'normal';
+  }, [token, currentUser?.id, currentUser?.stream_quality, canConfigureStreamQuality, updateStreamQuality]);
 
   const setQualityLevelSetting = (quality: QualityLevelSetting) => {
     applyQualityChangeRef.current(quality);
@@ -656,7 +675,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  const playTrack = async (track: Track, isRadio = false) => {
+  const playTrack = async (track: Track, isRadio = false, autoPlay = true) => {
     if (!audioRef.current) return;
     const epoch = playbackEpochRef.current;
 
@@ -705,7 +724,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       ? [trackToPlay.stream_url || trackToPlay.hls_playlist_path || ''].filter(Boolean)
       : getStreamCandidatesForQuality(
           trackToPlay,
-          qualityLevelSettingRef.current,
+          getEffectiveQuality(qualityLevelSettingRef.current, canConfigureStreamQualityRef.current),
           isPremiumRef.current
         );
 
@@ -733,11 +752,24 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           fadeVolume(target, 300);
         })
         .catch((e) => console.log('Autoplay blocked: ', e));
+      userPausedRef.current = false;
       setIsPlaying(true);
     };
 
+    const onStreamReady = () => {
+      applySeekIfNeeded();
+      if (autoPlay) {
+        beginPlayback();
+      } else if (audioRef.current) {
+        audioRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
+        userPausedRef.current = true;
+        isPlayingRef.current = false;
+        setIsPlaying(false);
+      }
+    };
+
     const applySeekIfNeeded = () => {
-      if (!audioRef.current || seekAfterLoad === null || seekAfterLoad <= 0) return;
+      if (!audioRef.current || seekAfterLoad === null || seekAfterLoad < 0) return;
       const maxTime = audioRef.current.duration || seekAfterLoad;
       audioRef.current.currentTime = Math.min(seekAfterLoad, maxTime);
     };
@@ -779,8 +811,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           hls.loadSource(streamUrl);
           hls.attachMedia(audioRef.current);
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            applySeekIfNeeded();
-            beginPlayback();
+            onStreamReady();
           });
           hls.on(Hls.Events.ERROR, (_event, data) => {
             if (!data.fatal) return;
@@ -802,8 +833,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             'loadedmetadata',
             () => {
               audio.removeEventListener('error', onNativeError);
-              applySeekIfNeeded();
-              beginPlayback();
+              onStreamReady();
             },
             { once: true }
           );
@@ -826,8 +856,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         'loadedmetadata',
         () => {
           audio.removeEventListener('error', onDirectError);
-          applySeekIfNeeded();
-          beginPlayback();
+          onStreamReady();
         },
         { once: true }
       );
@@ -879,21 +908,26 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (qualityLevelSettingRef.current === quality) {
       return;
     }
-    setQualityLevelSettingState(quality);
-    localStorage.setItem(QUALITY_STORAGE_KEY, quality);
-    qualityLevelSettingRef.current = quality;
 
     const track = currentTrackRef.current;
-    if (track && !activeRadioStationRef.current) {
-      pendingSeekRef.current = audioRef.current?.currentTime ?? 0;
-      const wasPlaying = isPlayingRef.current;
-      void Promise.resolve(playTrackRef.current(track, false)).finally(() => {
-        if (!wasPlaying && audioRef.current) {
-          audioRef.current.pause();
-          setIsPlaying(false);
-        }
-      });
-    }
+    const wasPlaying = isPlayingRef.current && !(audioRef.current?.paused ?? true);
+
+    void (async () => {
+      if (token && currentUser) {
+        const ok = await updateStreamQuality(quality);
+        if (!ok) return;
+      } else {
+        saveStoredQuality(quality, null);
+      }
+
+      setQualityLevelSettingState(quality);
+      qualityLevelSettingRef.current = quality;
+
+      if (track && !activeRadioStationRef.current) {
+        pendingSeekRef.current = audioRef.current?.currentTime ?? 0;
+        void playTrackRef.current(track, false, wasPlaying);
+      }
+    })();
   };
 
   const playRadioStation = async (station: RadioStation, isResume = false) => {

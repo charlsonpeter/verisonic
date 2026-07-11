@@ -12,6 +12,7 @@ import {
   type QualityLevelSetting,
 } from '../utils/streamQuality';
 import { SubscriptionPlans } from '../components/subscription/SubscriptionPlans';
+import { SubscriptionManagement } from '../components/subscription/SubscriptionManagement';
 import {
   getAccountTierLabel,
   getTrialDaysLeft,
@@ -19,8 +20,9 @@ import {
 } from '../utils/accountTier';
 
 export const Settings: React.FC = () => {
-  const { currentUser, isPremium, canConfigureStreamQuality, canAccessPlatformSettings, switchUserMode } = useAuth();
+  const { currentUser, token, isPremium, canConfigureStreamQuality, canAccessPlatformSettings, switchUserMode, fetchCurrentUser } = useAuth();
   const { qualityLevelSetting, setQualityLevelSetting, activeStreamLabel } = useAudio();
+  const activeQuality = canConfigureStreamQuality ? qualityLevelSetting : 'normal';
 
   if (!canAccessPlatformSettings) {
     return (
@@ -111,7 +113,7 @@ export const Settings: React.FC = () => {
           
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             {qualityOptions.map((q) => {
-              const isActive = qualityLevelSetting === q.id;
+              const isActive = activeQuality === q.id;
               const isLocked = !canConfigureStreamQuality && q.premium;
               return (
                 <div
@@ -172,9 +174,16 @@ export const Settings: React.FC = () => {
               {getSubscriptionMessage()}
             </p>
 
-            {!hasPaidSubscription(currentUser) && (
+            {!hasPaidSubscription(currentUser) && currentUser?.subscription !== 'unlimited' && (
               <div id="subscription-plans" className="pt-2">
                 <SubscriptionPlans compact onRequireAuth={() => undefined} />
+              </div>
+            )}
+
+            {hasPaidSubscription(currentUser) && currentUser?.subscription !== 'unlimited' && token && (
+              <div id="subscription-plans" className="pt-2 space-y-4">
+                <SubscriptionPlans compact onRequireAuth={() => undefined} />
+                <SubscriptionManagement token={token} onUpdated={fetchCurrentUser} />
               </div>
             )}
           </div>

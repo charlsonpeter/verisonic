@@ -48,3 +48,11 @@ SUBSCRIPTION_PLANS: Dict[PlanId, SubscriptionPlan] = {
 
 def get_plan(plan_id: str) -> SubscriptionPlan | None:
     return SUBSCRIPTION_PLANS.get(plan_id)  # type: ignore[arg-type]
+
+
+def plan_id_for_cycle(cycle: str) -> str | None:
+    if cycle == "monthly":
+        return "premium_monthly"
+    if cycle == "yearly":
+        return "premium_yearly"
+    return None

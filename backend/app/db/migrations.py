@@ -79,6 +79,14 @@ MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS ix_subscription_payments_user_id ON subscription_payments (user_id);
         CREATE INDEX IF NOT EXISTS ix_subscription_payments_razorpay_order_id ON subscription_payments (razorpay_order_id);
     """),
+    ("010_users_stream_quality", """
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS stream_quality VARCHAR;
+    """),
+    ("011_users_subscription_queue", """
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_plan_id VARCHAR;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_plan_paid BOOLEAN DEFAULT FALSE;
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_cancel_at_period_end BOOLEAN DEFAULT FALSE;
+    """),
 ]
 
 
