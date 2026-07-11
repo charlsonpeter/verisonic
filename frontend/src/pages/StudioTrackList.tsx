@@ -30,7 +30,7 @@ export const StudioTrackList: React.FC = () => {
   const fetchTracks = async (silent = false) => {
     if (!silent) setIsLoading(true);
     try {
-      const res = await fetch('/api/music/manage', {
+      const res = await fetch('/api/music/manage?approved_only=true', {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -109,8 +109,8 @@ export const StudioTrackList: React.FC = () => {
         ) : tracks.length === 0 ? (
           <div className="p-16 text-center space-y-3">
             <Music className="w-10 h-10 text-slate-600 mx-auto" />
-            <p className="text-xs text-slate-500">No tracks uploaded yet.</p>
-            <p className="text-[10px] text-slate-600">Use Upload &amp; Manage Tracks from your account menu to add music.</p>
+            <p className="text-xs text-slate-500">No approved tracks yet.</p>
+            <p className="text-[10px] text-slate-600">Approved tracks will appear here once analysis passes.</p>
           </div>
         ) : (
           <table className="w-full text-left border-collapse text-xs">

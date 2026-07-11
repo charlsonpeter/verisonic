@@ -582,32 +582,30 @@ def list_tracks(
 
 @router.get("/manage", response_model=List[TrackResponse])
 def manage_tracks(
+    approved_only: bool = False,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_studio_admin)
 ):
     """
     List audio tracks for management screen.
     Admin sees all uploaded tracks.
-    Artist sees only their own uploaded tracks.
+    Studio admin sees their own tracks; use approved_only=true for the tracks list tab.
     """
     if current_user.role == "admin":
-        tracks = (
-            db.query(Track)
-            .options(joinedload(Track.analysis_report))
-            .order_by(Track.created_at.desc())
-            .all()
-        )
+        query = db.query(Track).options(joinedload(Track.analysis_report))
     else:
         artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
         if not artist:
             return []
-        tracks = (
+        query = (
             db.query(Track)
             .options(joinedload(Track.analysis_report))
             .filter(Track.artist_id == artist.id)
-            .order_by(Track.created_at.desc())
-            .all()
         )
+        if approved_only:
+            query = query.filter(Track.approved == True)
+
+    tracks = query.order_by(Track.created_at.desc()).all()
 
     for t in tracks:
         _resolve_quality_score(t, db, persist=True)

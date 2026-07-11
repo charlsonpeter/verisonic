@@ -36,6 +36,8 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
   const [tracks, setTracks] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const [selectedTrackIds, setSelectedTrackIds] = useState<number[]>([]);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   // Studio registration states (for studio_admin post-approval setup)
   const [registerStageName, setRegisterStageName] = useState(currentUser?.artist_profile?.stage_name || currentUser?.full_name || '');
@@ -285,6 +287,10 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
   }, []);
 
   useEffect(() => {
+    setSelectedTrackIds((prev) => prev.filter((id) => tracks.some((t) => t.id === id)));
+  }, [tracks]);
+
+  useEffect(() => {
     if (!token) return;
 
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -356,6 +362,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       });
       if (res.ok) {
         setMessage({ type: 'success', text: 'Track deleted successfully.' });
+        setSelectedTrackIds((prev) => prev.filter((id) => id !== trackId));
         fetchTracks();
       } else {
         const data = await res.json();
@@ -363,6 +370,73 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       }
     } catch {
       setMessage({ type: 'error', text: 'Connection failed.' });
+    }
+  };
+
+  const allTracksSelected = tracks.length > 0 && selectedTrackIds.length === tracks.length;
+
+  const toggleSelectAll = () => {
+    if (allTracksSelected) {
+      setSelectedTrackIds([]);
+    } else {
+      setSelectedTrackIds(tracks.map((t) => t.id));
+    }
+  };
+
+  const toggleTrackSelection = (trackId: number) => {
+    setSelectedTrackIds((prev) =>
+      prev.includes(trackId) ? prev.filter((id) => id !== trackId) : [...prev, trackId]
+    );
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedTrackIds.length === 0 || isBulkDeleting) return;
+
+    const count = selectedTrackIds.length;
+    const confirmed = await showConfirm(
+      `Delete ${count} Track${count === 1 ? '' : 's'}?`,
+      `Are you sure you want to permanently delete ${count} selected track${count === 1 ? '' : 's'}? This will remove all audio transcode masters.`,
+      `Yes, delete ${count}`
+    );
+    if (!confirmed) return;
+
+    setMessage(null);
+    setIsBulkDeleting(true);
+    try {
+      const results = await Promise.allSettled(
+        selectedTrackIds.map((trackId) =>
+          fetch(`/api/music/${trackId}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${token}` },
+          })
+        )
+      );
+
+      const failed = results.filter(
+        (r) => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok)
+      ).length;
+      const deleted = count - failed;
+
+      setSelectedTrackIds([]);
+      fetchTracks(true);
+
+      if (failed === 0) {
+        setMessage({
+          type: 'success',
+          text: `${deleted} track${deleted === 1 ? '' : 's'} deleted successfully.`,
+        });
+      } else if (deleted > 0) {
+        setMessage({
+          type: 'error',
+          text: `${deleted} deleted, ${failed} failed. Refresh and try again for remaining tracks.`,
+        });
+      } else {
+        setMessage({ type: 'error', text: 'Failed to delete selected tracks.' });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Connection failed.' });
+    } finally {
+      setIsBulkDeleting(false);
     }
   };
 
@@ -516,13 +590,25 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
             <Music className="w-8 h-8 text-rose-400 animate-pulse" /> Manage Tracks
           </h2>
         </div>
-        <button
-          onClick={() => setIsUploadModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 rounded-xl text-xs font-bold text-white shadow-lg transition"
-        >
-          <UploadCloud className="w-3.5 h-3.5" />
-          Upload New Track
-        </button>
+        <div className="flex items-center gap-2">
+          {selectedTrackIds.length > 0 && (
+            <button
+              onClick={handleBulkDelete}
+              disabled={isBulkDeleting}
+              className="flex items-center gap-2 px-4 py-2 bg-rose-600/15 hover:bg-rose-600/25 border border-rose-500/30 rounded-xl text-xs font-bold text-rose-400 transition disabled:opacity-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Delete Selected ({selectedTrackIds.length})
+            </button>
+          )}
+          <button
+            onClick={() => setIsUploadModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 rounded-xl text-xs font-bold text-white shadow-lg transition"
+          >
+            <UploadCloud className="w-3.5 h-3.5" />
+            Upload New Track
+          </button>
+        </div>
       </div>
 
       {/* Studio Profile Registration Form (Studio Admin post-approval setup) */}
@@ -901,6 +987,15 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-white/5 bg-slate-950/40 text-slate-400 uppercase font-bold tracking-wider">
+                <th className="p-5 w-10">
+                  <input
+                    type="checkbox"
+                    checked={allTracksSelected}
+                    onChange={toggleSelectAll}
+                    className="w-3.5 h-3.5 accent-rose-500 cursor-pointer"
+                    aria-label="Select all tracks"
+                  />
+                </th>
                 <th className="p-5">Track Details</th>
                 {currentUser?.role === 'admin' && <th className="p-5">Artist</th>}
                 <th className="p-5">Acoustic Specs</th>
@@ -915,6 +1010,15 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                 const status = getStatusDetails(t);
                 return (
                   <tr key={t.id} className="hover:bg-slate-900/20 transition">
+                    <td className="p-5">
+                      <input
+                        type="checkbox"
+                        checked={selectedTrackIds.includes(t.id)}
+                        onChange={() => toggleTrackSelection(t.id)}
+                        className="w-3.5 h-3.5 accent-rose-500 cursor-pointer"
+                        aria-label={`Select ${t.title}`}
+                      />
+                    </td>
                     <td className="p-5">
                       <div className="font-bold text-slate-200">{t.title}</div>
                       {t.album_title && <div className="text-[10px] text-slate-455 mt-0.5">Album: {t.album_title}</div>}
