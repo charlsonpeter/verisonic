@@ -285,7 +285,7 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
 
   return (
     <div className="space-y-4">
-      {effectiveStatus?.is_active && (
+      {effectiveStatus?.is_active && !compact && (
         <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-2">
           <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-400/80">Current plan</p>
           <p className="text-sm font-bold text-white">
@@ -296,6 +296,25 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
             expiresAt={expiresAt}
             compact
           />
+          {effectiveStatus.cancel_at_period_end && (
+            <p className="text-[10px] text-amber-400 font-semibold">
+              Cancels at end of current period — no renewal scheduled.
+            </p>
+          )}
+          {effectiveStatus.pending_plan_id && !effectiveStatus.cancel_at_period_end && (
+            <p className="text-[10px] text-emerald-400/90 font-semibold">
+              {(effectiveStatus.pending_plan_label || 'Plan change')} scheduled
+              {effectiveStatus.pending_plan_paid ? ' (paid)' : ''} at renewal
+              {effectiveStatus.subscription_expires_at
+                ? ` on ${formatExpiryDate(effectiveStatus.subscription_expires_at)}`
+                : ''}.
+            </p>
+          )}
+        </div>
+      )}
+
+      {effectiveStatus?.is_active && compact && (
+        <div className="space-y-2">
           {effectiveStatus.cancel_at_period_end && (
             <p className="text-[10px] text-amber-400 font-semibold">
               Cancels at end of current period — no renewal scheduled.
