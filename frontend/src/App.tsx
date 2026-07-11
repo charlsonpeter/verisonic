@@ -538,6 +538,7 @@ function DashboardContent() {
   };
 
   const isPasswordResetGate = mustResetPassword || activeTab === 'admin-password-reset';
+  const hideAppChrome = activeTab === 'landing' || activeTab === 'auth' || isPasswordResetGate;
 
   return (
     <div className="flex flex-1 min-h-0 h-[100dvh] max-h-[100dvh] w-full box-border pt-[env(safe-area-inset-top,0px)] bg-slate-950 text-slate-100 overflow-hidden font-sans select-none relative">
@@ -547,7 +548,7 @@ function DashboardContent() {
       
       {/* 2. Main content viewport */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden">
-        {activeTab !== 'landing' && !isPasswordResetGate && (
+        {!hideAppChrome && (
           <Header 
             searchQuery={searchQuery} 
             setSearchQuery={setSearchQuery} 
@@ -561,8 +562,8 @@ function DashboardContent() {
         
         <main
           ref={mainRef}
-          className={`flex-1 min-h-0 overflow-y-auto overscroll-y-contain md:pb-36 ${
-            activeTab === 'landing'
+          className={`flex-1 min-h-0 overflow-y-auto overscroll-y-contain ${hideAppChrome ? '' : 'md:pb-36'} ${
+            activeTab === 'landing' || activeTab === 'auth'
               ? 'px-0 py-0'
               : 'px-6 md:px-8 max-md:py-3'
           }`}
@@ -574,7 +575,7 @@ function DashboardContent() {
 
         {/* Mobile bottom chrome — in document flow so content never scrolls behind */}
         <div className="md:hidden flex-shrink-0 pb-[env(safe-area-inset-bottom,0px)] bg-slate-950">
-          {!isPasswordResetGate && (
+          {!hideAppChrome && (
             <>
               <AudioPlayer 
                 onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
@@ -583,9 +584,7 @@ function DashboardContent() {
                 isLyricsOpen={isLyricsOpen}
                 activeTab={activeTab} 
               />
-              {activeTab !== 'landing' && (
-                <MobileNav activeTab={activeTab} setActiveTab={setActiveTab} />
-              )}
+              <MobileNav activeTab={activeTab} setActiveTab={setActiveTab} />
             </>
           )}
         </div>
@@ -599,7 +598,7 @@ function DashboardContent() {
 
       {/* 4. Desktop audio player (fixed overlay) */}
       <div className="hidden md:block">
-        {!isPasswordResetGate && (
+        {!hideAppChrome && (
           <AudioPlayer 
             onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
             isQueueOpen={isQueueOpen} 
