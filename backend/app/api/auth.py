@@ -6,16 +6,34 @@ from typing import List, Optional
 
 from app.db.session import get_db
 from app.models import User, Artist
-from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, Token, UserResponse, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, RequestReactivationSchema
+from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, RequestReactivationSchema
 from app.core.security import verify_password, get_password_hash, create_access_token, create_refresh_token, validate_refresh_token, revoke_refresh_token, ALGORITHM
 from app.core.config import settings
 from app.core.password_policy import validate_password
-from app.core.rate_limit import enforce_rate_limit
+from app.core.rate_limit import enforce_rate_limit, REFRESH_LIMIT, REFRESH_WINDOW_SEC
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+DEFAULT_ADMIN_PASSWORD = "admin12345"
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login-form")
 security = HTTPBearer(auto_error=False)
+
+
+def _ensure_password_reset_not_required(user: User) -> None:
+    if user.must_reset_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password reset required before accessing this resource",
+        )
+
+
+def _reject_default_admin_password(password: str) -> None:
+    if password == DEFAULT_ADMIN_PASSWORD:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot use the default password. Choose a unique password.",
+        )
 
 # Supporting form-based login for Swagger UI / external clients
 @router.post("/login-form", response_model=Token)
@@ -30,6 +48,11 @@ def login_oauth2(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Incorrect email or password"
+        )
+    elif not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Inactive user"
         )
     return {
         "access_token": create_access_token(subject=user.id),
@@ -90,6 +113,7 @@ def get_optional_current_user(
         return None
 
 def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
+    _ensure_password_reset_not_required(current_user)
     if current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -98,6 +122,7 @@ def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 def get_current_studio_admin(current_user: User = Depends(get_current_user)) -> User:
+    _ensure_password_reset_not_required(current_user)
     if current_user.role not in ["studio_admin", "admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -106,6 +131,7 @@ def get_current_studio_admin(current_user: User = Depends(get_current_user)) -> 
     return current_user
 
 def get_current_radio_admin(current_user: User = Depends(get_current_user)) -> User:
+    _ensure_password_reset_not_required(current_user)
     if current_user.role not in ["radio_admin", "admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -199,6 +225,11 @@ def login_google(body: dict, db: Session = Depends(get_db)):
         db.add(user)
         db.commit()
         db.refresh(user)
+    elif not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Inactive user"
+        )
         
     return {
         "access_token": create_access_token(subject=user.id),
@@ -209,6 +240,12 @@ def login_google(body: dict, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserResponse)
 def read_current_user(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@router.post("/logout")
+def logout(current_user: User = Depends(get_current_user)):
+    revoke_refresh_token(current_user.id)
+    return {"detail": "Logged out successfully"}
 
 
 @router.post("/request-artist", response_model=UserResponse)
@@ -403,15 +440,54 @@ def change_password(
         raise HTTPException(status_code=400, detail=str(e))
 
     current_user.hashed_password = get_password_hash(pw_in.new_password)
+    current_user.must_reset_password = False
+    revoke_refresh_token(current_user.id)
+    db.commit()
+    return {"detail": "Password updated successfully"}
+
+
+@router.post("/reset-initial-password")
+def reset_initial_password(
+    body: ResetInitialPasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Mandatory first-login password reset for accounts flagged with must_reset_password.
+    """
+    if not current_user.must_reset_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password reset is not required for this account",
+        )
+
+    new_password = body.new_password.strip()
+    try:
+        validate_password(new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    _reject_default_admin_password(new_password)
+
+    if verify_password(new_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from the current password",
+        )
+
+    current_user.hashed_password = get_password_hash(new_password)
+    current_user.must_reset_password = False
     revoke_refresh_token(current_user.id)
     db.commit()
     return {"detail": "Password updated successfully"}
 
 @router.post("/refresh", response_model=Token)
 def refresh_token(
+    request: Request,
     body: dict,
     db: Session = Depends(get_db)
 ):
+    enforce_rate_limit(request, "refresh", limit=REFRESH_LIMIT, window_sec=REFRESH_WINDOW_SEC)
     refresh_token_value = body.get("refresh_token")
     if not refresh_token_value:
         raise HTTPException(

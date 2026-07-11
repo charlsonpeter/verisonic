@@ -38,6 +38,7 @@ import { StationProfile } from './pages/StationProfile';
 import { StudioProfile } from './pages/StudioProfile';
 import { Settings } from './pages/Settings';
 import { AuthPage } from './pages/AuthPage';
+import { ForceAdminPasswordReset } from './pages/ForceAdminPasswordReset';
 import { UsersManagement } from './pages/UsersManagement';
 import { TracksManagement } from './pages/TracksManagement';
 import { Contact } from './pages/Contact';
@@ -48,7 +49,7 @@ const API_URL = '/api';
 
 // Headless UI Router Core
 function DashboardContent() {
-  const { currentUser, token, hasRadioStation } = useAuth();
+  const { currentUser, token, hasRadioStation, mustResetPassword } = useAuth();
   const { playTrack, playQueue, addToQueue, favorites } = useAudio();
 
   // Route/Tab Switcher state
@@ -77,6 +78,12 @@ function DashboardContent() {
   // Listen for hash changes (browser back/forward button clicks)
   useEffect(() => {
     const handleHashChange = () => {
+      if (mustResetPassword) {
+        if (activeTab !== 'admin-password-reset') {
+          setActiveTab('admin-password-reset');
+        }
+        return;
+      }
       const hashTab = window.location.hash.replace('#', '');
       if (hashTab && hashTab !== activeTab) {
         setActiveTab(hashTab);
@@ -84,7 +91,7 @@ function DashboardContent() {
     };
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [activeTab]);
+  }, [activeTab, mustResetPassword]);
 
   // Handle logout redirect or invalid session redirect
   useEffect(() => {
@@ -93,6 +100,13 @@ function DashboardContent() {
       localStorage.removeItem('activeTab');
     }
   }, [token, activeTab]);
+
+  // Force super admin to reset default password before using the app
+  useEffect(() => {
+    if (mustResetPassword && activeTab !== 'admin-password-reset') {
+      setActiveTab('admin-password-reset');
+    }
+  }, [mustResetPassword, activeTab]);
 
   // Route protection redirect for Radio Admins who do NOT have a station yet
   useEffect(() => {
@@ -259,6 +273,10 @@ function DashboardContent() {
         return <BroadcasterDownload />;
       case 'auth':
         return <AuthPage onSuccess={() => setActiveTab('home')} />;
+      case 'admin-password-reset':
+        return (
+          <ForceAdminPasswordReset onSuccess={() => setActiveTab('home')} />
+        );
       
 
 
@@ -519,6 +537,8 @@ function DashboardContent() {
     }
   };
 
+  const isPasswordResetGate = mustResetPassword || activeTab === 'admin-password-reset';
+
   return (
     <div className="flex flex-1 min-h-0 h-[100dvh] max-h-[100dvh] w-full box-border pt-[env(safe-area-inset-top,0px)] bg-slate-950 text-slate-100 overflow-hidden font-sans select-none relative">
       {/* Background Blobs */}
@@ -527,7 +547,7 @@ function DashboardContent() {
       
       {/* 2. Main content viewport */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden">
-        {activeTab !== 'landing' && (
+        {activeTab !== 'landing' && !isPasswordResetGate && (
           <Header 
             searchQuery={searchQuery} 
             setSearchQuery={setSearchQuery} 
@@ -554,15 +574,19 @@ function DashboardContent() {
 
         {/* Mobile bottom chrome — in document flow so content never scrolls behind */}
         <div className="md:hidden flex-shrink-0 pb-[env(safe-area-inset-bottom,0px)] bg-slate-950">
-          <AudioPlayer 
-            onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
-            isQueueOpen={isQueueOpen} 
-            onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
-            isLyricsOpen={isLyricsOpen}
-            activeTab={activeTab} 
-          />
-          {activeTab !== 'landing' && (
-            <MobileNav activeTab={activeTab} setActiveTab={setActiveTab} />
+          {!isPasswordResetGate && (
+            <>
+              <AudioPlayer 
+                onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
+                isQueueOpen={isQueueOpen} 
+                onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
+                isLyricsOpen={isLyricsOpen}
+                activeTab={activeTab} 
+              />
+              {activeTab !== 'landing' && (
+                <MobileNav activeTab={activeTab} setActiveTab={setActiveTab} />
+              )}
+            </>
           )}
         </div>
       </div>
@@ -575,13 +599,15 @@ function DashboardContent() {
 
       {/* 4. Desktop audio player (fixed overlay) */}
       <div className="hidden md:block">
-        <AudioPlayer 
-          onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
-          isQueueOpen={isQueueOpen} 
-          onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
-          isLyricsOpen={isLyricsOpen}
-          activeTab={activeTab} 
-        />
+        {!isPasswordResetGate && (
+          <AudioPlayer 
+            onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
+            isQueueOpen={isQueueOpen} 
+            onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
+            isLyricsOpen={isLyricsOpen}
+            activeTab={activeTab} 
+          />
+        )}
       </div>
 
       {/* 5. Mobile nav moved into viewport column above */}

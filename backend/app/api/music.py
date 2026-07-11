@@ -25,6 +25,12 @@ def normalize_optional_string(val: Optional[str]) -> Optional[str]:
 
 router = APIRouter(prefix="/music", tags=["music"])
 
+def _user_can_manage_track(user: User, track: Track, db: Session) -> bool:
+    if user.role == "admin":
+        return True
+    artist = db.query(Artist).filter(Artist.user_id == user.id).first()
+    return bool(artist and track.artist_id == artist.id)
+
 # Helper to serialize Track into response with pre-signed URLs
 def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) -> dict:
     artist_name = track.artist_name_override if track.artist_name_override else (track.artist.stage_name if track.artist else "Unknown Artist")
@@ -56,6 +62,7 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
         original_url = None
         mp3_url = None
         aac_256_url = None
+        hls_url = None
 
     return {
         "id": track.id,
@@ -85,6 +92,7 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
         "lyricist": track.lyricist,
         "year": track.year,
         "language": track.language,
+        "genres": [g.name for g in track.genres] if track.genres else [],
         "created_at": track.created_at
     }
 
@@ -552,7 +560,17 @@ def delete_track(
     return {"message": "Track successfully deleted"}
 
 @router.get("/{id}/quality", response_model=AudioAnalysisReportResponse)
-def get_quality_report(id: int, db: Session = Depends(get_db)):
+def get_quality_report(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_studio_admin),
+):
+    track = db.query(Track).filter(Track.id == id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+    if not _user_can_manage_track(current_user, track, db):
+        raise HTTPException(status_code=403, detail="Not authorized to view this quality report")
+
     report = db.query(AudioAnalysisReport).filter(AudioAnalysisReport.track_id == id).first()
     if not report:
         raise HTTPException(status_code=404, detail="Audio analysis report not found for this track")
@@ -650,6 +668,11 @@ async def websocket_tracks_status(
         await websocket.send_json({"type": "error", "message": "Unauthorized"})
         await websocket.close(code=1008)
         return
+
+    if user.role not in ("admin", "studio_admin"):
+        await websocket.send_json({"type": "error", "message": "Forbidden"})
+        await websocket.close(code=1008)
+        return
         
     monitored_ids = set()
     last_states = {} # track_id -> status
@@ -723,8 +746,45 @@ async def websocket_tracks_status(
 
 
 @router.websocket("/ws/analysis/{track_id}")
-async def websocket_analysis(websocket: WebSocket, track_id: int):
+async def websocket_analysis(websocket: WebSocket, track_id: int, token: Optional[str] = None):
     await websocket.accept()
+
+    user = None
+    if token:
+        from jose import jwt, JWTError
+        from app.core.config import settings
+        from app.models import User
+
+        db = SessionLocal()
+        try:
+            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+            user_id = payload.get("sub")
+            if user_id:
+                user = db.query(User).filter(User.id == int(user_id)).first()
+        except JWTError:
+            pass
+        finally:
+            db.close()
+
+    if not user or user.role not in ("admin", "studio_admin"):
+        await websocket.send_json({"status": "error", "message": "Unauthorized"})
+        await websocket.close(code=1008)
+        return
+
+    db = SessionLocal()
+    try:
+        track = db.query(Track).filter(Track.id == track_id).first()
+        if not track:
+            await websocket.send_json({"status": "error", "message": "Track not found"})
+            await websocket.close(code=1008)
+            return
+        if not _user_can_manage_track(user, track, db):
+            await websocket.send_json({"status": "error", "message": "Forbidden"})
+            await websocket.close(code=1008)
+            return
+    finally:
+        db.close()
+
     try:
         while True:
             # Query in a short-lived session to avoid SQLAlchemy caching

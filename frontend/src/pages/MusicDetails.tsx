@@ -11,6 +11,39 @@ interface MusicDetailsProps {
   onNavigate: (tab: string) => void;
 }
 
+function formatDuration(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function buildTrackMetadata(track: Track): { label: string; value: string }[] {
+  const rows: { label: string; value: string }[] = [];
+
+  const add = (label: string, value?: string | number | null) => {
+    if (value === null || value === undefined) return;
+    const text = typeof value === 'string' ? value.trim() : String(value);
+    if (!text) return;
+    rows.push({ label, value: text });
+  };
+
+  add('Album', track.album_title);
+  add('Year', track.year);
+  add('Composer', track.composer);
+  add('Lyricist', track.lyricist);
+  add('Language', track.language);
+
+  if (track.duration && track.duration > 0) {
+    rows.push({ label: 'Duration', value: formatDuration(track.duration) });
+  }
+
+  if (track.genres?.length) {
+    rows.push({ label: 'Genres', value: track.genres.join(', ') });
+  }
+
+  return rows;
+}
+
 export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate }) => {
   const { playTrack, favorites, toggleFavorite } = useAudio();
   const { currentUser } = useAuth();
@@ -49,16 +82,7 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate })
     setNewComment('');
   };
 
-  const metadataRows = [
-    { label: 'Album', value: track.album_title || 'Single' },
-    { label: 'Year', value: track.year?.toString() || 'Unknown' },
-    { label: 'Composer', value: track.composer || 'Unknown' },
-    { label: 'Lyricist', value: track.lyricist || 'Unknown' },
-    { label: 'Language', value: track.language || 'Unknown' },
-    { label: 'Format', value: track.file_format || 'Unknown' },
-    { label: 'Sample Rate', value: track.sample_rate ? `${track.sample_rate / 1000} kHz` : 'Unknown' },
-    { label: 'Bit Depth', value: track.bit_depth ? `${track.bit_depth}-bit` : 'Unknown' },
-  ];
+  const metadataRows = buildTrackMetadata(track);
 
   const detailCardClass =
     'bg-slate-900/20 border border-white/5 p-6 rounded-3xl h-full flex flex-col gap-4 min-h-[320px]';
@@ -129,12 +153,18 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate })
               <Disc className="w-4 h-4" /> Track Info
             </h3>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs flex-1 content-start font-sans">
-              {metadataRows.map(({ label, value }) => (
-                <div key={label} className="space-y-1">
-                  <dt className="text-[10px] text-slate-500 font-bold uppercase">{label}</dt>
-                  <dd className="font-semibold text-slate-200 truncate" title={value}>{value}</dd>
-                </div>
-              ))}
+              {metadataRows.length > 0 ? (
+                metadataRows.map(({ label, value }) => (
+                  <div key={label} className="space-y-1">
+                    <dt className="text-[10px] text-slate-500 font-bold uppercase">{label}</dt>
+                    <dd className="font-semibold text-slate-200 truncate" title={value}>{value}</dd>
+                  </div>
+                ))
+              ) : (
+                <p className="col-span-2 text-xs text-slate-500 italic">
+                  No additional track information available.
+                </p>
+              )}
             </dl>
           </div>
         </div>

@@ -30,6 +30,9 @@ class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: str
 
+class ResetInitialPasswordRequest(BaseModel):
+    new_password: str
+
 # --- Artist Schemas ---
 class ArtistCreate(BaseModel):
     stage_name: str
@@ -65,6 +68,7 @@ class UserResponse(BaseModel):
     subscription_cycle: Optional[str] = None
     real_role: Optional[str] = None
     is_active: bool
+    must_reset_password: bool = False
     created_at: datetime
     artist_profile: Optional[ArtistResponse] = None
 
@@ -127,6 +131,7 @@ class TrackResponse(BaseModel):
     lyricist: Optional[str] = None
     year: Optional[int] = None
     language: Optional[str] = None
+    genres: Optional[List[str]] = []
     created_at: datetime
 
     class Config:

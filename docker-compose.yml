@@ -8,7 +8,7 @@ services:
       POSTGRES_DB: verisonic
       TZ: UTC
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: always
@@ -17,7 +17,7 @@ services:
     image: redis:7-alpine
     container_name: verisonic_redis
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     environment:
       - TZ=UTC
     restart: always
@@ -30,8 +30,8 @@ services:
       MINIO_ROOT_PASSWORD: minioadmin
       TZ: UTC
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     volumes:
       - minio_data:/data
     command: server /data --console-address ":9001"
@@ -43,11 +43,13 @@ services:
       dockerfile: Dockerfile
     container_name: verisonic_backend
     ports:
-      - "8001:8001"
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+      - "127.0.0.1:8001:8001"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001
     volumes:
       - ./backend:/app
     environment:
+      - ENVIRONMENT=development
+      - SECRET_KEY=dev-local-secret-key-change-before-production-deploy!!
       - POSTGRES_SERVER=db
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
@@ -58,6 +60,7 @@ services:
       - AWS_SECRET_ACCESS_KEY=minioadmin
       - S3_BUCKET_NAME=verisonic-audio
       - S3_ENDPOINT_URL=http://minio:9000
+      - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
       - TZ=UTC
       - WEBRTC_BUFFER_SEC=3
     depends_on:
@@ -75,6 +78,8 @@ services:
     volumes:
       - ./backend:/app
     environment:
+      - ENVIRONMENT=development
+      - SECRET_KEY=dev-local-secret-key-change-before-production-deploy!!
       - POSTGRES_SERVER=db
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
@@ -98,7 +103,7 @@ services:
       dockerfile: Dockerfile
     container_name: verisonic_frontend
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     environment:
       - VITE_API_URL=/api
       - TZ=UTC

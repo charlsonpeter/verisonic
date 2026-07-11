@@ -1,14 +1,22 @@
 from fastapi import HTTPException, Request, status
 
+from app.core.config import settings
 from app.core.redis_client import get_redis
 
 LOGIN_LIMIT = 10
 LOGIN_WINDOW_SEC = 60
+REFRESH_LIMIT = 20
+REFRESH_WINDOW_SEC = 60
 
 
 def enforce_rate_limit(request: Request, bucket: str, limit: int = LOGIN_LIMIT, window_sec: int = LOGIN_WINDOW_SEC) -> None:
     client = get_redis()
     if client is None:
+        if settings.REQUIRE_REDIS:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Rate limiting service unavailable.",
+            )
         return
 
     ip = request.client.host if request.client else "unknown"

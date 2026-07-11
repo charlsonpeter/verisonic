@@ -128,7 +128,9 @@ On first startup the backend seeds:
 - **Email:** `admin@verisonic.com`
 - **Password:** `admin12345`
 
-Use this to promote users to studio/radio admin roles.
+Use this to log in as platform admin. You will be prompted to set a new password before admin features are unlocked.
+
+Use this account to promote users to studio/radio admin roles.
 
 ### 3. Desktop broadcaster (local dev)
 
@@ -168,7 +170,12 @@ The Vite dev server proxies `/api` to the backend.
 Key backend settings (see `docker-compose.yml`):
 
 - `POSTGRES_*`, `REDIS_HOST`, `S3_ENDPOINT_URL`
-- `SECRET_KEY`, `OPENAI_API_KEY` (optional, for lyrics transcription)
+- `SECRET_KEY` — required in production (32+ characters); docker-compose sets a dev-only value locally
+- `ENVIRONMENT` — set to `production` in deployed environments (enables stricter checks, hides API docs)
+- `CORS_ORIGINS` — comma-separated allowed web origins
+- `OPENAI_API_KEY` (optional, for lyrics transcription)
+
+**Production checklist:** set `ENVIRONMENT=production`, a strong `SECRET_KEY`, strong database/MinIO credentials, and restrict service ports to localhost or remove host bindings entirely.
 
 ---
 

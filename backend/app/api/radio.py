@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from typing import List, Dict, Set, Optional
 
 from app.db.session import get_db
-from app.models import RadioStation, RadioSchedule, Track, Artist
+from app.models import RadioStation, RadioSchedule, Track, Artist, User
 from app.schemas import RadioStationCreate, RadioStationUpdate, RadioStationResponse, RadioScheduleCreate, RadioScheduleResponse
 from app.api.auth import get_current_admin, get_current_user, get_current_radio_admin, get_optional_current_user
 from app.api.music import serialize_track
@@ -245,8 +245,19 @@ def get_timezone_from_location(country: str, state: str, postal_code: str) -> st
         
     return "UTC"
 
-def serialize_station(station: RadioStation, db: Session) -> dict:
-    # Ensure stream key exists and check for expiration (5 minutes validity)
+
+def _viewer_can_see_stream_key(viewer: Optional[User], station: RadioStation) -> bool:
+    if viewer is None:
+        return False
+    role = getattr(viewer, "_real_role", None) or viewer.role
+    if role == "admin":
+        return True
+    if role == "radio_admin" and station.owner_id == viewer.id:
+        return True
+    return False
+
+
+def _ensure_stream_key_fresh(station: RadioStation, db: Session) -> None:
     is_expired = False
     if station.stream_key:
         try:
@@ -262,6 +273,13 @@ def serialize_station(station: RadioStation, db: Session) -> dict:
         station.stream_key = "rs_key_" + secrets.token_hex(16) + "_" + str(int(time.time()))
         db.commit()
         db.refresh(station)
+
+
+def serialize_station(station: RadioStation, db: Session, viewer: Optional[User] = None) -> dict:
+    stream_key_value = None
+    if _viewer_can_see_stream_key(viewer, station):
+        _ensure_stream_key_fresh(station, db)
+        stream_key_value = station.stream_key
 
     webrtc_listeners = len(webrtc_manager.listeners.get(station.id, set())) if hasattr(webrtc_manager, 'listeners') else 0
     websocket_listeners = len(live_stream_manager.listeners.get(station.id, set()))
@@ -340,7 +358,7 @@ def serialize_station(station: RadioStation, db: Session) -> dict:
             "is_active": station.is_active,
             "stream_url": f"/api/radio/{station.id}/live",
             "owner_id": station.owner_id,
-            "stream_key": station.stream_key,
+            "stream_key": stream_key_value,
             "current_track_id": None,
             "current_track_started_at": None,
             "current_track_title": active_program_title or "Live Broadcast",
@@ -364,7 +382,7 @@ def serialize_station(station: RadioStation, db: Session) -> dict:
             "is_active": station.is_active,
             "stream_url": station.stream_url,
             "owner_id": station.owner_id,
-            "stream_key": station.stream_key,
+            "stream_key": stream_key_value,
             "current_track_id": None,
             "current_track_started_at": None,
             "current_track_title": active_program_title or "Live Broadcast",
@@ -388,7 +406,7 @@ def serialize_station(station: RadioStation, db: Session) -> dict:
         "is_active": station.is_active,
         "stream_url": None,
         "owner_id": station.owner_id,
-        "stream_key": station.stream_key,
+        "stream_key": stream_key_value,
         "current_track_id": None,
         "current_track_started_at": None,
         "current_track_title": "Offline",
@@ -448,7 +466,7 @@ def create_radio_station(
     db.add(station)
     db.commit()
     db.refresh(station)
-    return serialize_station(station, db)
+    return serialize_station(station, db, viewer=current_user)
 
 @router.put("/{id}", response_model=RadioStationResponse)
 def update_radio_station(
@@ -540,7 +558,7 @@ def update_radio_station(
         
     db.commit()
     db.refresh(station)
-    return serialize_station(station, db)
+    return serialize_station(station, db, viewer=current_user)
 
 @router.get("", response_model=List[RadioStationResponse])
 def list_radio_stations(
@@ -553,7 +571,7 @@ def list_radio_stations(
         stations = db.query(RadioStation).filter(RadioStation.owner_id == current_user.id).all()
     else:
         stations = db.query(RadioStation).filter(RadioStation.is_active == True).all()
-    return [serialize_station(s, db) for s in stations]
+    return [serialize_station(s, db, viewer=current_user) for s in stations]
 
 @router.post("/{id}/schedule", response_model=RadioScheduleResponse)
 def add_track_to_schedule(
@@ -870,7 +888,7 @@ def regenerate_stream_key(
     station.stream_key = "rs_key_" + secrets.token_hex(16) + "_" + str(int(time.time()))
     db.commit()
     db.refresh(station)
-    return serialize_station(station, db)
+    return serialize_station(station, db, viewer=current_user)
 
 
 def customize_sdp(sdp: str) -> str:

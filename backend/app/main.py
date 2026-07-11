@@ -8,7 +8,7 @@ from app.db.session import engine, SessionLocal
 from app.db.base_class import Base
 from app.db.migrations import run_migrations
 from app.models import User, Genre
-from app.core.security import get_password_hash
+from app.core.security import get_password_hash, verify_password
 from app.api import auth, music, radio, playlists, analytics, favorites
 from app.services.live_stream import live_stream_manager
 
@@ -16,7 +16,9 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json"
+    openapi_url=None if settings.is_production else f"{settings.API_V1_STR}/openapi.json",
+    docs_url=None if settings.is_production else "/docs",
+    redoc_url=None if settings.is_production else "/redoc",
 )
 
 
@@ -37,11 +39,20 @@ async def startup_seeder():
                 email="admin@verisonic.com",
                 hashed_password=get_password_hash("admin12345"),
                 full_name="Platform Administrator",
-                role="admin"
+                role="admin",
+                must_reset_password=True,
             )
             db.add(admin)
             db.commit()
             print("Seeded default admin account (admin@verisonic.com / admin12345)")
+        elif (
+            admin_user.email == "admin@verisonic.com"
+            and verify_password("admin12345", admin_user.hashed_password)
+            and not admin_user.must_reset_password
+        ):
+            admin_user.must_reset_password = True
+            db.commit()
+            print("Flagged default admin account for mandatory password reset")
 
         genre_count = db.query(Genre).count()
         if genre_count == 0:
@@ -57,7 +68,7 @@ async def startup_seeder():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -7,10 +7,15 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
 import { showInfo, showConfirm } from '../utils/swal';
+import {
+  QUALITY_DESCRIPTIONS,
+  QUALITY_LABELS,
+  type QualityLevelSetting,
+} from '../utils/streamQuality';
 
 export const Settings: React.FC = () => {
   const { currentUser, isPremium, token, fetchCurrentUser, userMode } = useAuth();
-  const { qualityLevelSetting, setQualityLevelSetting } = useAudio();
+  const { qualityLevelSetting, setQualityLevelSetting, setShowPremiumModal, activeStreamLabel } = useAudio();
 
   const getTrialDaysLeft = () => {
     if (!currentUser?.created_at) return 0;
@@ -178,6 +183,26 @@ export const Settings: React.FC = () => {
   const isBroadcasterAdmin = currentUser && (currentUser.real_role || currentUser.role) === 'radio_admin';
   const showAdminSettings = userMode === 'admin' && isBroadcasterAdmin;
 
+  const qualityOptions: Array<{
+    id: QualityLevelSetting;
+    label: string;
+    desc: string;
+    premium: boolean;
+  }> = [
+    { id: 'lossless', label: QUALITY_LABELS.lossless, desc: QUALITY_DESCRIPTIONS.lossless, premium: true },
+    { id: 'hires', label: QUALITY_LABELS.hires, desc: QUALITY_DESCRIPTIONS.hires, premium: true },
+    { id: 'high', label: QUALITY_LABELS.high, desc: QUALITY_DESCRIPTIONS.high, premium: true },
+    { id: 'normal', label: QUALITY_LABELS.normal, desc: QUALITY_DESCRIPTIONS.normal, premium: false },
+  ];
+
+  const handleQualitySelect = (id: QualityLevelSetting) => {
+    if (!isPremium && id !== 'normal') {
+      setShowPremiumModal(true);
+      return;
+    }
+    setQualityLevelSetting(id);
+  };
+
   return (
     <div className="space-y-10 w-full max-w-4xl pb-10">
       {/* Title */}
@@ -261,33 +286,45 @@ export const Settings: React.FC = () => {
             </h3>
             
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              {[
-                { id: 'lossless', label: "Lossless FLAC", resolution: "24-bit / 96kHz", bitrate: "1,411 - 4,608 kbps", desc: "Studio Quality (Recommended for external DACs)" },
-                { id: 'hires', label: "Hi-Res Master", resolution: "24-bit / 48kHz", bitrate: "920 kbps (ALAC/FLAC)", desc: "CD+ Resolution for high quality headphones" },
-                { id: 'high', label: "High Quality", resolution: "16-bit / 44.1kHz", bitrate: "320 kbps (MP3/AAC)", desc: "Compressed audio with balanced performance" },
-                { id: 'normal', label: "Normal Quality", resolution: "16-bit / 44.1kHz", bitrate: "160 kbps (AAC)", desc: "Optimized bandwidth for cellular networks" }
-              ].map((q) => {
+              {qualityOptions.map((q) => {
                 const isActive = qualityLevelSetting === q.id;
+                const isLocked = !isPremium && q.premium;
                 return (
                   <div
                     key={q.id}
-                    onClick={() => setQualityLevelSetting(q.id as any)}
-                    className={`p-4 rounded-2xl border transition duration-200 cursor-pointer flex flex-col justify-between ${
+                    onClick={() => handleQualitySelect(q.id)}
+                    className={`relative p-4 rounded-2xl border transition duration-200 cursor-pointer flex flex-col justify-between ${
                       isActive 
                         ? 'bg-rose-600/10 border-rose-500/35 shadow-md shadow-rose-500/5' 
-                        : 'bg-slate-950/40 border-white/5 hover:border-slate-800'
+                        : isLocked
+                          ? 'bg-slate-950/30 border-white/5 hover:border-amber-500/25'
+                          : 'bg-slate-950/40 border-white/5 hover:border-slate-800'
                     }`}
                   >
+                    {q.premium && (
+                      <span className="absolute top-3 right-3 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/25 text-[8px] font-extrabold uppercase tracking-wider text-amber-400">
+                        <Crown className="w-3 h-3" />
+                        Premium
+                      </span>
+                    )}
                     <div>
-                      <h4 className={`text-xs font-bold ${isActive ? 'text-rose-400' : 'text-slate-200'}`}>{q.label}</h4>
-                      <span className="text-[10px] text-slate-400 font-extrabold block mt-1 uppercase tracking-wide">{q.resolution}</span>
-                      <span className="text-[9px] text-slate-505 font-semibold block mt-0.5">{q.bitrate}</span>
+                      <h4 className={`text-xs font-bold pr-16 ${isActive ? 'text-rose-400' : 'text-slate-200'}`}>{q.label}</h4>
                     </div>
-                    <p className="text-[9.5px] text-slate-455 mt-4 leading-normal">{q.desc}</p>
+                    <p className="text-[9.5px] text-slate-455 mt-3 leading-normal">{q.desc}</p>
                   </div>
                 );
               })}
             </div>
+            {!isPremium && (
+              <p className="text-[10px] text-slate-500 font-semibold">
+                Free accounts stream at Normal Quality. Upgrade to unlock higher tiers.
+              </p>
+            )}
+            {activeStreamLabel && (
+              <p className="text-[10px] text-emerald-400/90 font-semibold">
+                Now playing: {activeStreamLabel}
+              </p>
+            )}
           </section>
 
           {/* 2. VIP ACCOUNT SUBSCRIPTION */}

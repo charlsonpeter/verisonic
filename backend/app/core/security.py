@@ -37,6 +37,8 @@ def _refresh_key(user_id: int) -> str:
 def _store_refresh_jti(user_id: int, jti: str) -> None:
     client = get_redis()
     if client is None:
+        if settings.REQUIRE_REDIS:
+            raise RuntimeError("Redis is required for refresh token storage.")
         return
     client.setex(_refresh_key(user_id), REFRESH_TOKEN_TTL_DAYS * 86400, jti)
 
@@ -49,10 +51,13 @@ def validate_refresh_token(refresh_token: str) -> int:
     if user_id is None or token_type != "refresh" or not jti:
         raise ValueError("Invalid refresh token")
     client = get_redis()
-    if client is not None:
-        stored = client.get(_refresh_key(int(user_id)))
-        if stored is None or stored.decode() != jti:
-            raise ValueError("Refresh token revoked or expired")
+    if client is None:
+        if settings.REQUIRE_REDIS:
+            raise ValueError("Refresh token validation unavailable")
+        return int(user_id)
+    stored = client.get(_refresh_key(int(user_id)))
+    if stored is None or stored.decode() != jti:
+        raise ValueError("Refresh token revoked or expired")
     return int(user_id)
 
 

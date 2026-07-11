@@ -21,6 +21,7 @@ class User(Base):
     subscription = Column(String, default="free") # free, premium, unlimited
     subscription_cycle = Column(String, nullable=True) # monthly, yearly, null
     is_active = Column(Boolean, default=True)
+    must_reset_password = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     @property

@@ -1,4 +1,9 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import {
+  clearAuthTokens,
+  getAccessToken,
+  setAuthTokens,
+} from '../utils/authTokens';
 
 export interface User {
   id: number;
@@ -8,6 +13,7 @@ export interface User {
   real_role?: 'listener' | 'studio_admin' | 'radio_admin' | 'admin';
   subscription: 'free' | 'premium' | 'unlimited';
   subscription_cycle: 'monthly' | 'yearly' | null;
+  must_reset_password?: boolean;
   created_at?: string;
   artist_profile?: {
     id: number;
@@ -30,6 +36,7 @@ interface AuthContextType {
   userMode: 'admin' | 'listener';
   canUsePlaylists: boolean;
   isStaffInAdminMode: boolean;
+  mustResetPassword: boolean;
   switchUserMode: (mode: 'admin' | 'listener') => void;
   login: (email: string, password: string) => Promise<boolean>;
   register: (email: string, password: string, fullName: string) => Promise<boolean>;
@@ -45,7 +52,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const API_URL = '/api';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [token, setToken] = useState<string | null>(getAccessToken());
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -79,7 +86,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const userWithSub: User = {
           ...data,
           subscription: data.role === 'admin' ? 'premium' : (data.subscription || 'free'),
-          subscription_cycle: data.subscription_cycle || null
+          subscription_cycle: data.subscription_cycle || null,
+          must_reset_password: data.must_reset_password ?? false,
         };
         setCurrentUser(userWithSub);
         if (userWithSub.role === 'admin') {
@@ -113,7 +121,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       const data = await res.json();
       if (res.ok && data.access_token) {
-        localStorage.setItem('token', data.access_token);
+        setAuthTokens(data.access_token, data.refresh_token);
         setToken(data.access_token);
         return true;
       }
@@ -168,7 +176,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       const data = await res.json();
       if (res.ok && data.access_token) {
-        localStorage.setItem('token', data.access_token);
+        setAuthTokens(data.access_token, data.refresh_token);
         setToken(data.access_token);
         return true;
       }
@@ -205,8 +213,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return false;
   };
 
-  const logout = () => {
-    localStorage.removeItem('token');
+  const logout = async () => {
+    const accessToken = getAccessToken();
+    if (accessToken) {
+      try {
+        await fetch(`${API_URL}/auth/logout`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+      } catch {
+        // Best-effort server-side refresh token revocation
+      }
+    }
+    clearAuthTokens();
     setToken(null);
     setCurrentUser(null);
     setAuthError(null);
@@ -233,6 +252,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const isStaffInAdminMode =
     (userRole === 'radio_admin' || userRole === 'studio_admin') && userMode === 'admin';
   const canUsePlaylists = !!token && !isStaffInAdminMode;
+  const mustResetPassword = !!(
+    currentUser?.role === 'admin' && currentUser?.must_reset_password
+  );
 
   return (
     <AuthContext.Provider value={{
@@ -244,6 +266,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       userMode,
       canUsePlaylists,
       isStaffInAdminMode,
+      mustResetPassword,
       hasRadioStation,
       switchUserMode,
       login,

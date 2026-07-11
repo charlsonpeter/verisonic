@@ -59,6 +59,9 @@ MIGRATIONS = [
         CREATE UNIQUE INDEX IF NOT EXISTS uq_favorites_user_track ON favorites (user_id, track_id);
         CREATE UNIQUE INDEX IF NOT EXISTS uq_playlist_tracks_playlist_track ON playlist_tracks (playlist_id, track_id);
     """),
+    ("008_users_must_reset_password", """
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS must_reset_password BOOLEAN DEFAULT FALSE;
+    """),
 ]
 
 
