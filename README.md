@@ -1,6 +1,6 @@
 # VeriSonic
 
-VeriSonic is a high-fidelity audio platform for **lossless music streaming**, **live radio broadcasting**, and **studio-grade catalog management**. It combines a React web portal, a FastAPI backend with Celery processing, and a PyQt5 desktop broadcaster for real-time station ingest.
+VeriSonic is a high-fidelity audio platform for **lossless music streaming**, **live radio broadcasting**, and **studio-grade catalog management**. It combines a React web portal, a FastAPI backend with Celery processing, Razorpay subscription checkout, and a PyQt5 desktop broadcaster for real-time station ingest.
 
 ---
 
@@ -15,6 +15,7 @@ VeriSonic is a high-fidelity audio platform for **lossless music streaming**, **
 - **Mobile-first UI** — bottom navigation, expanded full-screen player, banner notifications
 
 ### Studio admins
+- Studio profile onboarding (`profile_complete` gate before track management)
 - Upload lossless audio (FLAC/WAV/AIFF/ALAC) with automatic metadata extraction
 - Celery pipeline: spectral analysis, quality scoring, spectrogram, FFmpeg transcoding (MP3/AAC/HLS)
 - Track management, approval workflow, OpenAI Whisper lyrics transcription (optional)
@@ -32,11 +33,15 @@ VeriSonic is a high-fidelity audio platform for **lossless music streaming**, **
 - Studio and station moderation (enable/disable, reactivation)
 - Analytics dashboard (plays, bandwidth, quality distribution)
 - Acoustic quality reports with admin approve/reject
+- Mandatory password reset gate for seeded admin account
 
 ### Subscriptions
-- Free (7-day trial), Premium, Unlimited tiers
-- Non-premium: 30s track preview, 60s radio preview, AAC 128 only
-- Premium: full playback and higher quality streams
+- **Free** — 7-day full-access trial, then 30s track preview / 60s radio preview / AAC 128 only
+- **Premium** — full playback, higher quality streams (MP3 320, AAC 256, lossless master)
+  - Self-service via Razorpay: Premium Monthly (₹99) or Premium Yearly (₹999)
+  - Plan changes can be queued for end of billing period; cancel-at-period-end supported
+- **Unlimited** — admin-assigned only (no checkout)
+- Checkout UI: Landing page pricing, Settings, and in-player Premium modal
 
 ---
 
@@ -47,11 +52,12 @@ graph TD
     subgraph Clients
         Browser[React Web Portal]
         Broadcaster[PyQt5 Broadcaster]
+        Razorpay[Razorpay Checkout]
     end
 
     subgraph Docker Compose Stack
         Nginx[Nginx :80]
-        Frontend[Vite/React :3000]
+        Frontend[Vite/React :5173]
         Backend[FastAPI :8001]
         Worker[Celery Worker]
         Redis[(Redis)]
@@ -61,6 +67,8 @@ graph TD
 
     Browser --> Nginx
     Broadcaster -->|WebSocket MP3| Backend
+    Browser --> Razorpay
+    Razorpay -->|Payment verify| Backend
     Nginx --> Frontend
     Nginx --> Backend
     Backend --> Redis
@@ -73,7 +81,9 @@ graph TD
 
 **Live radio path:** Broadcaster → `WS /api/radio/stream/ws` → `LiveStreamManager` (in-memory + optional Redis fan-out) → listeners via `GET /api/radio/{id}/live` or WebRTC.
 
-**Music path:** Upload → Celery analyze → quality score → transcode → S3 → HLS/MP3/AAC playback in browser.
+**Music path:** Upload → Celery analyze → quality score → transcode → S3 → HLS/MP3/AAC playback in browser. Lossless master streams use short-lived tickets.
+
+**Subscription path:** Client → `POST /api/subscriptions/create-order` → Razorpay Checkout → `POST /api/subscriptions/verify` → plan activated.
 
 ---
 
@@ -83,16 +93,18 @@ graph TD
 verisonic/
 ├── backend/                 # FastAPI API, WebSockets, Celery tasks, services
 │   ├── app/
-│   │   ├── api/             # auth, music, radio, playlist, favorites, analytics
+│   │   ├── api/             # auth, music, radio, playlist, favorites, analytics, subscriptions
+│   │   ├── core/            # config, premium gating, subscription plans, security
 │   │   ├── db/              # migrations runner
-│   │   ├── services/        # storage, live_stream, audio analysis
+│   │   ├── services/        # storage, live_stream, audio, razorpay, subscription
 │   │   └── tasks/           # Celery analyze + transcode
 │   └── tests/
 ├── frontend/                # Vite + React + TypeScript + Tailwind
 │   └── src/
 │       ├── pages/           # Home, Radio, Search, Playlists, admin pages, …
-│       ├── components/      # player, layout, shared UI
-│       └── context/         # AuthContext, AudioContext
+│       ├── components/      # player, layout, subscription, shared UI
+│       ├── context/         # AuthContext, AudioContext
+│       └── utils/           # subscriptionCheckout, streamQuality, accountTier
 ├── broadcaster/             # PyQt5 desktop live broadcaster
 ├── .github/workflows/       # backend-tests.yml, build-broadcaster.yml
 ├── docker-compose.yml
@@ -121,6 +133,8 @@ docker compose up --build
 | API docs | http://localhost:3000/docs |
 | MinIO console | http://localhost:9001 (`minioadmin` / `minioadmin`) |
 
+Nginx listens on port 3000 and proxies to the Vite dev server (5173) and FastAPI backend (8001).
+
 ### 2. Default admin account
 
 On first startup the backend seeds:
@@ -130,7 +144,7 @@ On first startup the backend seeds:
 
 Use this to log in as platform admin. You will be prompted to set a new password before admin features are unlocked.
 
-Use this account to promote users to studio/radio admin roles.
+Use this account to promote users to studio/radio admin roles and assign subscription tiers.
 
 ### 3. Desktop broadcaster (local dev)
 
@@ -142,6 +156,17 @@ python broadcaster/verisonic_broadcaster.py
 Only **radio admin** accounts can broadcast. Copy the stream key from the Radio Stations dashboard (Connection Settings).
 
 Packaging and CI builds: see [broadcaster/distributing_broadcaster.md](broadcaster/distributing_broadcaster.md).
+
+### 4. Subscriptions (optional)
+
+To enable Razorpay checkout, set these in `docker-compose.yml` or your environment:
+
+```yaml
+RAZORPAY_KEY_ID: your_key_id
+RAZORPAY_KEY_SECRET: your_key_secret
+```
+
+Without keys, plan listing works but checkout returns a configuration error.
 
 ---
 
@@ -167,15 +192,16 @@ The Vite dev server proxies `/api` to the backend.
 
 ### Environment variables
 
-Key backend settings (see `docker-compose.yml`):
+Key backend settings (see `docker-compose.yml` and `backend/app/core/config.py`):
 
 - `POSTGRES_*`, `REDIS_HOST`, `S3_ENDPOINT_URL`
 - `SECRET_KEY` — required in production (32+ characters); docker-compose sets a dev-only value locally
 - `ENVIRONMENT` — set to `production` in deployed environments (enables stricter checks, hides API docs)
 - `CORS_ORIGINS` — comma-separated allowed web origins
+- `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` — enable Premium checkout (INR)
 - `OPENAI_API_KEY` (optional, for lyrics transcription)
 
-**Production checklist:** set `ENVIRONMENT=production`, a strong `SECRET_KEY`, strong database/MinIO credentials, and restrict service ports to localhost or remove host bindings entirely.
+**Production checklist:** set `ENVIRONMENT=production`, a strong `SECRET_KEY`, strong database/MinIO credentials, Razorpay live keys, and restrict service ports to localhost or remove host bindings entirely.
 
 ---
 
@@ -183,10 +209,10 @@ Key backend settings (see `docker-compose.yml`):
 
 | Role | Capabilities |
 |------|----------------|
-| `listener` | Browse, play, favorites, playlists, search |
-| `studio_admin` | Upload/manage tracks, studio profile |
+| `listener` | Browse, play, favorites, playlists, search, subscribe |
+| `studio_admin` | Upload/manage tracks, studio profile (onboarding gate) |
 | `radio_admin` | Own station(s), live broadcast, program schedule |
-| `admin` | Full platform management |
+| `admin` | Full platform management, subscription assignment |
 
 Staff roles support **Admin mode** vs **Listen mode** (toggle in header). Playlists and library playback are disabled in admin mode.
 
