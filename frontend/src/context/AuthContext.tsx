@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { hasPaidSubscription } from '../utils/accountTier';
+import { getTrialDaysLeft, hasPaidSubscription } from '../utils/accountTier';
 import {
   clearAuthTokens,
   getAccessToken,
@@ -258,13 +258,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return ok;
   }, []);
 
-  const isTrialActive = () => {
-    if (!currentUser?.created_at) return false;
-    const createdAt = new Date(currentUser.created_at);
-    const now = new Date();
-    const diffDays = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24);
-    return diffDays >= 0 && diffDays <= 7;
-  };
+  const isTrialActive = () => getTrialDaysLeft(currentUser) > 0;
 
   const userRole = currentUser?.real_role || currentUser?.role;
 

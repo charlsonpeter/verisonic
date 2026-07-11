@@ -89,6 +89,30 @@ def clear_cancellation(user: User) -> None:
     user.subscription_cancel_at_period_end = False
 
 
+def apply_free_on_payment_failure(user: User) -> None:
+    """Reset to free tier; trial eligibility stays based on join date only."""
+    user.subscription = "free"
+    user.subscription_cycle = None
+    user.subscription_expires_at = None
+    user.subscription_activated_at = None
+    user.pending_plan_id = None
+    user.pending_plan_paid = False
+    user.subscription_cancel_at_period_end = False
+
+
+def handle_subscription_payment_failure(user: User, payment) -> None:
+    """Mark payment failed; downgrade non-premium users to free, keep active premium."""
+    payment.status = "failed"
+
+    if premium_is_active(user):
+        if user.pending_plan_id == payment.plan_id:
+            user.pending_plan_id = None
+            user.pending_plan_paid = False
+        return
+
+    apply_free_on_payment_failure(user)
+
+
 def apply_pending_subscription_if_due(user: User, db: Session) -> bool:
     """Apply queued plan or cancellation when the current period has ended."""
     if user.subscription != "premium" or user.subscription_expires_at is None:

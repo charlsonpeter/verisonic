@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
 from app.core.config import settings
+from app.core.premium import is_trial_active
 from app.core.subscription_plans import SUBSCRIPTION_PLANS, get_plan
 from app.db.session import get_db
 from app.models import SubscriptionPayment, User
@@ -20,6 +21,7 @@ from app.services.subscription_service import (
     apply_pending_subscription_if_due,
     apply_plan_immediately,
     clear_cancellation,
+    handle_subscription_payment_failure,
     premium_is_active,
     queue_plan_change,
     schedule_cancellation,
@@ -58,6 +60,15 @@ class VerifyPaymentRequest(BaseModel):
     razorpay_order_id: str
     razorpay_payment_id: str
     razorpay_signature: str
+
+
+class PaymentFailedRequest(BaseModel):
+    razorpay_order_id: str
+
+
+class PaymentFailedResponse(BaseModel):
+    message: str
+    subscription: str
 
 
 class VerifyPaymentResponse(BaseModel):
@@ -234,7 +245,7 @@ def verify_subscription_payment(
             payment_id=body.razorpay_payment_id,
             signature=body.razorpay_signature,
         ):
-            payment.status = "failed"
+            handle_subscription_payment_failure(current_user, payment)
             db.commit()
             raise HTTPException(status_code=400, detail="Payment verification failed")
     except RazorpayNotConfiguredError as exc:
@@ -266,6 +277,41 @@ def verify_subscription_payment(
         message=message,
         queued=queued,
         pending_plan_id=current_user.pending_plan_id,
+    )
+
+
+@router.post("/payment-failed", response_model=PaymentFailedResponse)
+def report_subscription_payment_failed(
+    body: PaymentFailedRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    payment = (
+        db.query(SubscriptionPayment)
+        .filter(
+            SubscriptionPayment.razorpay_order_id == body.razorpay_order_id,
+            SubscriptionPayment.user_id == current_user.id,
+        )
+        .first()
+    )
+    if payment is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if payment.status != "paid":
+        handle_subscription_payment_failure(current_user, payment)
+        db.commit()
+        db.refresh(current_user)
+
+    if premium_is_active(current_user):
+        message = "Payment failed. Your current subscription is unchanged."
+    elif is_trial_active(current_user):
+        message = "Payment failed. Your free trial continues until 7 days after you joined."
+    else:
+        message = "Payment failed. You are on the free preview plan."
+
+    return PaymentFailedResponse(
+        message=message,
+        subscription=current_user.subscription,
     )
 
 

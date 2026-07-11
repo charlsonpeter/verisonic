@@ -201,6 +201,25 @@ function loadRazorpayScript(): Promise<boolean> {
   });
 }
 
+export async function reportSubscriptionPaymentFailed(
+  orderId: string,
+  token: string,
+): Promise<{ message: string }> {
+  const res = await fetch('/api/subscriptions/payment-failed', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ razorpay_order_id: orderId }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.detail || 'Could not record payment failure.');
+  }
+  return data;
+}
+
 export async function openSubscriptionCheckout(options: {
   order: CreateOrderResponse;
   userEmail?: string;
@@ -214,6 +233,15 @@ export async function openSubscriptionCheckout(options: {
   }
 
   return new Promise((resolve, reject) => {
+    const notifyFailure = async (message: string) => {
+      try {
+        await reportSubscriptionPaymentFailed(options.order.order_id, options.token);
+      } catch {
+        // Best-effort; still surface the checkout error to the user.
+      }
+      reject(new Error(message));
+    };
+
     const rzp = new Razorpay({
       key: options.order.key_id,
       amount: options.order.amount_paise,
@@ -237,7 +265,9 @@ export async function openSubscriptionCheckout(options: {
           const result = await verifySubscriptionPayment(response, options.token);
           resolve(result);
         } catch (err) {
-          reject(err);
+          void notifyFailure(
+            err instanceof Error ? err.message : 'Payment verification failed.',
+          );
         }
       },
       modal: {
@@ -246,7 +276,7 @@ export async function openSubscriptionCheckout(options: {
     });
 
     rzp.on('payment.failed', (response) => {
-      reject(new Error(response.error?.description || 'Payment failed.'));
+      void notifyFailure(response.error?.description || 'Payment failed.');
     });
 
     rzp.open();
@@ -284,7 +314,7 @@ export function resolveSubscriptionStatus(
     is_active: true,
     current_plan_id: planIdForCycle(cycle),
     pending_plan_id: currentUser.pending_plan_id ?? null,
-    pending_plan_label: null,
+    pending_plan_label: getQueuedPlanLabel(currentUser.pending_plan_id),
     pending_plan_paid: Boolean(currentUser.pending_plan_paid),
     cancel_at_period_end: Boolean(currentUser.subscription_cancel_at_period_end),
   };
@@ -294,4 +324,14 @@ export function planIdForCycle(cycle: 'monthly' | 'yearly' | null | undefined): 
   if (cycle === 'monthly') return 'premium_monthly';
   if (cycle === 'yearly') return 'premium_yearly';
   return null;
+}
+
+const QUEUED_PLAN_LABELS: Record<string, string> = {
+  premium_monthly: 'Premium Monthly',
+  premium_yearly: 'Premium Yearly',
+};
+
+export function getQueuedPlanLabel(planId: string | null | undefined): string | null {
+  if (!planId) return null;
+  return QUEUED_PLAN_LABELS[planId] ?? null;
 }

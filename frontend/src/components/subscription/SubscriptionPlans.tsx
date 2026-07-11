@@ -19,6 +19,7 @@ import {
 } from '../../utils/subscriptionCheckout';
 import { showConfirm, showError, showSuccess } from '../../utils/swal';
 import { SubscriptionDates } from './SubscriptionDates';
+import { SubscriptionQueueNotice } from './SubscriptionQueueNotice';
 
 interface SubscriptionPlansProps {
   compact?: boolean;
@@ -134,6 +135,8 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Checkout failed.';
       if (message !== 'Checkout closed.') {
+        await fetchCurrentUser();
+        await reload();
         showError('Checkout failed', message);
       }
     } finally {
@@ -314,22 +317,12 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
       )}
 
       {effectiveStatus?.is_active && compact && (
-        <div className="space-y-2">
-          {effectiveStatus.cancel_at_period_end && (
-            <p className="text-[10px] text-amber-400 font-semibold">
-              Cancels at end of current period — no renewal scheduled.
-            </p>
-          )}
-          {effectiveStatus.pending_plan_id && !effectiveStatus.cancel_at_period_end && (
-            <p className="text-[10px] text-emerald-400/90 font-semibold">
-              {(effectiveStatus.pending_plan_label || 'Plan change')} scheduled
-              {effectiveStatus.pending_plan_paid ? ' (paid)' : ''} at renewal
-              {effectiveStatus.subscription_expires_at
-                ? ` on ${formatExpiryDate(effectiveStatus.subscription_expires_at)}`
-                : ''}.
-            </p>
-          )}
-        </div>
+        <SubscriptionQueueNotice
+          pendingPlanId={effectiveStatus.pending_plan_id}
+          pendingPlanPaid={effectiveStatus.pending_plan_paid}
+          renewOn={effectiveStatus.subscription_expires_at}
+          cancelAtPeriodEnd={effectiveStatus.cancel_at_period_end}
+        />
       )}
 
       <div className={`grid gap-3 ${

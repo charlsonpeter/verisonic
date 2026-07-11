@@ -13,6 +13,7 @@ import {
 } from '../utils/streamQuality';
 import { SubscriptionPlans } from '../components/subscription/SubscriptionPlans';
 import { SubscriptionDates } from '../components/subscription/SubscriptionDates';
+import { SubscriptionQueueNotice } from '../components/subscription/SubscriptionQueueNotice';
 import {
   getAccountTierLabel,
   getTrialDaysLeft,
@@ -182,6 +183,16 @@ export const Settings: React.FC = () => {
             <p className="text-[11px] text-slate-400 leading-relaxed font-semibold max-w-xl">
               {getSubscriptionMessage()}
             </p>
+
+            {hasPaidSubscription(currentUser) &&
+              (currentUser?.pending_plan_id || currentUser?.subscription_cancel_at_period_end) && (
+              <SubscriptionQueueNotice
+                pendingPlanId={currentUser.pending_plan_id}
+                pendingPlanPaid={currentUser.pending_plan_paid}
+                renewOn={currentUser.subscription_expires_at}
+                cancelAtPeriodEnd={currentUser.subscription_cancel_at_period_end}
+              />
+            )}
 
             {currentUser?.subscription !== 'unlimited' && (
               <div id="subscription-plans" className="pt-2">
