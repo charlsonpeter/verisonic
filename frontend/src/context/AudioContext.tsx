@@ -7,6 +7,7 @@ import {
   getStreamCandidatesForQuality,
   loadStoredQuality,
   saveStoredQuality,
+  isStudioMasterQuality,
   QUALITY_LABELS,
   type QualityLevelSetting,
 } from '../utils/streamQuality';
@@ -760,12 +761,25 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         );
 
     if (!isRadio && candidates.length === 0) {
-      showError(
-        'Stream Unavailable',
-        isPremiumRef.current
-          ? 'No audio file is available for the selected quality tier yet. The track may still be transcoding.'
-          : 'Preview stream is not ready yet. Please try again shortly.'
+      const effectiveQuality = getEffectiveQuality(
+        qualityLevelSettingRef.current,
+        canConfigureStreamQualityRef.current,
       );
+      if (isPremiumRef.current && isStudioMasterQuality(effectiveQuality)) {
+        showError(
+          'Studio Master Unavailable',
+          token
+            ? 'The original lossless file is not available for this track yet.'
+            : 'Sign in to stream the original studio master file.',
+        );
+      } else {
+        showError(
+          'Stream Unavailable',
+          isPremiumRef.current
+            ? 'No audio file is available for the selected quality tier yet. The track may still be transcoding.'
+            : 'Preview stream is not ready yet. Please try again shortly.',
+        );
+      }
       return;
     }
 
@@ -919,7 +933,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         streamUrl = `${streamUrl}${separator}nocache=${Date.now()}`;
       }
 
-      setActiveStreamLabel(isRadio ? 'Live stream' : describeStreamPath(streamPath));
+      setActiveStreamLabel(
+        isRadio ? 'Live stream' : describeStreamPath(streamPath, trackToPlay),
+      );
       console.log(`Loading stream candidate ${index + 1}/${candidates.length}:`, streamUrl);
 
       seekRestoreCleanup?.();

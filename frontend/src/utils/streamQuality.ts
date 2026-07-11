@@ -6,6 +6,9 @@ export type StreamQualityTrack = {
   aac_256_path?: string;
   aac_128_path?: string;
   stream_url?: string;
+  file_format?: string;
+  sample_rate?: number;
+  bit_depth?: number;
 };
 
 export type QualityLevelSetting = 'normal' | 'high' | 'hires' | 'lossless';
@@ -54,10 +57,10 @@ export const QUALITY_LABELS: Record<QualityLevelSetting, string> = {
 };
 
 export const QUALITY_DESCRIPTIONS: Record<QualityLevelSetting, string> = {
-  lossless: 'Best studio master quality. Recommended for external DACs.',
-  hires: 'High-resolution streaming for premium headphones and speakers.',
-  high: 'Balanced quality with efficient streaming.',
-  normal: 'Optimized for mobile and limited bandwidth.',
+  lossless: 'Original studio master file — bit-perfect FLAC, WAV, or AIFF as uploaded.',
+  hires: 'Same original studio master — full sample rate and bit depth from the source file.',
+  high: 'MP3 320 kbps or AAC 256 kbps — high-quality lossy streaming.',
+  normal: 'AAC 128 kbps — optimized for mobile and limited bandwidth.',
 };
 
 function uniquePaths(paths: Array<string | undefined | null>): string[] {
@@ -76,6 +79,28 @@ export function buildMasterStreamUrl(trackId: number | undefined, accessToken: s
   return `/api/music/${trackId}/stream/master?access_token=${encodeURIComponent(accessToken)}`;
 }
 
+export function isMasterStreamPath(path: string): boolean {
+  return path.toLowerCase().includes('/stream/master');
+}
+
+export function formatMasterStreamLabel(
+  track: Pick<StreamQualityTrack, 'file_format' | 'sample_rate' | 'bit_depth'>,
+): string {
+  const fmt = track.file_format?.trim().toUpperCase() || 'STUDIO MASTER';
+  const parts: string[] = [fmt];
+  if (track.sample_rate && track.sample_rate > 0) {
+    const khz =
+      track.sample_rate >= 1000
+        ? `${(track.sample_rate / 1000) % 1 === 0 ? track.sample_rate / 1000 : (track.sample_rate / 1000).toFixed(1)} kHz`
+        : `${track.sample_rate} Hz`;
+    parts.push(khz);
+  }
+  if (track.bit_depth && track.bit_depth > 0) {
+    parts.push(`${track.bit_depth}-bit`);
+  }
+  return parts.join(' · ');
+}
+
 export function getStreamCandidatesForQuality(
   track: StreamQualityTrack,
   quality: QualityLevelSetting,
@@ -90,26 +115,12 @@ export function getStreamCandidatesForQuality(
 
   switch (quality) {
     case 'lossless':
-      return uniquePaths([
-        masterUrl,
-        track.hls_playlist_path,
-        track.mp3_320_path,
-        track.aac_256_path,
-        track.stream_url,
-      ]);
     case 'hires':
-      return uniquePaths([
-        track.hls_playlist_path,
-        masterUrl,
-        track.aac_256_path,
-        track.mp3_320_path,
-        track.stream_url,
-      ]);
+      return masterUrl ? [masterUrl] : [];
     case 'high':
       return uniquePaths([
         track.mp3_320_path,
         track.aac_256_path,
-        track.hls_playlist_path,
         track.aac_128_path,
         track.stream_url,
       ]);
@@ -121,7 +132,6 @@ export function getStreamCandidatesForQuality(
       ]);
     default:
       return uniquePaths([
-        track.hls_playlist_path,
         track.mp3_320_path,
         track.aac_128_path,
         track.stream_url,
@@ -129,10 +139,15 @@ export function getStreamCandidatesForQuality(
   }
 }
 
-export function describeStreamPath(path: string): string {
+export function describeStreamPath(
+  path: string,
+  track?: Pick<StreamQualityTrack, 'file_format' | 'sample_rate' | 'bit_depth'>,
+): string {
   const lower = path.toLowerCase();
-  if (lower.includes('/stream/master')) return 'Lossless master';
-  if (lower.includes('.m3u8') || lower.includes('/hls/')) return 'HLS adaptive';
+  if (isMasterStreamPath(path)) {
+    return track ? formatMasterStreamLabel(track) : 'Studio master';
+  }
+  if (lower.includes('.m3u8') || lower.includes('/hls/')) return 'HLS adaptive (AAC 256 kbps)';
   if (lower.includes('/originals/') || lower.endsWith('.flac')) return 'Lossless master';
   if (lower.endsWith('.wav') || lower.endsWith('.aiff') || lower.endsWith('.alac')) return 'Lossless master';
   if (lower.includes('320k') || lower.endsWith('.mp3')) return 'MP3 320 kbps';
@@ -140,4 +155,8 @@ export function describeStreamPath(path: string): string {
   if (lower.includes('128k') || lower.endsWith('.aac')) return 'AAC 128 kbps';
   if (lower.startsWith('/api/radio/')) return 'Live stream';
   return 'Stream';
+}
+
+export function isStudioMasterQuality(quality: QualityLevelSetting): boolean {
+  return quality === 'lossless' || quality === 'hires';
 }
