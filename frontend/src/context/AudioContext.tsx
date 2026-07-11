@@ -194,6 +194,40 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Tracks whether the user EXPLICITLY pressed pause (vs browser-initiated background pause)
   const userPausedRef = useRef(false);
   const playbackEpochRef = useRef(0);
+  const ownedBlobUrlRef = useRef<string | null>(null);
+
+  const resetAudioElementForNewSource = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    audio.pause();
+
+    if (hlsRef.current) {
+      hlsRef.current.stopLoad();
+      hlsRef.current.detachMedia();
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+
+    if (ownedBlobUrlRef.current) {
+      URL.revokeObjectURL(ownedBlobUrlRef.current);
+      ownedBlobUrlRef.current = null;
+    }
+
+    try {
+      const src = audio.currentSrc || audio.src;
+      if (src.startsWith('blob:')) {
+        URL.revokeObjectURL(src);
+      }
+    } catch {
+      // Blob may already be revoked by hls.js / MSE teardown.
+    }
+
+    audio.removeAttribute('src');
+    audio.src = '';
+    audio.srcObject = null;
+    audio.load();
+  };
 
   const stopAllPlayback = () => {
     playbackEpochRef.current += 1;
@@ -205,16 +239,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       fadeIntervalRef.current = null;
     }
 
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.src = '';
-      audioRef.current.srcObject = null;
-      audioRef.current.load();
-    }
-    if (hlsRef.current) {
-      hlsRef.current.destroy();
-      hlsRef.current = null;
-    }
+    resetAudioElementForNewSource();
     if (webrtcPCRef.current) {
       webrtcPCRef.current.close();
       webrtcPCRef.current = null;
@@ -696,7 +721,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       websocketRef.current.close();
       websocketRef.current = null;
     }
-    audioRef.current.srcObject = null;
+    resetAudioElementForNewSource();
 
     // Clear live radio station status if playing normal track
     if (!isRadio) {
@@ -857,10 +882,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setActiveStreamLabel(isRadio ? 'Live stream' : describeStreamPath(streamPath));
       console.log(`Loading stream candidate ${index + 1}/${candidates.length}:`, streamUrl);
 
-      if (hlsRef.current) {
-        hlsRef.current.destroy();
-        hlsRef.current = null;
-      }
+      seekRestoreCleanup?.();
+      seekRestoreCleanup = null;
+      resetAudioElementForNewSource();
 
       if (streamUrl.includes('.m3u8')) {
         if (Hls.isSupported()) {
@@ -1141,9 +1165,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
                 // Clear any existing source and bind the MediaSource
                 if (audioRef.current) {
-                  audioRef.current.pause();
-                  audioRef.current.srcObject = null;
-                  audioRef.current.src = URL.createObjectURL(mediaSource);
+                  resetAudioElementForNewSource();
+                  const blobUrl = URL.createObjectURL(mediaSource);
+                  ownedBlobUrlRef.current = blobUrl;
+                  audioRef.current.src = blobUrl;
                 }
               };
 
@@ -1180,6 +1205,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 if (epoch !== playbackEpochRef.current || !isPlayingRef.current) return;
                 // If we were playing via WebSocket, fall back to progressive stream
                 if (audioRef.current && audioRef.current.src.startsWith('blob:')) {
+                    resetAudioElementForNewSource();
                     const fallbackUrl = resolveStreamUrl(virtualTrack.stream_url);
                     audioRef.current.src = fallbackUrl;
                     audioRef.current.load();
@@ -1243,9 +1269,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
           // Unload live audio source to stop buffering/downloading
           if (audioRef.current) {
-            audioRef.current.pause();
-            audioRef.current.src = "";
-            audioRef.current.load();
+            resetAudioElementForNewSource();
           }
         } else {
           if (audioRef.current) {

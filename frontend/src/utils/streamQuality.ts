@@ -81,13 +81,14 @@ export function getStreamCandidatesForQuality(
 
   switch (quality) {
     case 'lossless':
+      // Original masters are not served publicly via /storage; prefer public HLS/transcodes.
       return uniquePaths([
-        track.original_file_path,
         track.hls_playlist_path,
         track.mp3_320_path,
         track.aac_256_path,
         track.aac_128_path,
         track.stream_url,
+        track.original_file_path,
       ]);
     case 'hires':
       return uniquePaths([
