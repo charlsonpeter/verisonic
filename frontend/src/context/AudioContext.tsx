@@ -1195,7 +1195,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     if (
       isStaffInAdminMode &&
-      (currentUser?.real_role || currentUser?.role) === 'radio_admin' &&
+      currentUser &&
+      (currentUser.real_role || currentUser.role) === 'radio_admin' &&
       station.owner_id !== currentUser.id
     ) {
       console.warn("Radio admins cannot play other radio stations.");
