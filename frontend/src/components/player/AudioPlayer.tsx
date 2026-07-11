@@ -90,6 +90,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     }
   };
 
+  const resetSpeed = () => {
+    setPlaybackSpeed(1);
+  };
+
   const mobileLyricsLines = React.useMemo(() => {
     if (!currentTrack?.lyrics) return [];
     return currentTrack.lyrics
@@ -592,9 +596,15 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                   >
                     <ChevronsLeft className="w-4 h-4" />
                   </button>
-                  <span className="text-xs font-bold text-slate-300 tabular-nums min-w-[3rem] text-center">
+                  <button
+                    type="button"
+                    onClick={resetSpeed}
+                    className="text-xs font-bold text-slate-300 tabular-nums min-w-[3rem] text-center active:scale-95 active:text-white transition"
+                    aria-label="Reset speed to 1x"
+                    title="Reset to 1x"
+                  >
                     {playbackSpeed}x
-                  </span>
+                  </button>
                   <button
                     type="button"
                     onClick={increaseSpeed}
