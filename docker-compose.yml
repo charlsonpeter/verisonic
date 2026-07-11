@@ -61,6 +61,8 @@ services:
       - S3_BUCKET_NAME=verisonic-audio
       - S3_ENDPOINT_URL=http://minio:9000
       - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+      - RAZORPAY_KEY_ID=
+      - RAZORPAY_KEY_SECRET=
       - TZ=UTC
       - WEBRTC_BUFFER_SEC=3
     depends_on:

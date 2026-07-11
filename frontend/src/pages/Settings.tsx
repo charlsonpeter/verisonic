@@ -6,15 +6,17 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
-import { showInfo, showConfirm } from '../utils/swal';
+import { showConfirm } from '../utils/swal';
 import {
   QUALITY_DESCRIPTIONS,
   QUALITY_LABELS,
   type QualityLevelSetting,
 } from '../utils/streamQuality';
+import { SubscriptionPlans } from '../components/subscription/SubscriptionPlans';
 import {
   getAccountTierLabel,
   getTrialDaysLeft,
+  hasPaidSubscription,
 } from '../utils/accountTier';
 
 export const Settings: React.FC = () => {
@@ -23,7 +25,18 @@ export const Settings: React.FC = () => {
 
   const getSubscriptionMessage = () => {
     if (!currentUser) return '';
-    if (currentUser.subscription === 'premium' || currentUser.subscription === 'unlimited') {
+    if (currentUser.subscription === 'unlimited') {
+      return 'You have unlimited platform access assigned by the super admin.';
+    }
+    if (hasPaidSubscription(currentUser)) {
+      if (currentUser.subscription_expires_at) {
+        const expiry = new Date(currentUser.subscription_expires_at).toLocaleDateString('en-IN', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+        });
+        return `Your subscription is active until ${expiry}. Thank you for supporting authentic lossless music and radio artists.`;
+      }
       return 'Your subscription is active. Thank you for supporting authentic lossless music and radio artists.';
     }
     const trialDays = getTrialDaysLeft(currentUser);
@@ -33,14 +46,20 @@ export const Settings: React.FC = () => {
     return 'Upgrade to access uncompressed audio, save playlists, and listen without 30-second previews.';
   };
 
-  const handleVipUpgrade = () => {
-    showInfo(
-      'Studio VIP',
-      'Self-service checkout is not available yet. Contact your platform administrator to upgrade to Premium or Unlimited.',
-    );
+  const handleQualitySelect = async (id: QualityLevelSetting) => {
+    if (!canConfigureStreamQuality && id !== 'normal') {
+      const confirmed = await showConfirm(
+        'Upgrade to Premium',
+        'Higher stream quality tiers require a Premium subscription. View plans below?',
+        'View Plans',
+      );
+      if (confirmed) {
+        document.getElementById('subscription-plans')?.scrollIntoView({ behavior: 'smooth' });
+      }
+      return;
+    }
+    setQualityLevelSetting(id);
   };
-
-  // Broadcaster states
   const [station, setStation] = useState<any>(null);
   const [isRegeneratingKey, setIsRegeneratingKey] = useState(false);
   const [copiedKey, setCopiedKey] = useState(false);
@@ -210,21 +229,6 @@ export const Settings: React.FC = () => {
     { id: 'normal', label: QUALITY_LABELS.normal, desc: QUALITY_DESCRIPTIONS.normal, premium: false },
   ];
 
-  const handleQualitySelect = async (id: QualityLevelSetting) => {
-    if (!canConfigureStreamQuality && id !== 'normal') {
-      const confirmed = await showConfirm(
-        'Upgrade to Premium',
-        'Higher stream quality tiers require a Premium or Unlimited subscription. Would you like to request an upgrade?',
-        'Request Upgrade',
-      );
-      if (confirmed) {
-        handleVipUpgrade();
-      }
-      return;
-    }
-    setQualityLevelSetting(id);
-  };
-
   return (
     <div className="space-y-10 w-full max-w-4xl pb-10">
       {/* Title */}
@@ -369,14 +373,10 @@ export const Settings: React.FC = () => {
                 {getSubscriptionMessage()}
               </p>
 
-              {!isPremium && (
-                <button
-                  type="button"
-                  onClick={handleVipUpgrade}
-                  className="w-full sm:w-auto px-6 py-2.5 bg-gradient-to-r from-amber-500 to-yellow-600 text-slate-955 text-xs font-bold rounded-xl shadow-md hover:scale-[1.01] transition duration-300 uppercase tracking-wider cursor-pointer"
-                >
-                  Request Studio VIP Upgrade
-                </button>
+              {!hasPaidSubscription(currentUser) && (
+                <div id="subscription-plans" className="pt-2">
+                  <SubscriptionPlans compact onRequireAuth={() => undefined} />
+                </div>
               )}
             </div>
           </section>

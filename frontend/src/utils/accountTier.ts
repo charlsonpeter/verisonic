@@ -14,7 +14,10 @@ export function getUserRole(user: User | null): User['role'] | undefined {
 
 export function hasPaidSubscription(user: User | null): boolean {
   if (!user) return false;
-  return ['premium', 'unlimited'].includes(user.subscription || '');
+  if (!['premium', 'unlimited'].includes(user.subscription || '')) return false;
+  if (user.subscription === 'unlimited') return true;
+  if (!user.subscription_expires_at) return true;
+  return new Date(user.subscription_expires_at) > new Date();
 }
 
 export function isOnFreeTrial(user: User | null): boolean {

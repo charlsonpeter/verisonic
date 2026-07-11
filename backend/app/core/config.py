@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     S3_BUCKET_NAME: str = "verisonic-audio"
     S3_ENDPOINT_URL: Optional[str] = "http://minio:9000"
 
+    # Razorpay (INR subscriptions)
+    RAZORPAY_KEY_ID: str = ""
+    RAZORPAY_KEY_SECRET: str = ""
+
     class Config:
         env_file = ".env"
         case_sensitive = True

@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { hasPaidSubscription } from '../utils/accountTier';
 import {
   clearAuthTokens,
   getAccessToken,
@@ -13,6 +14,7 @@ export interface User {
   real_role?: 'listener' | 'studio_admin' | 'radio_admin' | 'admin';
   subscription: 'free' | 'premium' | 'unlimited';
   subscription_cycle: 'monthly' | 'yearly' | null;
+  subscription_expires_at?: string | null;
   must_reset_password?: boolean;
   created_at?: string;
   artist_profile?: {
@@ -88,6 +90,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           ...data,
           subscription: data.subscription || 'free',
           subscription_cycle: data.subscription_cycle || null,
+          subscription_expires_at: data.subscription_expires_at || null,
           must_reset_password: data.must_reset_password ?? false,
         };
         setCurrentUser(userWithSub);
@@ -246,14 +249,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const userRole = currentUser?.real_role || currentUser?.role;
 
   const isPremium =
-    ['premium', 'unlimited'].includes(currentUser?.subscription || '') ||
+    hasPaidSubscription(currentUser) ||
     userRole === 'admin' ||
     userRole === 'studio_admin' ||
     userRole === 'radio_admin' ||
     (currentUser?.subscription === 'free' && isTrialActive());
 
-  const canConfigureStreamQuality =
-    ['premium', 'unlimited'].includes(currentUser?.subscription || '');
+  const canConfigureStreamQuality = hasPaidSubscription(currentUser);
   const isStaffInAdminMode =
     (userRole === 'radio_admin' || userRole === 'studio_admin') && userMode === 'admin';
   const canUsePlaylists = !!token && !isStaffInAdminMode;

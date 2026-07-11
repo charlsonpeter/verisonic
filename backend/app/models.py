@@ -20,6 +20,7 @@ class User(Base):
     role = Column(String, default="listener") # admin, artist, listener
     subscription = Column(String, default="free") # free, premium, unlimited
     subscription_cycle = Column(String, nullable=True) # monthly, yearly, null
+    subscription_expires_at = Column(DateTime, nullable=True)
     is_active = Column(Boolean, default=True)
     must_reset_password = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
@@ -34,6 +35,22 @@ class User(Base):
     playlists = relationship("Playlist", back_populates="user")
     favorites = relationship("Favorite", back_populates="user")
     listening_history = relationship("ListeningHistory", back_populates="user")
+    subscription_payments = relationship("SubscriptionPayment", back_populates="user")
+
+class SubscriptionPayment(Base):
+    __tablename__ = "subscription_payments"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    plan_id = Column(String, nullable=False)
+    amount_paise = Column(Integer, nullable=False)
+    currency = Column(String, default="INR", nullable=False)
+    razorpay_order_id = Column(String, unique=True, index=True, nullable=False)
+    razorpay_payment_id = Column(String, unique=True, index=True, nullable=True)
+    status = Column(String, default="created")  # created, paid, failed
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    paid_at = Column(DateTime, nullable=True)
+
+    user = relationship("User", back_populates="subscription_payments")
 
 class Artist(Base):
     __tablename__ = "artists"

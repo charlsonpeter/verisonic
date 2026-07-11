@@ -329,7 +329,14 @@ export const UsersManagement: React.FC = () => {
                       <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1.5">Subscription Plan</label>
                       <select
                         value={editForm.subscription}
-                        onChange={(e) => setEditForm({ ...editForm, subscription: e.target.value })}
+                        onChange={(e) => {
+                          const subscription = e.target.value;
+                          setEditForm({
+                            ...editForm,
+                            subscription,
+                            subscriptionCycle: subscription === 'premium' ? editForm.subscriptionCycle : '',
+                          });
+                        }}
                         className="w-full bg-slate-950/60 border border-white/5 rounded-xl p-2 text-xs text-slate-200 outline-none focus:border-rose-500 cursor-pointer font-semibold"
                       >
                         <option value="free">Free</option>

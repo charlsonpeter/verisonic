@@ -331,10 +331,16 @@ def update_user_subscription_admin(
     db: Session = Depends(get_db)
 ):
     """
-    Admin user management: update a user's subscription plan and cycle.
+    Super admin user management: update a user's subscription plan and cycle.
+    Unlimited tier can only be assigned here — not via self-service checkout.
     """
     if subscription not in ["free", "premium", "unlimited"]:
         raise HTTPException(status_code=400, detail="Invalid subscription plan")
+    if subscription == "unlimited" and current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the platform super admin can assign the unlimited tier",
+        )
     if subscription_cycle is not None and subscription_cycle not in ["monthly", "yearly"]:
         raise HTTPException(status_code=400, detail="Invalid subscription cycle")
         
@@ -351,7 +357,14 @@ def update_user_subscription_admin(
         raise HTTPException(status_code=404, detail="User not found")
         
     user.subscription = subscription
-    user.subscription_cycle = subscription_cycle
+    if subscription == "unlimited":
+        user.subscription_cycle = None
+        user.subscription_expires_at = None
+    elif subscription == "free":
+        user.subscription_cycle = None
+        user.subscription_expires_at = None
+    else:
+        user.subscription_cycle = subscription_cycle
     db.commit()
     db.refresh(user)
     return user

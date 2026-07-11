@@ -62,6 +62,23 @@ MIGRATIONS = [
     ("008_users_must_reset_password", """
         ALTER TABLE users ADD COLUMN IF NOT EXISTS must_reset_password BOOLEAN DEFAULT FALSE;
     """),
+    ("009_subscription_payments", """
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMP;
+        CREATE TABLE IF NOT EXISTS subscription_payments (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            plan_id VARCHAR NOT NULL,
+            amount_paise INTEGER NOT NULL,
+            currency VARCHAR NOT NULL DEFAULT 'INR',
+            razorpay_order_id VARCHAR NOT NULL UNIQUE,
+            razorpay_payment_id VARCHAR UNIQUE,
+            status VARCHAR NOT NULL DEFAULT 'created',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            paid_at TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS ix_subscription_payments_user_id ON subscription_payments (user_id);
+        CREATE INDEX IF NOT EXISTS ix_subscription_payments_razorpay_order_id ON subscription_payments (razorpay_order_id);
+    """),
 ]
 
 

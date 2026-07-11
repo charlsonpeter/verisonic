@@ -6,6 +6,7 @@ import {
 import { useAudio, Track, RadioStation } from '../context/AudioContext';
 import { useAuth } from '../context/AuthContext';
 import { showError } from '../utils/swal';
+import { SubscriptionPlans } from '../components/subscription/SubscriptionPlans';
 
 interface LandingPageProps {
   onNavigate: (tab: string) => void;
@@ -509,7 +510,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
           <p className="text-sm text-slate-400">Stream lossless audio master streams directly to your audio system.</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-3xl mx-auto font-sans">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-5xl mx-auto font-sans">
           {/* Free Tier */}
           <div className="bg-slate-900/10 border border-white/5 rounded-3xl p-8 flex flex-col justify-between shadow-inner hover:border-slate-800 transition duration-300">
             <div className="space-y-6">
@@ -518,7 +519,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
                 <p className="text-xs text-slate-450 mt-1">Audit verification tier for testing playback specs.</p>
               </div>
               <div className="text-3xl font-extrabold text-white">
-                $0<span className="text-[10px] text-slate-500 font-bold block mt-1 uppercase">Free preview access</span>
+                ₹0<span className="text-[10px] text-slate-500 font-bold block mt-1 uppercase">Free preview access</span>
               </div>
               <ul className="space-y-3.5 text-xs text-slate-400">
                 <li className="flex items-center gap-2">
@@ -546,45 +547,12 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
             </button>
           </div>
 
-          {/* Premium Tier */}
-          <div className="bg-gradient-to-b from-rose-950/20 to-slate-950 border-2 border-rose-500/25 glow-rose rounded-3xl p-8 flex flex-col justify-between relative shadow-2xl hover:border-rose-500/40 transition duration-300">
-            <div className="absolute top-4 right-4 bg-rose-600 text-white text-[9px] font-extrabold px-2 py-0.5 rounded-full uppercase tracking-widest shadow-md">
-              Popular
-            </div>
-            <div className="space-y-6">
-              <div>
-                <h3 className="text-base font-extrabold text-rose-455 uppercase tracking-wide flex items-center gap-1.5 text-glow-rose">
-                  Studio Master VIP <Crown className="w-4 h-4 text-rose-400 fill-rose-400 animate-pulse" />
-                </h3>
-                <p className="text-xs text-slate-400 mt-1">Unlimited lossless streams for premium audio hardware.</p>
-              </div>
-              <div className="text-3xl font-extrabold text-white text-glow-rose">
-                $14.99<span className="text-[10px] text-rose-350 font-bold block mt-1 uppercase">per month, cancel anytime</span>
-              </div>
-              <ul className="space-y-3.5 text-xs text-slate-350">
-                <li className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-rose-455" /> Unlimited Playback (No Timers)
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-rose-455" /> 24-bit Lossless FLAC Streams
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-rose-455" /> 96kHz High Frequency spectrum
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-rose-455" /> Unlimited Radio Tuner
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-rose-455" /> Custom Playlists & Favorites sync
-                </li>
-              </ul>
-            </div>
-            <button 
-              onClick={() => onNavigate('settings')}
-              className="w-full py-3 bg-gradient-to-r from-rose-600 to-rose-500 text-white font-extrabold text-xs rounded-xl mt-8 hover:scale-[1.02] transition shadow-lg shadow-rose-600/20 glow-rose"
-            >
-              Get Studio VIP Now
-            </button>
+          <div className="lg:col-span-2">
+            <SubscriptionPlans
+              compact
+              onRequireAuth={() => onNavigate('auth')}
+              onSuccess={() => onNavigate('home')}
+            />
           </div>
         </div>
       </section>

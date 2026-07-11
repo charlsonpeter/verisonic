@@ -9,7 +9,7 @@ from app.db.base_class import Base
 from app.db.migrations import run_migrations
 from app.models import User, Genre
 from app.core.security import get_password_hash, verify_password
-from app.api import auth, music, radio, playlists, analytics, favorites
+from app.api import auth, music, radio, playlists, analytics, favorites, subscriptions
 from app.services.live_stream import live_stream_manager
 
 Base.metadata.create_all(bind=engine)
@@ -80,6 +80,7 @@ app.include_router(playlists.router, prefix="/api")
 app.include_router(favorites.router, prefix="/api")
 app.include_router(radio.router, prefix="/api")
 app.include_router(analytics.router, prefix="/api")
+app.include_router(subscriptions.router, prefix="/api")
 
 
 @app.get("/")
