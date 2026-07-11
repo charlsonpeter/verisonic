@@ -135,6 +135,53 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     return () => clearInterval(interval);
   }, [isRadioSync]);
 
+  const [isSeeking, setIsSeeking] = React.useState(false);
+  const [seekDraft, setSeekDraft] = React.useState(0);
+  const isSeekingRef = React.useRef(false);
+  const seekDraftRef = React.useRef(0);
+
+  React.useEffect(() => {
+    if (!isSeeking) return;
+    const onPointerUp = () => { finishSeek(); };
+    window.addEventListener('pointerup', onPointerUp);
+    return () => window.removeEventListener('pointerup', onPointerUp);
+  }, [isSeeking, isRadioSync, seek]);
+
+  React.useEffect(() => {
+    isSeekingRef.current = false;
+    setIsSeeking(false);
+    seekDraftRef.current = currentTime;
+    setSeekDraft(currentTime);
+  }, [currentTrack?.id]);
+
+  const handleSeekPointerDown = () => {
+    isSeekingRef.current = true;
+    setIsSeeking(true);
+  };
+
+  const handleSeekChange = (value: number) => {
+    seekDraftRef.current = value;
+    setSeekDraft(value);
+  };
+
+  const finishSeek = () => {
+    if (!isSeekingRef.current || isRadioSync) return;
+    isSeekingRef.current = false;
+    setIsSeeking(false);
+    seek(seekDraftRef.current);
+  };
+
+  const handleSeekKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+      isSeekingRef.current = true;
+      setIsSeeking(true);
+    }
+  };
+
+  const seekSliderValue = isRadioSync ? secondsSinceMidnight : (isSeeking ? seekDraft : currentTime);
+  const seekDisplayTime = isRadioSync ? secondsSinceMidnight : (isSeeking ? seekDraft : currentTime);
+  const seekMax = isRadioSync ? 86400 : (duration || 100);
+
   const format24hTime = (totalSeconds: number) => {
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -268,9 +315,12 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             <input
               type="range"
               min="0"
-              max={isRadioSync ? 86400 : (duration || 100)}
-              value={isRadioSync ? secondsSinceMidnight : currentTime}
-              onChange={(e) => seek(parseFloat(e.target.value))}
+              max={seekMax}
+              value={seekSliderValue}
+              onPointerDown={handleSeekPointerDown}
+              onChange={(e) => handleSeekChange(parseFloat(e.target.value))}
+              onKeyDown={handleSeekKeyDown}
+              onKeyUp={finishSeek}
               disabled={isRadioSync}
               onClick={(e) => e.stopPropagation()}
               className="w-full h-1 accent-rose-500 bg-white/10 rounded-full outline-none cursor-pointer audio-knob"
@@ -375,14 +425,17 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
             <div className={`flex items-center gap-1.5 text-slate-500 font-bold font-sans ${isRadioSync ? 'w-[15rem]' : 'w-[13.5rem]'}`}>
               <span className={`shrink-0 text-right tabular-nums ${isRadioSync ? 'w-11 text-[9px]' : 'w-9 text-[10px]'}`}>
-                {isRadioSync ? format24hTime(secondsSinceMidnight) : formatTime(currentTime)}
+                {isRadioSync ? format24hTime(secondsSinceMidnight) : formatTime(seekDisplayTime)}
               </span>
               <input 
                 type="range" 
                 min="0"
-                max={isRadioSync ? 86400 : (duration || 100)}
-                value={isRadioSync ? secondsSinceMidnight : currentTime}
-                onChange={(e) => seek(parseFloat(e.target.value))}
+                max={seekMax}
+                value={seekSliderValue}
+                onPointerDown={handleSeekPointerDown}
+                onChange={(e) => handleSeekChange(parseFloat(e.target.value))}
+                onKeyDown={handleSeekKeyDown}
+                onKeyUp={finishSeek}
                 disabled={isRadioSync}
                 className="flex-1 min-w-0 accent-rose-500 h-1 bg-slate-800 rounded-lg outline-none cursor-pointer audio-knob"
               />
@@ -618,15 +671,18 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               <input
                 type="range"
                 min="0"
-                max={isRadioSync ? 86400 : (duration || 100)}
-                value={isRadioSync ? secondsSinceMidnight : currentTime}
-                onChange={(e) => seek(parseFloat(e.target.value))}
+                max={seekMax}
+                value={seekSliderValue}
+                onPointerDown={handleSeekPointerDown}
+                onChange={(e) => handleSeekChange(parseFloat(e.target.value))}
+                onKeyDown={handleSeekKeyDown}
+                onKeyUp={finishSeek}
                 disabled={isRadioSync}
                 className="w-full accent-rose-500 h-1.5 bg-slate-800 rounded-lg outline-none cursor-pointer audio-knob"
               />
               <div className="flex items-center justify-between text-[10px] text-slate-500 font-bold font-sans">
                 <span>
-                  {isRadioSync ? format24hTime(secondsSinceMidnight) : formatTime(currentTime)}
+                  {isRadioSync ? format24hTime(secondsSinceMidnight) : formatTime(seekDisplayTime)}
                 </span>
                 <span>
                   {isRadioSync ? "24:00:00" : formatTime(duration)}
