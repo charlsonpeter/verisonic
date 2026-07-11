@@ -37,6 +37,7 @@ interface AuthContextType {
   isPremium: boolean;
   canConfigureStreamQuality: boolean;
   canAccessPlatformSettings: boolean;
+  canAccessStationProfile: boolean;
   userMode: 'admin' | 'listener';
   canUsePlaylists: boolean;
   isStaffInAdminMode: boolean;
@@ -262,6 +263,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const canAccessPlatformSettings =
     !!currentUser &&
     (userRole === 'admin' || userRole === 'listener' || userMode === 'listener');
+  const canAccessStationProfile =
+    !!currentUser &&
+    (userRole === 'admin' || (userRole === 'radio_admin' && userMode === 'admin'));
   const canUsePlaylists = !!token && !isStaffInAdminMode;
   const mustResetPassword = !!(
     currentUser?.role === 'admin' && currentUser?.must_reset_password
@@ -276,6 +280,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isPremium,
       canConfigureStreamQuality,
       canAccessPlatformSettings,
+      canAccessStationProfile,
       userMode,
       canUsePlaylists,
       isStaffInAdminMode,

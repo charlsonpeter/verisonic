@@ -49,7 +49,7 @@ const API_URL = '/api';
 
 // Headless UI Router Core
 function DashboardContent() {
-  const { currentUser, token, hasRadioStation, mustResetPassword, canAccessPlatformSettings } = useAuth();
+  const { currentUser, token, hasRadioStation, mustResetPassword, canAccessPlatformSettings, canAccessStationProfile } = useAuth();
   const { playTrack, playQueue, addToQueue, favorites } = useAudio();
 
   // Route/Tab Switcher state
@@ -115,9 +115,16 @@ function DashboardContent() {
     }
   }, [activeTab, canAccessPlatformSettings, currentUser]);
 
+  useEffect(() => {
+    if (activeTab === 'station-profile' && !canAccessStationProfile) {
+      setActiveTab('settings');
+    }
+  }, [activeTab, canAccessStationProfile]);
+
   // Route protection redirect for Radio Admins who do NOT have a station yet
   useEffect(() => {
-    if (currentUser && currentUser.role === 'radio_admin' && !hasRadioStation) {
+    const role = currentUser?.real_role || currentUser?.role;
+    if (currentUser && role === 'radio_admin' && !hasRadioStation) {
       if (activeTab !== 'radio' && activeTab !== 'contact' && activeTab !== 'settings' && activeTab !== 'profile' && activeTab !== 'station-profile' && activeTab !== 'studio-profile' && activeTab !== 'broadcaster-download') {
         setActiveTab('radio');
       }

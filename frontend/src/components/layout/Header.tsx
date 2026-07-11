@@ -5,6 +5,7 @@ import {
   ShieldCheck, BarChart2, Settings, LogOut, Disc, Mail, Laptop
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { useAudio } from '../../context/AudioContext';
 import { getPageTitle } from '../../utils/pageTitles';
 import { getAccountTierLabel, hasPaidSubscription, isOnFreeTrial } from '../../utils/accountTier';
 
@@ -19,7 +20,8 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({ 
   searchQuery, setSearchQuery, activeTab, setActiveTab, pageTitleOverride
 }) => {
-  const { currentUser, logout, token, userMode, switchUserMode, canUsePlaylists, canAccessPlatformSettings } = useAuth();
+  const { currentUser, logout, token, userMode, switchUserMode, canUsePlaylists, canAccessPlatformSettings, canAccessStationProfile } = useAuth();
+  const { setShowPremiumModal } = useAudio();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -165,7 +167,7 @@ export const Header: React.FC<HeaderProps> = ({
             </span>
           ) : (
             <button 
-              onClick={() => setActiveTab('settings')}
+              onClick={() => setShowPremiumModal(true)}
               className="hidden sm:flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-450 hover:to-yellow-500 text-slate-950 text-[10px] font-extrabold rounded-xl transition shadow-md shadow-amber-500/10 uppercase tracking-wide cursor-pointer"
             >
               <Crown className="w-3.5 h-3.5 fill-current" />
@@ -297,7 +299,7 @@ export const Header: React.FC<HeaderProps> = ({
                   My Profile
                 </button>
 
-                {currentUser && ['admin', 'radio_admin'].includes(currentUser.real_role || currentUser.role) && (
+                {currentUser && canAccessStationProfile && (
                   <button 
                     onClick={() => handleDropdownSelect('station-profile')}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"

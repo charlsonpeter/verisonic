@@ -13,12 +13,14 @@ import { showError, showSuccess } from '../../utils/swal';
 
 interface SubscriptionPlansProps {
   compact?: boolean;
+  modal?: boolean;
   onSuccess?: () => void;
   onRequireAuth?: () => void;
 }
 
 export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
   compact = false,
+  modal = false,
   onSuccess,
   onRequireAuth,
 }) => {
@@ -82,14 +84,18 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
   }
 
   return (
-    <div className={`grid gap-4 ${compact ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1 md:grid-cols-2'}`}>
+    <div className={`grid gap-3 ${
+      modal || compact ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1 md:grid-cols-2'
+    }`}>
       {plans.map((plan) => {
         const isYearly = plan.cycle === 'yearly';
         const isLoading = loadingPlanId === plan.id;
         return (
           <div
             key={plan.id}
-            className={`relative rounded-2xl border p-5 flex flex-col justify-between ${
+            className={`relative rounded-2xl border flex flex-col justify-between ${
+              modal ? 'p-4' : 'p-5'
+            } ${
               isYearly
                 ? 'bg-rose-600/10 border-rose-500/30 shadow-md shadow-rose-500/5'
                 : 'bg-slate-950/40 border-white/5'
@@ -105,24 +111,26 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
               <h4 className={`text-sm font-bold ${isYearly ? 'text-rose-400' : 'text-white'}`}>
                 {plan.label}
               </h4>
-              <p className="text-2xl font-extrabold text-white mt-2">
+              <p className={`font-extrabold text-white ${modal ? 'text-xl mt-1' : 'text-2xl mt-2'}`}>
                 {formatInr(plan.amount_rupees)}
                 <span className="text-[10px] text-slate-500 font-bold block mt-1 uppercase">
                   {plan.cycle === 'monthly' ? 'per month' : 'per year'}
                 </span>
               </p>
-              <p className="text-[10px] text-slate-400 mt-3 leading-relaxed">{plan.description}</p>
-              <ul className="mt-4 space-y-2 text-[10px] text-slate-350">
+              <p className={`text-slate-400 leading-relaxed ${modal ? 'text-[9px] mt-2' : 'text-[10px] mt-3'}`}>
+                {plan.description}
+              </p>
+              <ul className={`text-slate-350 ${modal ? 'mt-2 space-y-1 text-[9px]' : 'mt-4 space-y-2 text-[10px]'}`}>
                 <li className="flex items-center gap-2">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
+                  <CheckCircle2 className={`text-rose-400 flex-shrink-0 ${modal ? 'w-3 h-3' : 'w-3.5 h-3.5'}`} />
                   Unlimited playback
                 </li>
                 <li className="flex items-center gap-2">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
+                  <CheckCircle2 className={`text-rose-400 flex-shrink-0 ${modal ? 'w-3 h-3' : 'w-3.5 h-3.5'}`} />
                   Lossless & hi-res streams
                 </li>
                 <li className="flex items-center gap-2">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
+                  <CheckCircle2 className={`text-rose-400 flex-shrink-0 ${modal ? 'w-3 h-3' : 'w-3.5 h-3.5'}`} />
                   Playlists & favorites
                 </li>
               </ul>
@@ -131,7 +139,7 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
               type="button"
               disabled={!!loadingPlanId}
               onClick={() => handleSubscribe(plan)}
-              className={`mt-5 w-full py-2.5 text-xs font-bold rounded-xl uppercase tracking-wider transition disabled:opacity-60 ${
+              className={`${modal ? 'mt-3' : 'mt-5'} w-full py-2.5 text-xs font-bold rounded-xl uppercase tracking-wider transition disabled:opacity-60 ${
                 isYearly
                   ? 'bg-gradient-to-r from-rose-600 to-rose-500 text-white hover:scale-[1.01]'
                   : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-white/5'
