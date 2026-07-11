@@ -159,6 +159,33 @@ class AudioAnalysisReportResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
+class ScoreBreakdownItem(BaseModel):
+    check: str
+    description: str
+    value: str
+    threshold: str
+    passed: bool
+    deduction: int
+    max_points: int
+    points_achieved: int
+    calculation: str
+
+
+class QualityScoreTier(BaseModel):
+    min_score: int
+    label: str
+    description: str
+
+
+class QualityReportDetailResponse(AudioAnalysisReportResponse):
+    base_score: int = 100
+    final_score: Optional[int] = None
+    quality_level: Optional[str] = None
+    score_breakdown: List[ScoreBreakdownItem] = []
+    rejection_reasons: List[str] = []
+    quality_tiers: List[QualityScoreTier] = []
+
 # --- Playlist Schemas ---
 class PlaylistCreate(BaseModel):
     name: str

@@ -37,6 +37,8 @@ class TestCalculateQualityScore:
         assert result["approved"] is True
         assert result["is_lossless"] is True
         assert result["rejection_reasons"] == []
+        assert len(result["score_breakdown"]) == 4
+        assert result["base_score"] == 100
 
     def test_low_sample_rate_rejected(self):
         result = calculate_quality_score(

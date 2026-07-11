@@ -23,6 +23,7 @@ import { PremiumModal } from './components/shared/PremiumModal';
 import { BannerHost } from './components/shared/BannerHost';
 import { TrackRow } from './components/shared/TrackRow';
 import { LyricsModal } from './components/shared/LyricsModal';
+import { AcousticScoreBreakdown } from './components/shared/AcousticScoreBreakdown';
 
 // Page components
 import { LandingPage } from './pages/LandingPage';
@@ -202,7 +203,9 @@ function DashboardContent() {
     setSelectedReportTrack(track);
     setActiveTab('reports');
     try {
-      const res = await fetch(`${API_URL}/music/${track.id}/quality`);
+      const res = await fetch(`${API_URL}/music/${track.id}/quality`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (res.ok) {
         const data = await res.json();
         setActiveReport(data);
@@ -338,22 +341,32 @@ function DashboardContent() {
                 {/* Left Column - Score Gauge & Spectrogram FFT Graph */}
                 <div className="lg:col-span-5 space-y-6">
                   {/* Score panel */}
-                  <div className="bg-gradient-to-b from-slate-900/80 to-slate-950/90 border border-white/10 rounded-3xl p-8 flex flex-col items-center justify-center shadow-2xl relative overflow-hidden group hover:border-slate-700/60 transition duration-500">
+                  <div className="bg-gradient-to-b from-slate-900/80 to-slate-950/90 border border-white/10 rounded-3xl p-6 md:p-8 shadow-2xl relative overflow-hidden group hover:border-slate-700/60 transition duration-500">
                     <div className="absolute -top-16 -left-16 w-36 h-36 bg-rose-600/10 rounded-full blur-3xl pointer-events-none group-hover:bg-rose-600/15 transition-all duration-700" />
-                    <h3 className="text-[10px] font-black text-rose-400 uppercase tracking-widest mb-6 font-sans">Acoustic Score Gauge</h3>
-                    
-                    {renderCircularProgress(selectedReportTrack.quality_score || 0)}
-                    
-                    <div className="mt-6 text-center space-y-1">
-                      <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block">Quality Certification</span>
-                      <span className={`px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider border shadow-md inline-block ${
-                        selectedReportTrack.quality_level === 'Studio Quality' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-emerald-950/20' :
-                        selectedReportTrack.quality_level === 'Good' ? 'bg-cyan-500/10 border-cyan-500/20 text-cyan-400 shadow-cyan-950/20' :
-                        selectedReportTrack.quality_level === 'Average' ? 'bg-amber-500/10 border-amber-500/20 text-amber-405 shadow-amber-950/20' :
-                        'bg-rose-500/10 border-rose-500/20 text-rose-455 shadow-rose-950/20'
-                      }`}>
-                        {selectedReportTrack.quality_level || 'Checking...'}
-                      </span>
+                    <h3 className="text-[10px] font-black text-rose-400 uppercase tracking-widest mb-5 font-sans">Acoustic Score Gauge</h3>
+
+                    <div className="flex flex-col sm:flex-row gap-6 sm:gap-8 items-center sm:items-start">
+                      <div className="flex flex-col items-center shrink-0 sm:pt-1">
+                        {renderCircularProgress((activeReport?.final_score ?? selectedReportTrack.quality_score) || 0)}
+                        <div className="mt-4 text-center space-y-1">
+                          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block">Quality Certification</span>
+                          <span className={`px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider border shadow-md inline-block ${
+                            selectedReportTrack.quality_level === 'Studio Quality' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-emerald-950/20' :
+                            selectedReportTrack.quality_level === 'Good' ? 'bg-cyan-500/10 border-cyan-500/20 text-cyan-400 shadow-cyan-950/20' :
+                            selectedReportTrack.quality_level === 'Average' ? 'bg-amber-500/10 border-amber-500/20 text-amber-405 shadow-amber-950/20' :
+                            'bg-rose-500/10 border-rose-500/20 text-rose-455 shadow-rose-950/20'
+                          }`}>
+                            {selectedReportTrack.quality_level || 'Checking...'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {activeReport?.score_breakdown?.length > 0 && (
+                        <AcousticScoreBreakdown
+                          finalScore={activeReport.final_score ?? selectedReportTrack.quality_score ?? 0}
+                          breakdown={activeReport.score_breakdown}
+                        />
+                      )}
                     </div>
                   </div>
 

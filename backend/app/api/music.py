@@ -11,7 +11,7 @@ from jose import jwt, JWTError
 
 from app.db.session import get_db, SessionLocal
 from app.models import Track, Artist, Album, Genre, AudioAnalysisReport, ListeningHistory, StreamingLog
-from app.schemas import TrackResponse, AudioAnalysisReportResponse
+from app.schemas import TrackResponse, AudioAnalysisReportResponse, QualityReportDetailResponse, ScoreBreakdownItem, QualityScoreTier
 from app.api.auth import get_current_user, get_current_studio_admin, get_current_admin, get_optional_current_user
 from app.services.storage import (
     generate_presigned_url,
@@ -22,6 +22,7 @@ from app.services.storage import (
     get_object_size,
     open_object_stream,
 )
+from app.services.audio import build_score_breakdown, QUALITY_SCORE_TIERS, calculate_quality_score
 from app.tasks.tasks import analyze_audio_task
 from app.core.premium import user_has_premium
 from app.core.config import settings
@@ -700,7 +701,7 @@ def delete_track(
     db.commit()
     return {"message": "Track successfully deleted"}
 
-@router.get("/{id}/quality", response_model=AudioAnalysisReportResponse)
+@router.get("/{id}/quality", response_model=QualityReportDetailResponse)
 def get_quality_report(
     id: int,
     db: Session = Depends(get_db),
@@ -715,12 +716,38 @@ def get_quality_report(
     report = db.query(AudioAnalysisReport).filter(AudioAnalysisReport.track_id == id).first()
     if not report:
         raise HTTPException(status_code=404, detail="Audio analysis report not found for this track")
-        
-    # Pre-sign spectrogram image URL
-    if report.spectrogram_path:
-        report.spectrogram_path = generate_presigned_url(report.spectrogram_path)
-        
-    return report
+
+    spectrogram_path = report.spectrogram_path
+    if spectrogram_path:
+        spectrogram_path = generate_presigned_url(spectrogram_path)
+
+    metadata = {
+        "sample_rate": track.sample_rate or 0,
+        "bit_depth": track.bit_depth or 0,
+        "codec": (track.file_format or "").lower(),
+    }
+    spectral = {
+        "cutoff_frequency": report.cutoff_frequency or 0,
+        "max_frequency": report.max_frequency or 0,
+    }
+    breakdown, computed_score = build_score_breakdown(metadata, spectral)
+    quality = calculate_quality_score(metadata, spectral)
+
+    return QualityReportDetailResponse(
+        id=report.id,
+        track_id=report.track_id,
+        max_frequency=report.max_frequency,
+        cutoff_frequency=report.cutoff_frequency,
+        high_frequency_energy=report.high_frequency_energy,
+        spectrogram_path=spectrogram_path,
+        created_at=report.created_at,
+        base_score=100,
+        final_score=track.quality_score if track.quality_score is not None else computed_score,
+        quality_level=track.quality_level,
+        score_breakdown=[ScoreBreakdownItem(**item) for item in breakdown],
+        rejection_reasons=quality["rejection_reasons"],
+        quality_tiers=[QualityScoreTier(**tier) for tier in QUALITY_SCORE_TIERS],
+    )
 
 @router.post("/{id}/approve", response_model=TrackResponse)
 def manually_approve_track(

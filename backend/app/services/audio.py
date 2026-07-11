@@ -230,6 +230,89 @@ def analyze_audio_spectral(file_path: str, output_img_path: str) -> dict:
         "energy_ratio_above_18": energy_ratio_above_18
     }
 
+def build_score_breakdown(metadata: dict, spectral: dict) -> tuple[list[dict], int]:
+    """
+    Build per-check score breakdown. Score starts at 100; each failed check deducts points.
+    Returns (breakdown_items, final_score).
+    """
+    cutoff = float(spectral["cutoff_frequency"])
+    max_frequency = float(spectral.get("max_frequency") or 0)
+    is_fake_upscaled = spectral.get("is_fake_upscaled")
+    if is_fake_upscaled is None:
+        is_fake_upscaled = cutoff < 15500 and max_frequency < 16000
+
+    sample_rate = int(metadata["sample_rate"])
+    bit_depth = int(metadata["bit_depth"])
+
+    sample_rate_pass = sample_rate >= 44100
+    sample_rate_deduction = 0 if sample_rate_pass else 40
+
+    bit_depth_pass = bit_depth >= 16
+    bit_depth_deduction = 0 if bit_depth_pass else 30
+
+    if cutoff < 15000:
+        cutoff_deduction = 40
+    elif cutoff < 17000:
+        cutoff_deduction = 20
+    elif cutoff < 19000:
+        cutoff_deduction = 10
+    else:
+        cutoff_deduction = 0
+    cutoff_pass = cutoff >= 17000
+
+    fake_deduction = 50 if is_fake_upscaled else 0
+
+    checks = [
+        ("Sample Rate", sample_rate_pass, f"{sample_rate:,} Hz", "≥ 44,100 Hz", sample_rate_deduction, 40),
+        ("Bit Depth", bit_depth_pass, f"{bit_depth}-bit", "≥ 16-bit", bit_depth_deduction, 30),
+        (
+            "Spectral Cutoff Frequency",
+            cutoff_pass,
+            f"{cutoff:,.0f} Hz ({cutoff / 1000:.2f} kHz)",
+            "≥ 19 kHz: 40 · ≥ 17 kHz: 30 · ≥ 15 kHz: 20 · below 15 kHz: 0",
+            cutoff_deduction,
+            40,
+        ),
+        (
+            "Upscale / Transcode Detection",
+            not is_fake_upscaled,
+            "Detected" if is_fake_upscaled else "Not detected",
+            "Must not be upscaled",
+            fake_deduction,
+            50,
+        ),
+    ]
+
+    breakdown = []
+    for check, passed, value, threshold, deduction, max_points in checks:
+        achieved = max_points - deduction
+        breakdown.append(
+            {
+                "check": check,
+                "description": "",
+                "value": value,
+                "threshold": threshold,
+                "passed": passed,
+                "deduction": deduction,
+                "max_points": max_points,
+                "points_achieved": achieved,
+                "calculation": f"{max_points} − {deduction} = {achieved}",
+            }
+        )
+
+    total_deduction = sum(item["deduction"] for item in breakdown)
+    final_score = max(0, min(100, 100 - total_deduction))
+    return breakdown, final_score
+
+
+QUALITY_SCORE_TIERS = [
+    {"min_score": 86, "label": "Studio Quality", "description": "Lossless or hi-res master with full spectral integrity."},
+    {"min_score": 71, "label": "Good", "description": "Minor high-frequency loss; acceptable for most listeners."},
+    {"min_score": 51, "label": "Average", "description": "Noticeable compression artifacts or limited bandwidth."},
+    {"min_score": 0, "label": "Poor", "description": "Fails platform quality standards."},
+]
+
+
 def calculate_quality_score(metadata: dict, spectral: dict) -> dict:
     """
     Step 4: Quality Scoring.
@@ -240,31 +323,7 @@ def calculate_quality_score(metadata: dict, spectral: dict) -> dict:
       "approved": true
     }
     """
-    score = 100
-    
-    # Deduct for sample rate less than 44100Hz
-    if metadata["sample_rate"] < 44100:
-        score -= 40
-        
-    # Deduct for bit depth less than 16-bit
-    if metadata["bit_depth"] < 16:
-        score -= 30
-        
-    # Deduct for low cutoff frequency
-    cutoff = spectral["cutoff_frequency"]
-    if cutoff < 15000:
-        score -= 40
-    elif cutoff < 17000:
-        score -= 20
-    elif cutoff < 19000:
-        score -= 10
-        
-    # Deduct if flagged as fake upscaled
-    if spectral["is_fake_upscaled"]:
-        score -= 50
-        
-    # Bound score
-    score = max(0, min(100, score))
+    breakdown, score = build_score_breakdown(metadata, spectral)
     
     # Determine level
     if score >= 86:
@@ -284,6 +343,7 @@ def calculate_quality_score(metadata: dict, spectral: dict) -> dict:
     # - Obvious transcoded/fake files
     approved = True
     rejection_reasons = []
+    cutoff = spectral["cutoff_frequency"]
     
     if cutoff < 17000:
         approved = False
@@ -294,7 +354,9 @@ def calculate_quality_score(metadata: dict, spectral: dict) -> dict:
     if metadata["bit_depth"] < 16:
         approved = False
         rejection_reasons.append("Bit depth below 16-bit")
-    if spectral["is_fake_upscaled"]:
+    if spectral.get("is_fake_upscaled") or (
+        cutoff < 15500 and float(spectral.get("max_frequency") or 0) < 16000
+    ):
         approved = False
         rejection_reasons.append("Fake upscale detected (compressed/low-quality upscale)")
         
@@ -307,7 +369,9 @@ def calculate_quality_score(metadata: dict, spectral: dict) -> dict:
         "quality_level": level,
         "approved": approved,
         "rejection_reasons": rejection_reasons,
-        "is_lossless": is_lossless
+        "is_lossless": is_lossless,
+        "score_breakdown": breakdown,
+        "base_score": 100,
     }
 
 def extract_embedded_cover(audio_path: str, output_image_path: str) -> bool:
