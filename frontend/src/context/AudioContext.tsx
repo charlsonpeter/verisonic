@@ -149,7 +149,7 @@ const resolveStreamUrl = (url?: string): string => {
 };
 
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { token, isPremium, canConfigureStreamQuality, userMode, currentUser, updateStreamQuality } = useAuth();
+  const { token, isPremium, canConfigureStreamQuality, userMode, currentUser, isStaffInAdminMode, updateStreamQuality } = useAuth();
 
   // State variables
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
@@ -821,7 +821,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       hasSyncedLiveHeadRef.current = false;
     }
 
-    if (currentUser && currentUser.role === 'radio_admin' && !isRadio) {
+    if (isStaffInAdminMode && (currentUser?.real_role || currentUser?.role) === 'radio_admin' && !isRadio) {
       console.warn("Radio admins cannot play standard library music tracks.");
       return;
     }
@@ -1193,7 +1193,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const playRadioStation = async (station: RadioStation, isResume = false) => {
     const epoch = playbackEpochRef.current;
 
-    if (currentUser && currentUser.role === 'radio_admin' && station.owner_id !== currentUser.id) {
+    if (
+      isStaffInAdminMode &&
+      (currentUser?.real_role || currentUser?.role) === 'radio_admin' &&
+      station.owner_id !== currentUser.id
+    ) {
       console.warn("Radio admins cannot play other radio stations.");
       showError("Access Denied", "You are not authorized to tune in to this station.");
       return;

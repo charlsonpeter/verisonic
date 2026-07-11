@@ -70,6 +70,13 @@ def _parse_byte_range(range_header: Optional[str], file_size: int) -> Tuple[int,
     return start, end
 
 
+def _radio_admin_blocked_from_music(user) -> bool:
+    if not user:
+        return False
+    real_role = getattr(user, "_real_role", None) or user.role
+    return real_role == "radio_admin" and user.role == "radio_admin"
+
+
 def _resolve_stream_user(
     access_token: Optional[str],
     credentials: Optional[HTTPAuthorizationCredentials],
@@ -459,7 +466,7 @@ def get_autocomplete_suggestions(
     db: Session = Depends(get_db),
     current_user = Depends(get_optional_current_user)
 ):
-    if current_user and current_user.role == "radio_admin":
+    if _radio_admin_blocked_from_music(current_user):
         raise HTTPException(status_code=403, detail="Radio admins cannot access music metadata")
     """
     Returns unique existing values for autocomplete suggestions.
@@ -508,7 +515,7 @@ def list_tracks(
     db: Session = Depends(get_db),
     current_user = Depends(get_optional_current_user)
 ):
-    if current_user and current_user.role == "radio_admin":
+    if _radio_admin_blocked_from_music(current_user):
         raise HTTPException(status_code=403, detail="Radio admins are not allowed to play music or search tracks.")
     """
     List audio tracks with search filter (Title, Artist Name, Album Title, Genre).
@@ -626,7 +633,7 @@ def get_track(
     db: Session = Depends(get_db),
     current_user = Depends(get_optional_current_user)
 ):
-    if current_user and current_user.role == "radio_admin":
+    if _radio_admin_blocked_from_music(current_user):
         raise HTTPException(status_code=403, detail="Radio admins are not allowed to play music or search tracks.")
     track = db.query(Track).filter(Track.id == id).first()
     if not track:

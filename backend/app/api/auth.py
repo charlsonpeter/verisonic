@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import set_committed_value
 from jose import jwt, JWTError
 from typing import List, Optional
 
@@ -63,6 +64,12 @@ def login_oauth2(
         "refresh_token": create_refresh_token(subject=user.id)
     }
 
+def _apply_user_mode(user: User, x_user_mode: Optional[str]) -> None:
+    user._real_role = user.role
+    if x_user_mode == "listener" and user.role in ("radio_admin", "studio_admin"):
+        set_committed_value(user, "role", "listener")
+
+
 def get_current_user(
     token: str = Depends(oauth2_scheme),
     x_user_mode: Optional[str] = Header(None),
@@ -86,11 +93,7 @@ def get_current_user(
     if user is None:
         raise credentials_exception
 
-    # Store original database role before override
-    user._real_role = user.role
-    if x_user_mode == "listener" and user.role in ["radio_admin", "studio_admin"]:
-        user.__dict__["role"] = "listener"
-
+    _apply_user_mode(user, x_user_mode)
     return user
 
 def get_optional_current_user(
@@ -108,9 +111,7 @@ def get_optional_current_user(
             return None
         user = db.query(User).filter(User.id == int(user_id)).first()
         if user:
-            user._real_role = user.role
-            if x_user_mode == "listener" and user.role in ["radio_admin", "studio_admin"]:
-                user.__dict__["role"] = "listener"
+            _apply_user_mode(user, x_user_mode)
         return user
     except Exception:
         return None

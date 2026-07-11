@@ -26,7 +26,7 @@ from typing import List, Dict, Set, Optional
 from app.db.session import get_db
 from app.models import RadioStation, RadioSchedule, Track, Artist, User
 from app.schemas import RadioStationCreate, RadioStationUpdate, RadioStationResponse, RadioScheduleCreate, RadioScheduleResponse
-from app.api.auth import get_current_admin, get_current_user, get_current_radio_admin, get_optional_current_user
+from app.api.auth import get_current_admin, get_current_user, get_current_radio_admin, get_optional_current_user, _apply_user_mode
 from app.api.music import serialize_track
 from app.services.storage import generate_presigned_url
 from app.services.live_stream import live_stream_manager
@@ -633,8 +633,10 @@ def get_station_stream_sync(
     if not station:
         raise HTTPException(status_code=404, detail="Radio station not found")
         
-    if current_user and current_user.role == "radio_admin" and station.owner_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Radio admins can only access their own radio station")
+    if current_user:
+        real_role = getattr(current_user, "_real_role", None) or current_user.role
+        if real_role == "radio_admin" and current_user.role == "radio_admin" and station.owner_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Radio admins can only access their own radio station")
  
     if live_stream_manager.is_live(station.id):
         stream_url = f"/api/radio/{station.id}/live"
@@ -811,9 +813,7 @@ async def get_live_audio_stream(
                 from app.models import User
                 user = db.query(User).filter(User.id == user_id).first()
                 if user:
-                    user._real_role = user.role
-                    if x_user_mode == "listener" and user.role in ["radio_admin", "studio_admin"]:
-                        user.__dict__["role"] = "listener"
+                    _apply_user_mode(user, x_user_mode)
                     current_user = user
             except Exception:
                 pass
@@ -822,8 +822,10 @@ async def get_live_audio_stream(
         if not station:
             raise HTTPException(status_code=404, detail="Radio station not found")
 
-        if current_user and current_user.role == "radio_admin" and station.owner_id != current_user.id:
-            raise HTTPException(status_code=403, detail="Radio admins can only access their own radio station")
+        if current_user:
+            real_role = getattr(current_user, "_real_role", None) or current_user.role
+            if real_role == "radio_admin" and current_user.role == "radio_admin" and station.owner_id != current_user.id:
+                raise HTTPException(status_code=403, detail="Radio admins can only access their own radio station")
             
         if not station.is_active and (not current_user or current_user.role != "admin"):
             raise HTTPException(status_code=403, detail="Radio station is disabled")
