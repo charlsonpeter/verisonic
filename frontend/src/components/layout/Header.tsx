@@ -92,7 +92,7 @@ export const Header: React.FC<HeaderProps> = ({
       : getPageTitle(activeTab, { currentUser, userMode });
 
   return (
-    <header className="relative flex-shrink-0 px-4 md:px-8 py-2.5 md:py-4 min-h-[3rem] md:min-h-0 flex items-center justify-between border-b border-white/5 bg-slate-950/80 md:bg-slate-950/45 backdrop-blur-xl md:backdrop-blur-md z-30">
+    <header className="relative flex-shrink-0 px-4 md:px-5 lg:px-8 py-2.5 md:py-3 lg:py-4 min-h-[3rem] md:min-h-0 flex items-center justify-between gap-2 border-b border-white/5 bg-slate-950/80 md:bg-slate-950/45 backdrop-blur-xl md:backdrop-blur-md z-30">
       
       {mobilePageTitle && (
         <h1 className="md:hidden absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[15px] font-bold text-white truncate max-w-[50vw] pointer-events-none text-center tracking-tight">
@@ -124,8 +124,8 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* 2. Center: Desktop Primary Navigation Link Tabs */}
-      <nav className="hidden md:flex items-center gap-4 bg-slate-900/10 px-4 py-2 rounded-2xl border border-white/3">
+      {/* 2. Center: Desktop / tablet nav — icon-only until lg */}
+      <nav className="hidden md:flex items-center gap-1 lg:gap-4 bg-slate-900/10 px-2 lg:px-4 py-1.5 lg:py-2 rounded-2xl border border-white/3 min-w-0 flex-shrink">
         {navItems.map((nav) => {
           const Icon = nav.icon;
           const isActive = activeTab === nav.id;
@@ -133,12 +133,14 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               key={nav.id}
               onClick={() => setActiveTab(nav.id)}
-              className={`flex items-center gap-1.5 px-1 py-1.5 text-xs font-extrabold transition-all duration-300 uppercase tracking-widest relative group ${
+              title={nav.label}
+              aria-label={nav.label}
+              className={`flex items-center gap-1.5 px-1.5 lg:px-1 py-1.5 text-xs font-extrabold transition-all duration-300 uppercase tracking-widest relative group flex-shrink-0 ${
                 isActive ? 'text-rose-400 font-extrabold' : 'text-slate-455 hover:text-slate-200'
               }`}
             >
               <Icon className={`w-4 h-4 transition ${isActive ? 'text-rose-400' : 'text-slate-500 group-hover:text-slate-350'}`} />
-              <span>{nav.label}</span>
+              <span className="hidden lg:inline">{nav.label}</span>
               {isActive && (
                 <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-rose-500 to-pink-500 rounded-full shadow-[0_0_10px_rgba(244,63,94,0.8)]" />
               )}
@@ -150,10 +152,10 @@ export const Header: React.FC<HeaderProps> = ({
       {/* 3. Right: Search & Profile & telemetry status */}
       <div className="relative z-10 flex items-center gap-3 md:gap-4 flex-shrink-0 ml-auto">
         
-        {/* Compact Search Trigger */}
+        {/* Compact Search — visible from tablet up; narrower until lg */}
         {activeTab !== 'search' && userMode !== 'admin' && (
-          <div className="hidden lg:flex items-center gap-2 bg-slate-900/40 border border-white/5 rounded-xl px-3 py-1.5 hover:border-slate-800 transition duration-300 w-48">
-            <Search className="w-4 h-4 text-slate-500" />
+          <div className="hidden md:flex items-center gap-2 bg-slate-900/40 border border-white/5 rounded-xl px-2.5 lg:px-3 py-1.5 hover:border-slate-800 transition duration-300 w-28 lg:w-48 flex-shrink-0">
+            <Search className="w-4 h-4 text-slate-500 flex-shrink-0" />
             <input 
               type="text" 
               placeholder="Search..." 
@@ -162,36 +164,64 @@ export const Header: React.FC<HeaderProps> = ({
                 setSearchQuery(e.target.value);
                 setActiveTab('search');
               }}
-              className="bg-transparent text-xs text-slate-200 outline-none w-full placeholder-slate-505"
+              className="bg-transparent text-xs text-slate-200 outline-none w-full min-w-0 placeholder-slate-505"
             />
           </div>
         )}
         {/* VIP badge */}
         {currentUser && userMode !== 'admin' && (
           isPaidSubscriber ? (
-            <span className="hidden sm:flex items-center gap-1 px-2.5 py-1 bg-rose-500/10 border border-rose-500/20 rounded-full text-[9px] text-rose-400 font-extrabold uppercase">
-              <Crown className="w-3.5 h-3.5 fill-current text-rose-400" />
-              {tierLabel}
-            </span>
+            <>
+              <span
+                title={tierLabel}
+                className="hidden md:flex lg:hidden items-center justify-center w-8 h-8 bg-rose-500/10 border border-rose-500/20 rounded-full text-rose-400"
+              >
+                <Crown className="w-3.5 h-3.5 fill-current" />
+              </span>
+              <span className="hidden lg:flex items-center gap-1 px-2.5 py-1 bg-rose-500/10 border border-rose-500/20 rounded-full text-[9px] text-rose-400 font-extrabold uppercase">
+                <Crown className="w-3.5 h-3.5 fill-current text-rose-400" />
+                {tierLabel}
+              </span>
+            </>
           ) : isOnTrial ? (
-            <span className="hidden sm:flex items-center gap-1 px-2.5 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full text-[9px] text-amber-400 font-extrabold uppercase">
-              <Crown className="w-3.5 h-3.5 fill-current text-amber-400" />
-              {tierLabel}
-            </span>
+            <>
+              <span
+                title={tierLabel}
+                className="hidden md:flex lg:hidden items-center justify-center w-8 h-8 bg-amber-500/10 border border-amber-500/20 rounded-full text-amber-400"
+              >
+                <Crown className="w-3.5 h-3.5 fill-current" />
+              </span>
+              <span className="hidden lg:flex items-center gap-1 px-2.5 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full text-[9px] text-amber-400 font-extrabold uppercase">
+                <Crown className="w-3.5 h-3.5 fill-current text-amber-400" />
+                {tierLabel}
+              </span>
+            </>
           ) : (
-            <button 
-              onClick={() => setShowPremiumModal(true)}
-              className="hidden sm:flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-450 hover:to-yellow-500 text-slate-950 text-[10px] font-extrabold rounded-xl transition shadow-md shadow-amber-500/10 uppercase tracking-wide cursor-pointer"
-            >
-              <Crown className="w-3.5 h-3.5 fill-current" />
-              Go VIP
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => setShowPremiumModal(true)}
+                title="Go VIP"
+                aria-label="Go VIP"
+                className="hidden md:flex lg:hidden items-center justify-center w-8 h-8 bg-gradient-to-r from-amber-500 to-yellow-600 text-slate-950 rounded-xl transition shadow-md shadow-amber-500/10 cursor-pointer"
+              >
+                <Crown className="w-3.5 h-3.5 fill-current" />
+              </button>
+              <button 
+                type="button"
+                onClick={() => setShowPremiumModal(true)}
+                className="hidden lg:flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-450 hover:to-yellow-500 text-slate-950 text-[10px] font-extrabold rounded-xl transition shadow-md shadow-amber-500/10 uppercase tracking-wide cursor-pointer"
+              >
+                <Crown className="w-3.5 h-3.5 fill-current" />
+                Go VIP
+              </button>
+            </>
           )
         )}
 
         {/* Mode Switcher */}
         {currentUser && ['radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role) && (
-          <div className="hidden sm:flex items-center select-none font-sans">
+          <div className="hidden md:flex items-center select-none font-sans flex-shrink-0">
             <button
               onClick={() => {
                 if (userMode === 'admin') {
@@ -267,7 +297,7 @@ export const Header: React.FC<HeaderProps> = ({
 
                 {/* Mobile User Mode Switcher inside dropdown */}
                 {currentUser && ['radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role) && (
-                  <div className="sm:hidden p-2 border-b border-white/3 mb-1 flex items-center justify-between font-sans select-none">
+                  <div className="md:hidden p-2 border-b border-white/3 mb-1 flex items-center justify-between font-sans select-none">
                     <span className="text-[8px] text-slate-550 font-bold uppercase tracking-wider block">Active Mode</span>
                     <button
                       onClick={() => {

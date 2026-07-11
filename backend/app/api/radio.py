@@ -8,7 +8,7 @@ import random
 import secrets
 import asyncio
 from collections import deque
-from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Header
+from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Header, Request
 
 try:
     from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack, RTCConfiguration, RTCIceServer
@@ -25,8 +25,20 @@ from typing import List, Dict, Set, Optional
 
 from app.db.session import get_db
 from app.models import RadioStation, RadioSchedule, Track, Artist, User
-from app.schemas import RadioStationCreate, RadioStationUpdate, RadioStationResponse, RadioScheduleCreate, RadioScheduleResponse
-from app.api.auth import get_current_admin, get_current_user, get_current_radio_admin, get_optional_current_user, _apply_user_mode
+from app.schemas import (
+    RadioStationCreate,
+    RadioStationUpdate,
+    RadioStationResponse,
+    RadioScheduleCreate,
+    RadioScheduleResponse,
+    VerifyBroadcastKeyRequest,
+    VerifyBroadcastKeyResponse,
+)
+from app.api.auth import get_current_admin, get_current_user, get_current_radio_admin, get_optional_current_user
+from app.core.rate_limit import enforce_rate_limit
+from app.core.stream_url import validate_radio_stream_url
+from app.core.user_mode import apply_user_mode
+from app.core.ws_auth import extract_ws_token, resolve_ws_user
 from app.api.music import serialize_track
 from app.services.storage import generate_presigned_url
 from app.services.live_stream import live_stream_manager
@@ -275,9 +287,31 @@ def _ensure_stream_key_fresh(station: RadioStation, db: Session) -> None:
         db.refresh(station)
 
 
-def serialize_station(station: RadioStation, db: Session, viewer: Optional[User] = None) -> dict:
+def _verify_station_stream_key(station: RadioStation, stream_key: str) -> bool:
+    provided = stream_key.strip()
+    if not provided or not station.stream_key or station.stream_key != provided:
+        return False
+    try:
+        parts = provided.split("_")
+        if len(parts) < 4 or not provided.startswith("rs_key_"):
+            return False
+        timestamp = int(parts[-1])
+        if time.time() - timestamp > 330:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def serialize_station(
+    station: RadioStation,
+    db: Session,
+    viewer: Optional[User] = None,
+    *,
+    include_stream_key: bool = False,
+) -> dict:
     stream_key_value = None
-    if _viewer_can_see_stream_key(viewer, station):
+    if include_stream_key and _viewer_can_see_stream_key(viewer, station):
         _ensure_stream_key_fresh(station, db)
         stream_key_value = station.stream_key
 
@@ -373,7 +407,7 @@ def serialize_station(station: RadioStation, db: Session, viewer: Optional[User]
             **profile_data
         }
 
-    if station.stream_url:
+    if station.stream_url and station.stream_url.startswith("/api/radio/"):
         return {
             "id": station.id,
             "name": station.name,
@@ -442,7 +476,7 @@ def create_radio_station(
     station = RadioStation(
         name=station_in.name,
         description=station_in.description,
-        stream_url=station_in.stream_url,
+        stream_url=validate_radio_stream_url(station_in.stream_url) if station_in.stream_url else None,
         owner_id=resolved_owner_id,
         stream_key="rs_key_" + secrets.token_hex(16) + "_" + str(int(time.time())),
         is_active=True,
@@ -466,7 +500,7 @@ def create_radio_station(
     db.add(station)
     db.commit()
     db.refresh(station)
-    return serialize_station(station, db, viewer=current_user)
+    return serialize_station(station, db, viewer=current_user, include_stream_key=True)
 
 @router.put("/{id}", response_model=RadioStationResponse)
 def update_radio_station(
@@ -492,7 +526,7 @@ def update_radio_station(
     if station_in.description is not None:
         station.description = station_in.description
     if station_in.stream_url is not None:
-        station.stream_url = station_in.stream_url
+        station.stream_url = validate_radio_stream_url(station_in.stream_url)
     if station_in.current_program_title is not None:
         station.current_program_title = station_in.current_program_title
     if station_in.rj_name is not None:
@@ -558,7 +592,7 @@ def update_radio_station(
         
     db.commit()
     db.refresh(station)
-    return serialize_station(station, db, viewer=current_user)
+    return serialize_station(station, db, viewer=current_user, include_stream_key=True)
 
 @router.get("", response_model=List[RadioStationResponse])
 def list_radio_stations(
@@ -654,7 +688,7 @@ def get_station_stream_sync(
             "offset": 0.0
         }
 
-    if station.stream_url:
+    if station.stream_url and station.stream_url.startswith("/api/radio/"):
         return {
             "station_id": station.id,
             "station_name": station.name,
@@ -681,37 +715,22 @@ async def websocket_stream_endpoint(
     station = None
     try:
         if token:
-            # Validate JWT token
-            try:
-                from jose import jwt
-                from app.core.config import settings
-                from app.core.security import ALGORITHM
-                payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
-                user_id = int(payload.get("sub"))
-                
-                # Fetch user to verify role and permissions
-                from app.models import User
-                user = db.query(User).filter(User.id == user_id).first()
-                if not user:
-                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="User Not Found")
-                    return
-                    
-                if station_id:
-                    station = db.query(RadioStation).filter(RadioStation.id == station_id).first()
-                    if not station:
-                        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Station Not Found")
-                        return
-                    # Check permissions: must be admin or the station owner
-                    if user.role != "admin" and station.owner_id != user.id:
-                        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Not Authorized")
-                        return
-                else:
-                    # Find station owned by this user
-                    station = db.query(RadioStation).filter(RadioStation.owner_id == user_id).first()
-            except Exception as e:
-                print("WebSocket token validation failed:", e)
+            resolved_token = extract_ws_token(websocket, token)
+            user = resolve_ws_user(resolved_token)
+            if not user:
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Invalid Token")
                 return
+            user_id = user.id
+            if station_id:
+                station = db.query(RadioStation).filter(RadioStation.id == station_id).first()
+                if not station:
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Station Not Found")
+                    return
+                if user.role != "admin" and station.owner_id != user.id:
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Not Authorized")
+                    return
+            else:
+                station = db.query(RadioStation).filter(RadioStation.owner_id == user_id).first()
         elif stream_key:
             # Verify stream key
             station = db.query(RadioStation).filter(RadioStation.stream_key == stream_key).first()
@@ -740,8 +759,12 @@ async def websocket_stream_endpoint(
             await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Station Not Found")
             return
 
-        station_name = station.name
         resolved_station_id = station.id
+        if live_stream_manager.is_live(resolved_station_id):
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="Broadcaster already connected")
+            return
+
+        station_name = station.name
     finally:
         db.close()
 
@@ -769,10 +792,13 @@ async def websocket_listener_endpoint(
     id: int,
     skip_history: bool = False
 ):
+    try:
+        queue = live_stream_manager.register_listener(id, skip_history=skip_history)
+    except RuntimeError:
+        await websocket.close(code=1013, reason="Listener capacity reached")
+        return
+
     await websocket.accept()
-    
-    # Register this listener's queue
-    queue = live_stream_manager.register_listener(id, skip_history=skip_history)
     print(f"WebSocket listener connected to station ID: {id}", flush=True)
     
     try:
@@ -791,11 +817,12 @@ async def websocket_listener_endpoint(
 
 @router.get("/{id}/live")
 async def get_live_audio_stream(
+    request: Request,
     id: int,
     skip_history: bool = False,
     authorization: Optional[str] = Header(None),
-    x_user_mode: Optional[str] = Header(None)
 ):
+    enforce_rate_limit(request, "radio-live", limit=60, window_sec=60)
     # Custom, dependency-free optional user resolution to avoid DB connection leaks
     current_user = None
     from app.db.session import SessionLocal
@@ -812,8 +839,8 @@ async def get_live_audio_stream(
                 
                 from app.models import User
                 user = db.query(User).filter(User.id == user_id).first()
-                if user:
-                    _apply_user_mode(user, x_user_mode)
+                if user and user.is_active:
+                    apply_user_mode(user)
                     current_user = user
             except Exception:
                 pass
@@ -833,7 +860,10 @@ async def get_live_audio_stream(
         db.close()
 
     async def audio_generator():
-        queue = live_stream_manager.register_listener(id, skip_history=skip_history)
+        try:
+            queue = live_stream_manager.register_listener(id, skip_history=skip_history)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         print(f"Listener registered for station {id}", flush=True)
         try:
             while True:
@@ -868,11 +898,38 @@ async def get_live_audio_stream(
             "Connection": "keep-alive",
             "Transfer-Encoding": "chunked",
             "X-Accel-Buffering": "no",
-            "Access-Control-Allow-Origin": "*",
             "icy-name": "VeriSonic Live",
             "icy-metaint": "0",
         }
     )
+
+@router.get("/{id}/broadcast-key")
+def get_broadcast_key(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_radio_admin),
+):
+    station = db.query(RadioStation).filter(RadioStation.id == id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail="Radio station not found")
+    if current_user.role != "admin" and station.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    _ensure_stream_key_fresh(station, db)
+    return {"stream_key": station.stream_key}
+
+@router.post("/{id}/verify-broadcast-key", response_model=VerifyBroadcastKeyResponse)
+def verify_broadcast_key(
+    id: int,
+    body: VerifyBroadcastKeyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_radio_admin),
+):
+    station = db.query(RadioStation).filter(RadioStation.id == id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail="Radio station not found")
+    if current_user.role != "admin" and station.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return {"valid": _verify_station_stream_key(station, body.stream_key)}
 
 @router.post("/{id}/regenerate-key", response_model=RadioStationResponse)
 def regenerate_stream_key(
@@ -890,7 +947,7 @@ def regenerate_stream_key(
     station.stream_key = "rs_key_" + secrets.token_hex(16) + "_" + str(int(time.time()))
     db.commit()
     db.refresh(station)
-    return serialize_station(station, db, viewer=current_user)
+    return serialize_station(station, db, viewer=current_user, include_stream_key=True)
 
 
 def customize_sdp(sdp: str) -> str:

@@ -10,18 +10,17 @@ import {
 
 const originalFetch = window.fetch;
 window.fetch = async (input, init) => {
-  const mode = localStorage.getItem('userMode') || 'admin';
   init = init || {};
   const headers = new Headers(init.headers || {});
-  if (!headers.has('x-user-mode')) {
-    headers.set('x-user-mode', mode);
-  }
 
   const accessToken = getAccessToken();
   if (accessToken && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${accessToken}`);
   }
   init.headers = headers;
+  if (init.credentials === undefined) {
+    init.credentials = 'include';
+  }
 
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
   let response = await originalFetch(input, init);

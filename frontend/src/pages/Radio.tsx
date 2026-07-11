@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { RadioCard, RadioTile } from '../components/shared/RadioCard';
 import { AppModal } from '../components/shared/AppModal';
 import { showError } from '../utils/swal';
+import { fetchBroadcastKey, getAccessToken } from '../utils/authTokens';
 
 const API_URL = '/api';
 
@@ -43,6 +44,7 @@ export const Radio: React.FC = () => {
 
   // Connection credentials (broadcaster ingest)
   const [showCredentialsMap, setShowCredentialsMap] = useState<Record<number, boolean>>({});
+  const [broadcastKeyMap, setBroadcastKeyMap] = useState<Record<number, string>>({});
   const [copiedKeyMap, setCopiedKeyMap] = useState<Record<number, boolean>>({});
   const [isRegeneratingKey, setIsRegeneratingKey] = useState<Record<number, boolean>>({});
 
@@ -75,16 +77,31 @@ export const Radio: React.FC = () => {
     }
   };
 
+  const toggleCredentials = async (stationId: number) => {
+    const willOpen = !showCredentialsMap[stationId];
+    setShowCredentialsMap(prev => ({ ...prev, [stationId]: willOpen }));
+    if (willOpen && !broadcastKeyMap[stationId]) {
+      const key = await fetchBroadcastKey(stationId);
+      if (key) {
+        setBroadcastKeyMap(prev => ({ ...prev, [stationId]: key }));
+      }
+    }
+  };
+
   const handleRegenerateKey = async (stationId: number) => {
     setIsRegeneratingKey(prev => ({ ...prev, [stationId]: true }));
     try {
       const res = await fetch(`${API_URL}/radio/${stationId}/regenerate-key`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token || localStorage.getItem('token') || ''}` },
+        headers: { Authorization: `Bearer ${token || getAccessToken() || ''}` },
       });
       if (res.ok) {
         const updatedStation = await res.json();
         setStations(prev => prev.map(s => (s.id === stationId ? updatedStation : s)));
+        const key = await fetchBroadcastKey(stationId);
+        if (key) {
+          setBroadcastKeyMap(prev => ({ ...prev, [stationId]: key }));
+        }
       } else {
         const err = await res.json();
         showError('Error', err.detail || 'Failed to regenerate key.');
@@ -564,7 +581,7 @@ export const Radio: React.FC = () => {
                         <div className="border-t border-white/5 p-5 space-y-3 font-sans">
                           <button
                             type="button"
-                            onClick={() => setShowCredentialsMap(prev => ({ ...prev, [st.id]: !prev[st.id] }))}
+                            onClick={() => toggleCredentials(st.id)}
                             className={`w-full py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition cursor-pointer border ${
                               showCredentialsMap[st.id]
                                 ? 'bg-rose-500/10 border-rose-500/25 text-rose-400'
@@ -589,12 +606,12 @@ export const Radio: React.FC = () => {
                                   <input
                                     type="text"
                                     readOnly
-                                    value={st.stream_key || ''}
+                                    value={broadcastKeyMap[st.id] || ''}
                                     className="w-full bg-slate-950 border border-white/5 text-[10px] p-2.5 rounded-xl text-white font-mono font-semibold outline-none tracking-wider"
                                   />
                                   <button
                                     type="button"
-                                    onClick={() => handleCopy(st.stream_key || '', st.id)}
+                                    onClick={() => handleCopy(broadcastKeyMap[st.id] || '', st.id)}
                                     className="px-3 bg-slate-900 hover:bg-slate-800 border border-white/5 text-slate-405 hover:text-white rounded-xl transition cursor-pointer font-bold text-[10px]"
                                   >
                                     {copiedKeyMap[st.id] ? 'Copied' : 'Copy'}

@@ -4,6 +4,7 @@ import {
   clearAuthTokens,
   getAccessToken,
   setAuthTokens,
+  refreshAccessToken,
 } from '../utils/authTokens';
 import type { QualityLevelSetting } from '../utils/streamQuality';
 import { saveUserStreamQuality } from '../utils/userSettings';
@@ -89,18 +90,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
   const [hasRadioStation, setHasRadioStation] = useState<boolean>(false);
 
-  const switchUserMode = (mode: 'admin' | 'listener') => {
+  const switchUserMode = async (mode: 'admin' | 'listener') => {
     localStorage.setItem('userMode', mode);
     setUserMode(mode);
+    if (!token) return;
+    try {
+      await fetch(`${API_URL}/auth/switch-mode`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        credentials: 'include',
+        body: JSON.stringify({ mode }),
+      });
+      await fetchCurrentUser();
+    } catch {
+      // Keep local mode even if server sync fails in dev without Redis
+    }
   };
 
   useEffect(() => {
-    if (token) {
-      fetchCurrentUser();
-    } else {
-      setCurrentUser(null);
-      setIsLoading(false);
-    }
+    const bootstrap = async () => {
+      if (!getAccessToken()) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          setToken(getAccessToken());
+          return;
+        }
+        setIsLoading(false);
+        return;
+      }
+      if (token) {
+        fetchCurrentUser();
+      } else {
+        setCurrentUser(null);
+        setIsLoading(false);
+      }
+    };
+    bootstrap();
   }, [token, userMode]);
 
   const fetchCurrentUser = async () => {
@@ -147,6 +175,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await fetch(`${API_URL}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ email: cleanedEmail, password: cleanedPassword })
       });
       const data = await res.json();
@@ -202,6 +231,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await fetch(`${API_URL}/auth/google`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ email, name })
       });
       const data = await res.json();
@@ -256,6 +286,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await fetch(`${API_URL}/auth/logout`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${accessToken}` },
+          credentials: 'include',
         });
       } catch {
         // Best-effort server-side refresh token revocation

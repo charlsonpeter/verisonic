@@ -5,6 +5,7 @@ import { useAudio } from '../context/AudioContext';
 import { AppModal } from '../components/shared/AppModal';
 import { showError, showConfirm } from '../utils/swal';
 import { trackHasPlayableStream } from '../utils/streamQuality';
+import { createAuthenticatedWebSocket } from '../utils/authTokens';
 
 interface UploadQueueItem {
   id: string;
@@ -294,8 +295,9 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     if (!token) return;
 
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.host}/api/music/ws/tracks/status?token=${token}`;
-    const socket = new WebSocket(wsUrl);
+    const wsUrl = `${wsProtocol}//${window.location.host}/api/music/ws/tracks/status`;
+    const socket = createAuthenticatedWebSocket(wsUrl, token);
+    if (!socket) return;
 
     socket.onmessage = (event) => {
       try {
@@ -975,7 +977,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
+      <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
         {isLoading && tracks.length === 0 ? (
           <p className="p-8 text-xs text-slate-500 text-center">Loading audio catalog files...</p>
         ) : tracks.length === 0 ? (
@@ -1070,7 +1072,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                         onClick={() => playTrack(t)}
                         disabled={
                           currentUser?.role === 'studio_admin'
-                            ? !trackHasPlayableStream(t, token)
+                            ? !trackHasPlayableStream(t)
                             : !t.approved || !t.hls_playlist_path
                         }
                         className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 hover:text-rose-400 hover:border-rose-500/30 disabled:opacity-30 disabled:cursor-not-allowed transition"
@@ -1126,6 +1128,153 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
               })}
             </tbody>
           </table>
+        )}
+      </div>
+
+      <div className="md:hidden space-y-3">
+        {isLoading && tracks.length === 0 ? (
+          <p className="p-8 text-xs text-slate-500 text-center">Loading audio catalog files...</p>
+        ) : tracks.length === 0 ? (
+          <div className="p-12 text-center space-y-3 rounded-2xl border border-white/5 bg-slate-900/10">
+            <Music className="w-10 h-10 text-slate-600 mx-auto" />
+            <p className="text-xs text-slate-500">No tracks found. Upload tracks to see them here.</p>
+          </div>
+        ) : (
+          tracks.map((t) => {
+            const status = getStatusDetails(t);
+            const isSelected = selectedTrackIds.includes(t.id);
+            const canPlay =
+              currentUser?.role === 'studio_admin'
+                ? trackHasPlayableStream(t)
+                : !!(t.approved && t.hls_playlist_path);
+
+            return (
+              <div
+                key={t.id}
+                className={`rounded-2xl border p-4 space-y-3 transition ${
+                  isSelected
+                    ? 'border-rose-500/30 bg-rose-600/5'
+                    : 'border-white/5 bg-slate-900/20'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleTrackSelection(t.id)}
+                    className="w-4 h-4 mt-0.5 accent-rose-500 cursor-pointer flex-shrink-0"
+                    aria-label={`Select ${t.title}`}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-bold text-slate-200 truncate">{t.title}</div>
+                    {t.album_title && (
+                      <div className="text-[10px] text-slate-455 truncate mt-0.5">Album: {t.album_title}</div>
+                    )}
+                    {currentUser?.role === 'admin' && (
+                      <div className="text-[10px] text-slate-350 truncate mt-0.5">
+                        {t.artist_name || 'Unknown Artist'}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {t.file_format ? (
+                  <div className="text-[10px] text-slate-400 space-y-0.5">
+                    <div>
+                      Format: <strong className="text-slate-300">{t.file_format}</strong>
+                    </div>
+                    <div>
+                      Specs:{' '}
+                      <span className="text-slate-455">
+                        {t.sample_rate ? `${t.sample_rate}Hz` : 'N/A'} /{' '}
+                        {t.bit_depth ? `${t.bit_depth}-bit` : 'N/A'}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <span className="text-[10px] text-slate-650 italic">Pending analysis</span>
+                )}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {t.quality_score !== null ? (
+                    <button
+                      type="button"
+                      onClick={() => onViewReport?.(t)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition ${
+                        t.quality_score >= 86
+                          ? 'bg-emerald-500/10 text-emerald-400'
+                          : t.quality_score >= 71
+                            ? 'bg-cyan-500/10 text-cyan-400'
+                            : 'bg-rose-500/10 text-rose-400'
+                      }`}
+                      title="View spectral analysis report"
+                    >
+                      {t.quality_score}%
+                    </button>
+                  ) : (
+                    <span className="text-[10px] text-slate-600">Score: —</span>
+                  )}
+                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}>
+                    {status.label}
+                  </span>
+                </div>
+
+                <p className="text-[9px] text-slate-500 leading-normal">{status.desc}</p>
+
+                <div className="flex items-center justify-end gap-2 pt-1 border-t border-white/5">
+                  <button
+                    type="button"
+                    onClick={() => playTrack(t)}
+                    disabled={!canPlay}
+                    className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 active:text-rose-400 disabled:opacity-30 disabled:cursor-not-allowed transition"
+                    title="Preview Audio"
+                  >
+                    <Play className={`w-4 h-4 fill-current ${currentTrack?.id === t.id && isPlaying ? 'text-rose-400' : ''}`} />
+                  </button>
+
+                  {currentUser?.role === 'admin' && t.quality_score !== null && (
+                    t.approved ? (
+                      <button
+                        type="button"
+                        onClick={() => handleApproveToggle(t.id, false)}
+                        className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 active:text-amber-500 transition"
+                        title="Reject Track"
+                      >
+                        <Ban className="w-4 h-4" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleApproveToggle(t.id, true)}
+                        className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 active:text-emerald-500 transition"
+                        title="Approve Track"
+                      >
+                        <Check className="w-4 h-4" />
+                      </button>
+                    )
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => handleEditClick(t)}
+                    className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 active:text-cyan-400 transition"
+                    title="Edit Details"
+                  >
+                    <Edit3 className="w-4 h-4" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(t.id)}
+                    className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 active:text-rose-500 transition"
+                    title="Delete Track"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            );
+          })
         )}
       </div>
 

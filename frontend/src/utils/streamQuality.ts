@@ -13,6 +13,8 @@ export type StreamQualityTrack = {
 
 export type QualityLevelSetting = 'normal' | 'high' | 'hires' | 'lossless';
 
+import { fetchStreamTicket, buildMasterStreamUrl } from './authTokens';
+
 export const QUALITY_STORAGE_KEY = 'qualityLevelSetting';
 
 const VALID_QUALITY_LEVELS: QualityLevelSetting[] = ['normal', 'high', 'hires', 'lossless'];
@@ -74,17 +76,12 @@ function uniquePaths(paths: Array<string | undefined | null>): string[] {
   return result;
 }
 
-export function buildMasterStreamUrl(trackId: number | undefined, accessToken: string | null): string | null {
-  if (!trackId || !accessToken) return null;
-  return `/api/music/${trackId}/stream/master?access_token=${encodeURIComponent(accessToken)}`;
-}
-
 export function isMasterStreamPath(path: string): boolean {
   return path.toLowerCase().includes('/stream/master');
 }
 
 export function formatMasterStreamLabel(
-  track: Pick<StreamQualityTrack, 'file_format' | 'sample_rate' | 'bit_depth'>,
+  track: StreamQualityTrack,
 ): string {
   const fmt = track.file_format?.trim().toUpperCase() || 'STUDIO MASTER';
   const parts: string[] = [fmt];
@@ -101,13 +98,11 @@ export function formatMasterStreamLabel(
   return parts.join(' · ');
 }
 
-export function getOwnerStreamCandidates(
-  track: StreamQualityTrack,
-  accessToken: string | null = null,
-): string[] {
-  const masterUrl = buildMasterStreamUrl(track.id, accessToken);
+export function getOwnerStreamCandidates(track: StreamQualityTrack): string[] {
+  if (track.id) {
+    return [`/api/music/${track.id}/stream/master`];
+  }
   return uniquePaths([
-    masterUrl,
     track.original_file_path,
     track.hls_playlist_path,
     track.mp3_320_path,
@@ -117,29 +112,25 @@ export function getOwnerStreamCandidates(
   ]);
 }
 
-export function trackHasPlayableStream(
-  track: StreamQualityTrack,
-  accessToken: string | null = null,
-): boolean {
-  return getOwnerStreamCandidates(track, accessToken).length > 0;
+export function trackHasPlayableStream(track: StreamQualityTrack): boolean {
+  return getOwnerStreamCandidates(track).length > 0 || !!(
+    track.hls_playlist_path || track.mp3_320_path || track.aac_256_path || track.aac_128_path || track.stream_url
+  );
 }
 
 export function getStreamCandidatesForQuality(
   track: StreamQualityTrack,
   quality: QualityLevelSetting,
   isPremium: boolean,
-  accessToken: string | null = null,
 ): string[] {
   if (!isPremium) {
     return track.aac_128_path ? [track.aac_128_path] : [];
   }
 
-  const masterUrl = buildMasterStreamUrl(track.id, accessToken);
-
   switch (quality) {
     case 'lossless':
     case 'hires':
-      return masterUrl ? [masterUrl] : [];
+      return track.id ? [`/api/music/${track.id}/stream/master`] : [];
     case 'high':
       return uniquePaths([
         track.mp3_320_path,
@@ -162,9 +153,17 @@ export function getStreamCandidatesForQuality(
   }
 }
 
+export async function resolveStreamUrl(path: string, track?: StreamQualityTrack): Promise<string> {
+  if (isMasterStreamPath(path) && track?.id) {
+    const ticket = await fetchStreamTicket(track.id);
+    return buildMasterStreamUrl(track.id, ticket) || path;
+  }
+  return path;
+}
+
 export function describeStreamPath(
   path: string,
-  track?: Pick<StreamQualityTrack, 'file_format' | 'sample_rate' | 'bit_depth'>,
+  track?: StreamQualityTrack,
 ): string {
   const lower = path.toLowerCase();
   if (isMasterStreamPath(path)) {

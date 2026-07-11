@@ -9,6 +9,8 @@ import {
   loadStoredQuality,
   saveStoredQuality,
   isStudioMasterQuality,
+  isMasterStreamPath,
+  resolveStreamUrl as resolveMasterStreamUrl,
   QUALITY_LABELS,
   type QualityLevelSetting,
 } from '../utils/streamQuality';
@@ -144,10 +146,14 @@ const API_URL = '/api';
 export type { QualityLevelSetting } from '../utils/streamQuality';
 export { QUALITY_LABELS } from '../utils/streamQuality';
 
-const resolveStreamUrl = (url?: string): string => {
+const resolveStorageUrl = (url?: string): string => {
   if (!url) return "";
   if (url.startsWith("/api/")) return url;
-  return url.replace("http://localhost/storage", `${window.location.protocol}//${window.location.host}/storage`);
+  if (url.startsWith("/storage") || url.includes("/storage/")) {
+    const normalized = url.startsWith('/') ? url : `/${url}`;
+    return `${window.location.protocol}//${window.location.host}${normalized}`;
+  }
+  return "";
 };
 
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -879,12 +885,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const candidates = isRadio
       ? [trackToPlay.stream_url || trackToPlay.hls_playlist_path || ''].filter(Boolean)
       : isOwnUpload
-        ? getOwnerStreamCandidates(trackToPlay, token)
+        ? getOwnerStreamCandidates(trackToPlay)
         : getStreamCandidatesForQuality(
             trackToPlay,
             getEffectiveQuality(qualityLevelSettingRef.current, canConfigureStreamQualityRef.current),
             isPremiumRef.current,
-            token,
           );
 
     if (!isRadio && candidates.length === 0) {
@@ -1038,7 +1043,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
     };
 
-    const tryCandidate = (index: number) => {
+    const tryCandidate = async (index: number) => {
       if (!audioRef.current) return;
 
       if (index >= candidates.length) {
@@ -1049,7 +1054,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       const streamPath = candidates[index];
-      let streamUrl = resolveStreamUrl(streamPath);
+      let streamUrl = isMasterStreamPath(streamPath)
+        ? await resolveMasterStreamUrl(streamPath, trackToPlay)
+        : resolveStorageUrl(streamPath);
       if (!streamUrl) {
         tryCandidate(index + 1);
         return;
@@ -1403,7 +1410,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                 // If we were playing via WebSocket, fall back to progressive stream
                 if (audioRef.current && audioRef.current.src.startsWith('blob:')) {
                     resetAudioElementForNewSource();
-                    const fallbackUrl = resolveStreamUrl(virtualTrack.stream_url);
+                    const fallbackUrl = resolveStorageUrl(virtualTrack.stream_url);
                     audioRef.current.src = fallbackUrl;
                     audioRef.current.load();
                     audioRef.current.play().catch(() => { });
