@@ -209,6 +209,9 @@ function DashboardContent() {
       if (res.ok) {
         const data = await res.json();
         setActiveReport(data);
+        setSelectedReportTrack((prev: any) =>
+          prev ? { ...prev, quality_score: data.final_score, quality_level: data.quality_level } : prev
+        );
       } else {
         throw new Error();
       }
@@ -346,27 +349,40 @@ function DashboardContent() {
                     <h3 className="text-[10px] font-black text-rose-400 uppercase tracking-widest mb-5 font-sans">Acoustic Score Gauge</h3>
 
                     <div className="flex flex-col sm:flex-row gap-6 sm:gap-8 items-center sm:items-start">
-                      <div className="flex flex-col items-center shrink-0 sm:pt-1">
-                        {renderCircularProgress((activeReport?.final_score ?? selectedReportTrack.quality_score) || 0)}
-                        <div className="mt-4 text-center space-y-1">
-                          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block">Quality Certification</span>
-                          <span className={`px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider border shadow-md inline-block ${
-                            selectedReportTrack.quality_level === 'Studio Quality' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-emerald-950/20' :
-                            selectedReportTrack.quality_level === 'Good' ? 'bg-cyan-500/10 border-cyan-500/20 text-cyan-400 shadow-cyan-950/20' :
-                            selectedReportTrack.quality_level === 'Average' ? 'bg-amber-500/10 border-amber-500/20 text-amber-405 shadow-amber-950/20' :
-                            'bg-rose-500/10 border-rose-500/20 text-rose-455 shadow-rose-950/20'
-                          }`}>
-                            {selectedReportTrack.quality_level || 'Checking...'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {activeReport?.score_breakdown?.length > 0 && (
-                        <AcousticScoreBreakdown
-                          finalScore={activeReport.final_score ?? selectedReportTrack.quality_score ?? 0}
-                          breakdown={activeReport.score_breakdown}
-                        />
-                      )}
+                      {(() => {
+                        const breakdownTotal = activeReport?.score_breakdown?.reduce(
+                          (sum: number, item: { points_achieved?: number }) => sum + (item.points_achieved ?? 0),
+                          0,
+                        ) ?? 0;
+                        const reportScore =
+                          breakdownTotal > 0
+                            ? breakdownTotal
+                            : (activeReport?.final_score ?? selectedReportTrack.quality_score) || 0;
+                        return (
+                          <>
+                            <div className="flex flex-col items-center shrink-0 sm:pt-1">
+                              {renderCircularProgress(reportScore)}
+                              <div className="mt-4 text-center space-y-1">
+                                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block">Quality Certification</span>
+                                <span className={`px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider border shadow-md inline-block ${
+                                  selectedReportTrack.quality_level === 'Studio Quality' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-emerald-950/20' :
+                                  selectedReportTrack.quality_level === 'Good' ? 'bg-cyan-500/10 border-cyan-500/20 text-cyan-400 shadow-cyan-950/20' :
+                                  selectedReportTrack.quality_level === 'Average' ? 'bg-amber-500/10 border-amber-500/20 text-amber-405 shadow-amber-950/20' :
+                                  'bg-rose-500/10 border-rose-500/20 text-rose-455 shadow-rose-950/20'
+                                }`}>
+                                  {selectedReportTrack.quality_level || 'Checking...'}
+                                </span>
+                              </div>
+                            </div>
+                            {activeReport?.score_breakdown?.length > 0 && (
+                              <AcousticScoreBreakdown
+                                finalScore={reportScore}
+                                breakdown={activeReport.score_breakdown}
+                              />
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
 

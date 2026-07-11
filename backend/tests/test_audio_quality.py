@@ -39,6 +39,8 @@ class TestCalculateQualityScore:
         assert result["rejection_reasons"] == []
         assert len(result["score_breakdown"]) == 4
         assert result["base_score"] == 100
+        assert sum(item["points_achieved"] for item in result["score_breakdown"]) == result["quality_score"]
+        assert result["quality_score"] == 100
 
     def test_low_sample_rate_rejected(self):
         result = calculate_quality_score(

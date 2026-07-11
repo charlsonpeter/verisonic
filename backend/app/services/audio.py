@@ -232,7 +232,7 @@ def analyze_audio_spectral(file_path: str, output_img_path: str) -> dict:
 
 def build_score_breakdown(metadata: dict, spectral: dict) -> tuple[list[dict], int]:
     """
-    Build per-check score breakdown. Score starts at 100; each failed check deducts points.
+    Split 100 points across four checks. Each row's score sums to the final total.
     Returns (breakdown_items, final_score).
     """
     cutoff = float(spectral["cutoff_frequency"])
@@ -262,30 +262,34 @@ def build_score_breakdown(metadata: dict, spectral: dict) -> tuple[list[dict], i
 
     fake_deduction = 50 if is_fake_upscaled else 0
 
+    # Point split out of 100 (must sum to 100)
     checks = [
-        ("Sample Rate", sample_rate_pass, f"{sample_rate:,} Hz", "≥ 44,100 Hz", sample_rate_deduction, 40),
-        ("Bit Depth", bit_depth_pass, f"{bit_depth}-bit", "≥ 16-bit", bit_depth_deduction, 30),
+        ("Sample Rate", sample_rate_pass, f"{sample_rate:,} Hz", "≥ 44,100 Hz", sample_rate_deduction, 40, 25),
+        ("Bit Depth", bit_depth_pass, f"{bit_depth}-bit", "≥ 16-bit", bit_depth_deduction, 30, 20),
         (
             "Spectral Cutoff Frequency",
             cutoff_pass,
             f"{cutoff:,.0f} Hz ({cutoff / 1000:.2f} kHz)",
-            "≥ 19 kHz: 40 · ≥ 17 kHz: 30 · ≥ 15 kHz: 20 · below 15 kHz: 0",
+            "35 pts · ≥ 17 kHz pass",
             cutoff_deduction,
             40,
+            35,
         ),
         (
             "Upscale / Transcode Detection",
             not is_fake_upscaled,
             "Detected" if is_fake_upscaled else "Not detected",
-            "Must not be upscaled",
+            "20 pts · must not be upscaled",
             fake_deduction,
             50,
+            20,
         ),
     ]
 
     breakdown = []
-    for check, passed, value, threshold, deduction, max_points in checks:
-        achieved = max_points - deduction
+    for check, passed, value, threshold, deduction, max_deduction, weight in checks:
+        points_lost = round(weight * deduction / max_deduction) if max_deduction and deduction else 0
+        achieved = weight - points_lost
         breakdown.append(
             {
                 "check": check,
@@ -294,14 +298,13 @@ def build_score_breakdown(metadata: dict, spectral: dict) -> tuple[list[dict], i
                 "threshold": threshold,
                 "passed": passed,
                 "deduction": deduction,
-                "max_points": max_points,
+                "max_points": weight,
                 "points_achieved": achieved,
-                "calculation": f"{max_points} − {deduction} = {achieved}",
+                "calculation": f"{weight} − {points_lost} = {achieved}",
             }
         )
 
-    total_deduction = sum(item["deduction"] for item in breakdown)
-    final_score = max(0, min(100, 100 - total_deduction))
+    final_score = sum(item["points_achieved"] for item in breakdown)
     return breakdown, final_score
 
 

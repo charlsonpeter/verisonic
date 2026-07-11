@@ -5,7 +5,7 @@ import asyncio
 from fastapi import Request, APIRouter, Depends, HTTPException, UploadFile, File, Form, status, WebSocket, WebSocketDisconnect, Query
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional, Tuple
 from jose import jwt, JWTError
 
@@ -78,6 +78,40 @@ def _radio_admin_blocked_from_music(user) -> bool:
     return real_role == "radio_admin" and user.role == "radio_admin"
 
 
+def _resolve_quality_score(
+    track: Track,
+    db: Session,
+    *,
+    persist: bool = False,
+) -> tuple[Optional[int], Optional[str]]:
+    """Recompute quality score from analysis report so list and report stay in sync."""
+    report = track.analysis_report
+    if not report and track.id:
+        report = db.query(AudioAnalysisReport).filter(AudioAnalysisReport.track_id == track.id).first()
+    if not report or report.cutoff_frequency is None:
+        return track.quality_score, track.quality_level
+
+    metadata = {
+        "sample_rate": track.sample_rate or 0,
+        "bit_depth": track.bit_depth or 0,
+        "codec": (track.file_format or "").lower(),
+    }
+    spectral = {
+        "cutoff_frequency": report.cutoff_frequency,
+        "max_frequency": report.max_frequency or 0,
+    }
+    quality = calculate_quality_score(metadata, spectral)
+    score = quality["quality_score"]
+    level = quality["quality_level"]
+
+    if persist and (track.quality_score != score or track.quality_level != level):
+        track.quality_score = score
+        track.quality_level = level
+        db.add(track)
+
+    return score, level
+
+
 def _resolve_stream_user(
     access_token: Optional[str],
     credentials: Optional[HTTPAuthorizationCredentials],
@@ -131,6 +165,8 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
         aac_256_url = None
         hls_url = None
 
+    quality_score, quality_level = _resolve_quality_score(track, db)
+
     return {
         "id": track.id,
         "title": track.title,
@@ -145,8 +181,8 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
         "sample_rate": track.sample_rate,
         "bit_depth": track.bit_depth,
         "channels": track.channels,
-        "quality_score": track.quality_score,
-        "quality_level": track.quality_level,
+        "quality_score": quality_score,
+        "quality_level": quality_level,
         "approved": track.approved,
         "original_file_path": original_url,
         "hls_playlist_path": hls_url,
@@ -555,13 +591,28 @@ def manage_tracks(
     Artist sees only their own uploaded tracks.
     """
     if current_user.role == "admin":
-        tracks = db.query(Track).order_by(Track.created_at.desc()).all()
+        tracks = (
+            db.query(Track)
+            .options(joinedload(Track.analysis_report))
+            .order_by(Track.created_at.desc())
+            .all()
+        )
     else:
         artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
         if not artist:
             return []
-        tracks = db.query(Track).filter(Track.artist_id == artist.id).order_by(Track.created_at.desc()).all()
-        
+        tracks = (
+            db.query(Track)
+            .options(joinedload(Track.analysis_report))
+            .filter(Track.artist_id == artist.id)
+            .order_by(Track.created_at.desc())
+            .all()
+        )
+
+    for t in tracks:
+        _resolve_quality_score(t, db, persist=True)
+    db.commit()
+
     return [serialize_track(t, db, viewer=current_user) for t in tracks]
 
 @router.get("/{id}/stream/master")
@@ -733,6 +784,10 @@ def get_quality_report(
     breakdown, computed_score = build_score_breakdown(metadata, spectral)
     quality = calculate_quality_score(metadata, spectral)
 
+    _resolve_quality_score(track, db, persist=True)
+    db.commit()
+    computed_score, quality_level = _resolve_quality_score(track, db)
+
     return QualityReportDetailResponse(
         id=report.id,
         track_id=report.track_id,
@@ -742,8 +797,8 @@ def get_quality_report(
         spectrogram_path=spectrogram_path,
         created_at=report.created_at,
         base_score=100,
-        final_score=track.quality_score if track.quality_score is not None else computed_score,
-        quality_level=track.quality_level,
+        final_score=computed_score,
+        quality_level=quality_level or track.quality_level,
         score_breakdown=[ScoreBreakdownItem(**item) for item in breakdown],
         rejection_reasons=quality["rejection_reasons"],
         quality_tiers=[QualityScoreTier(**tier) for tier in QUALITY_SCORE_TIERS],
