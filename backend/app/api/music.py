@@ -561,7 +561,7 @@ def manage_tracks(
             return []
         tracks = db.query(Track).filter(Track.artist_id == artist.id).order_by(Track.created_at.desc()).all()
         
-    return [serialize_track(t, db) for t in tracks]
+    return [serialize_track(t, db, viewer=current_user) for t in tracks]
 
 @router.get("/{id}/stream/master")
 def stream_master(
