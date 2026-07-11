@@ -102,7 +102,11 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   }, [currentTrack?.lyrics]);
 
   const { userMode, currentUser } = useAuth();
-  const isAdminMode = !!(userMode === 'admin' && currentUser && ['radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role));
+  const isRadioAdminInAdminMode = !!(
+    userMode === 'admin' &&
+    currentUser &&
+    (currentUser.real_role || currentUser.role) === 'radio_admin'
+  );
   const isOffline = !!(activeRadioStation && (activeRadioStation.is_online === false || activeRadioStation.is_active === false));
 
   const getRadioDisplayInfo = () => {
@@ -262,7 +266,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               <h4 className="font-bold text-white text-sm truncate max-w-[150px]">
                 {activeRadioStation ? getRadioDisplayInfo()?.title : currentTrack?.title}
               </h4>
-              {currentTrack && !isAdminMode && (
+              {currentTrack && !isRadioAdminInAdminMode && (
                 <button 
                   onClick={(e) => { e.stopPropagation(); toggleFavorite(currentTrack.id); }} 
                   className={`flex-shrink-0 transition ${isFav ? 'text-rose-500 scale-110' : 'text-slate-500 hover:text-slate-350'}`}
@@ -333,7 +337,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); playPrevious(); }}
-              disabled={isRadioSync || isAdminMode}
+              disabled={isRadioSync || isRadioAdminInAdminMode}
               className="p-1 text-slate-400 active:text-white transition disabled:opacity-20"
               title="Previous"
             >
@@ -357,7 +361,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); playNext(); }}
-              disabled={isRadioSync || isAdminMode}
+              disabled={isRadioSync || isRadioAdminInAdminMode}
               className="p-1 text-slate-400 active:text-white transition disabled:opacity-20"
               title="Next"
             >
@@ -372,7 +376,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             <div className="flex items-center justify-center gap-6">
               <button 
                 onClick={toggleShuffle} 
-                disabled={isRadioSync || isAdminMode}
+                disabled={isRadioSync || isRadioAdminInAdminMode}
                 className={`transition ${isShuffle ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'} disabled:opacity-30`}
                 title="Shuffle Queue"
               >
@@ -381,7 +385,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
               <button 
                 onClick={playPrevious} 
-                disabled={isRadioSync || isAdminMode}
+                disabled={isRadioSync || isRadioAdminInAdminMode}
                 className="text-slate-400 hover:text-white transition disabled:opacity-30"
                 title="Previous"
               >
@@ -399,7 +403,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
               <button 
                 onClick={playNext} 
-                disabled={isRadioSync || isAdminMode}
+                disabled={isRadioSync || isRadioAdminInAdminMode}
                 className="text-slate-400 hover:text-white transition disabled:opacity-30"
                 title="Next"
               >
@@ -412,7 +416,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                   else if (repeatMode === 'all') setRepeatMode('one');
                   else setRepeatMode('none');
                 }} 
-                disabled={isRadioSync || isAdminMode}
+                disabled={isRadioSync || isRadioAdminInAdminMode}
                 className={`transition relative ${repeatMode !== 'none' ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'} disabled:opacity-30`}
                 title={`Repeat Mode: ${repeatMode}`}
               >
@@ -493,7 +497,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               <ListMusic className="w-[18px] h-[18px]" />
             </button>
 
-            {hasLyrics && !isAdminMode && (
+            {hasLyrics && !isRadioAdminInAdminMode && (
               <button 
                 onClick={onToggleLyrics}
                 className={`transition ${isLyricsOpen ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'}`}
@@ -550,12 +554,12 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (hasLyrics && !isAdminMode) {
+                  if (hasLyrics && !isRadioAdminInAdminMode) {
                     setMobileLyricsOpen(true);
                   }
                 }}
                 className={`relative block p-0 w-60 h-60 sm:w-72 sm:h-72 rounded-3xl overflow-hidden border border-white/10 shadow-2xl transition active:scale-[0.98] ${
-                  hasLyrics && !isAdminMode ? 'cursor-pointer' : 'cursor-default'
+                  hasLyrics && !isRadioAdminInAdminMode ? 'cursor-pointer' : 'cursor-default'
                 }`}
                 aria-label={hasLyrics ? 'Show lyrics' : 'Album art'}
               >
@@ -577,7 +581,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             </div>
 
             {/* Lyrics overlay — sibling outside cover div, fills parent */}
-            {mobileLyricsOpen && hasLyrics && !isAdminMode && (
+            {mobileLyricsOpen && hasLyrics && !isRadioAdminInAdminMode && (
               <button
                 type="button"
                 onClick={() => setMobileLyricsOpen(false)}
@@ -622,7 +626,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                   {activeRadioStation ? getRadioDisplayInfo()?.subtitle : currentTrack?.artist_name}
                 </p>
               </div>
-              {currentTrack && !isAdminMode && (
+              {currentTrack && !isRadioAdminInAdminMode && (
                 <button 
                   onClick={() => toggleFavorite(currentTrack.id)} 
                   className={`w-10 h-10 rounded-full bg-white/5 flex items-center justify-center transition active:scale-90 ${isFav ? 'text-rose-500 bg-rose-500/10' : 'text-slate-450'}`}
@@ -694,7 +698,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             <div className="flex items-center justify-between px-2">
               <button 
                 onClick={toggleShuffle} 
-                disabled={isRadioSync || isAdminMode}
+                disabled={isRadioSync || isRadioAdminInAdminMode}
                 className={`w-9 h-9 flex items-center justify-center rounded-full transition active:scale-95 ${isShuffle ? 'text-rose-400 bg-rose-500/5' : 'text-slate-550'} disabled:opacity-30`}
               >
                 <Shuffle className="w-4 h-4" />
@@ -702,7 +706,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
               <button 
                 onClick={playPrevious} 
-                disabled={isRadioSync || isAdminMode}
+                disabled={isRadioSync || isRadioAdminInAdminMode}
                 className="w-11 h-11 flex items-center justify-center text-slate-350 active:scale-95 disabled:opacity-30"
               >
                 <SkipBack className="w-5.5 h-5.5 fill-current" />
@@ -718,7 +722,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
               <button 
                 onClick={playNext} 
-                disabled={isRadioSync || isAdminMode}
+                disabled={isRadioSync || isRadioAdminInAdminMode}
                 className="w-11 h-11 flex items-center justify-center text-slate-350 active:scale-95 disabled:opacity-30"
               >
                 <SkipForward className="w-5.5 h-5.5 fill-current" />
@@ -730,7 +734,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                   else if (repeatMode === 'all') setRepeatMode('one');
                   else setRepeatMode('none');
                 }} 
-                disabled={isRadioSync || isAdminMode}
+                disabled={isRadioSync || isRadioAdminInAdminMode}
                 className={`w-9 h-9 flex items-center justify-center rounded-full transition relative active:scale-95 ${repeatMode !== 'none' ? 'text-rose-400 bg-rose-500/5' : 'text-slate-550'} disabled:opacity-30`}
               >
                 <Repeat className="w-4 h-4" />

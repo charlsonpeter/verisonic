@@ -1,5 +1,5 @@
 import React from 'react';
-import { Compass, Radio, Search, Heart, FolderHeart, UploadCloud } from 'lucide-react';
+import { Compass, Radio, Search, Heart, FolderHeart, Music, Mail } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 interface MobileNavProps {
@@ -24,9 +24,8 @@ export const MobileNav: React.FC<MobileNavProps> = ({ activeTab, setActiveTab })
     ? [{ id: 'radio', label: 'Radio', icon: Radio }]
     : isStudioAdminInAdminMode
       ? [
-          { id: 'tracks', label: 'Studio', icon: UploadCloud },
-          { id: 'home', label: 'Home', icon: Compass },
-          { id: 'search', label: 'Search', icon: Search },
+          { id: 'track-list', label: 'Tracks', icon: Music },
+          { id: 'contact', label: 'Contact', icon: Mail },
         ]
       : [
         { id: 'home', label: 'Home', icon: Compass },

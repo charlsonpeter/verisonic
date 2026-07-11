@@ -573,11 +573,22 @@ def stream_master(
 ):
     """Stream the original studio master with HTTP Range support (premium only)."""
     current_user = _resolve_stream_user(access_token, credentials, db)
-    if not user_has_premium(current_user):
-        raise HTTPException(status_code=403, detail="Premium subscription required")
 
     track = db.query(Track).filter(Track.id == id).first()
-    if not track or not track.approved or not track.original_file_path:
+    if not track or not track.original_file_path:
+        raise HTTPException(status_code=404, detail="Track master not available")
+
+    is_owner = False
+    if current_user.role == "admin":
+        is_owner = True
+    else:
+        artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+        is_owner = bool(artist and track.artist_id == artist.id)
+
+    if not is_owner and not user_has_premium(current_user):
+        raise HTTPException(status_code=403, detail="Premium subscription required")
+
+    if not track.approved and not is_owner and current_user.role != "admin":
         raise HTTPException(status_code=404, detail="Track master not available")
 
     if track.artist and not track.artist.is_active and current_user.role != "admin":

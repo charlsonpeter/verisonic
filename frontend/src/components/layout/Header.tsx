@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   Search, Crown, Signal, User, ChevronDown, 
   Compass, Radio, Heart, FolderHeart, UploadCloud,
-  ShieldCheck, BarChart2, Settings, LogOut, Disc, Mail, Laptop
+  ShieldCheck, BarChart2, Settings, LogOut, Disc, Mail, Laptop, Music
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useAudio } from '../../context/AudioContext';
@@ -41,6 +41,11 @@ export const Header: React.FC<HeaderProps> = ({
     (currentUser.real_role || currentUser.role) === 'radio_admin' &&
     userMode === 'admin';
 
+  const isStudioAdminInAdminMode =
+    !!currentUser &&
+    (currentUser.real_role || currentUser.role) === 'studio_admin' &&
+    userMode === 'admin';
+
   const isPaidSubscriber = hasPaidSubscription(currentUser);
   const isOnTrial = isOnFreeTrial(currentUser);
   const tierLabel = getAccountTierLabel(currentUser);
@@ -51,7 +56,12 @@ export const Header: React.FC<HeaderProps> = ({
         { id: 'broadcaster-download', label: 'Broadcaster App', icon: Laptop },
         { id: 'contact', label: 'Contact Us', icon: Mail }
       ]
-    : [
+    : isStudioAdminInAdminMode
+      ? [
+          { id: 'track-list', label: 'Tracks List', icon: Music },
+          { id: 'contact', label: 'Contact Us', icon: Mail }
+        ]
+      : [
         { id: 'home', label: 'Home Feed', icon: Compass },
         { id: 'radio', label: 'Radio Stations', icon: Radio },
         { id: 'search', label: 'Search', icon: Search },
@@ -67,7 +77,10 @@ export const Header: React.FC<HeaderProps> = ({
 
   const handleLogoClick = () => {
     if (currentUser && userMode === 'admin') {
-      setActiveTab((currentUser.real_role || currentUser.role) === 'radio_admin' ? 'radio' : 'home');
+      const role = currentUser.real_role || currentUser.role;
+      if (role === 'radio_admin') setActiveTab('radio');
+      else if (role === 'studio_admin') setActiveTab('track-list');
+      else setActiveTab('home');
       return;
     }
     setActiveTab('home');
@@ -186,7 +199,8 @@ export const Header: React.FC<HeaderProps> = ({
                   setActiveTab('home');
                 } else {
                   switchUserMode('admin');
-                  setActiveTab(currentUser.real_role === 'radio_admin' ? 'radio' : 'home');
+                  const role = currentUser.real_role || currentUser.role;
+                  setActiveTab(role === 'radio_admin' ? 'radio' : role === 'studio_admin' ? 'track-list' : 'home');
                 }
               }}
               className={`w-20 h-7 rounded-full p-0.5 transition-colors duration-300 outline-none cursor-pointer relative flex items-center ${
@@ -262,7 +276,8 @@ export const Header: React.FC<HeaderProps> = ({
                           handleDropdownSelect('home');
                         } else {
                           switchUserMode('admin');
-                          handleDropdownSelect(currentUser.real_role === 'radio_admin' ? 'radio' : 'home');
+                          const role = currentUser.real_role || currentUser.role;
+                          handleDropdownSelect(role === 'radio_admin' ? 'radio' : role === 'studio_admin' ? 'track-list' : 'home');
                         }
                       }}
                       className={`w-20 h-7 rounded-full p-0.5 transition-colors duration-300 outline-none cursor-pointer relative flex items-center ${

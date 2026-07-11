@@ -5,6 +5,7 @@ import {
   describeStreamPath,
   getEffectiveQuality,
   getStreamCandidatesForQuality,
+  getOwnerStreamCandidates,
   loadStoredQuality,
   saveStoredQuality,
   isStudioMasterQuality,
@@ -26,6 +27,7 @@ import {
 export interface Track {
   id: number;
   title: string;
+  artist_id?: number;
   artist_name: string;
   artist_name_override?: string;
   album_title?: string;
@@ -487,9 +489,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [token]);
 
-  // Stop library music/other stations playback when switching to Admin Mode
+  // Stop library music/other stations playback when radio admin switches to Admin Mode
   useEffect(() => {
-    if (userMode === 'admin' && currentUser && ['radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role)) {
+    if (
+      userMode === 'admin' &&
+      currentUser &&
+      (currentUser.real_role || currentUser.role) === 'radio_admin'
+    ) {
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = '';
@@ -857,15 +863,29 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     if (epoch !== playbackEpochRef.current) return;
 
+    const role = currentUser?.real_role || currentUser?.role;
+    const isOwnUpload =
+      !isRadio &&
+      role === 'studio_admin' &&
+      !!currentUser?.artist_profile?.id &&
+      trackToPlay.artist_id === currentUser.artist_profile.id;
+
+    if (isStaffInAdminMode && role === 'studio_admin' && !isRadio && !isOwnUpload) {
+      console.warn("Studio admins in admin mode can only play tracks they uploaded.");
+      return;
+    }
+
     // Determine stream candidates from quality preference and subscription tier
     const candidates = isRadio
       ? [trackToPlay.stream_url || trackToPlay.hls_playlist_path || ''].filter(Boolean)
-      : getStreamCandidatesForQuality(
-          trackToPlay,
-          getEffectiveQuality(qualityLevelSettingRef.current, canConfigureStreamQualityRef.current),
-          isPremiumRef.current,
-          token,
-        );
+      : isOwnUpload
+        ? getOwnerStreamCandidates(trackToPlay, token)
+        : getStreamCandidatesForQuality(
+            trackToPlay,
+            getEffectiveQuality(qualityLevelSettingRef.current, canConfigureStreamQualityRef.current),
+            isPremiumRef.current,
+            token,
+          );
 
     if (!isRadio && candidates.length === 0) {
       const effectiveQuality = getEffectiveQuality(

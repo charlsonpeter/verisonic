@@ -101,6 +101,29 @@ export function formatMasterStreamLabel(
   return parts.join(' · ');
 }
 
+export function getOwnerStreamCandidates(
+  track: StreamQualityTrack,
+  accessToken: string | null = null,
+): string[] {
+  const masterUrl = buildMasterStreamUrl(track.id, accessToken);
+  return uniquePaths([
+    masterUrl,
+    track.original_file_path,
+    track.hls_playlist_path,
+    track.mp3_320_path,
+    track.aac_256_path,
+    track.aac_128_path,
+    track.stream_url,
+  ]);
+}
+
+export function trackHasPlayableStream(
+  track: StreamQualityTrack,
+  accessToken: string | null = null,
+): boolean {
+  return getOwnerStreamCandidates(track, accessToken).length > 0;
+}
+
 export function getStreamCandidatesForQuality(
   track: StreamQualityTrack,
   quality: QualityLevelSetting,

@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
 import { AppModal } from '../components/shared/AppModal';
 import { showError, showConfirm } from '../utils/swal';
+import { trackHasPlayableStream } from '../utils/streamQuality';
 
 interface UploadQueueItem {
   id: string;
@@ -963,7 +964,11 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                     <td className="p-5 text-center">
                       <button
                         onClick={() => playTrack(t)}
-                        disabled={!t.approved || !t.hls_playlist_path}
+                        disabled={
+                          currentUser?.role === 'studio_admin'
+                            ? !trackHasPlayableStream(t, token)
+                            : !t.approved || !t.hls_playlist_path
+                        }
                         className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 hover:text-rose-400 hover:border-rose-500/30 disabled:opacity-30 disabled:cursor-not-allowed transition"
                         title="Preview Audio"
                       >

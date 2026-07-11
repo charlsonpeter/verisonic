@@ -41,6 +41,7 @@ import { AuthPage } from './pages/AuthPage';
 import { ForceAdminPasswordReset } from './pages/ForceAdminPasswordReset';
 import { UsersManagement } from './pages/UsersManagement';
 import { TracksManagement } from './pages/TracksManagement';
+import { StudioTrackList } from './pages/StudioTrackList';
 import { Contact } from './pages/Contact';
 import { BroadcasterDownload } from './pages/BroadcasterDownload';
 import { AdminAnalytics } from './pages/AdminAnalytics';
@@ -130,6 +131,25 @@ function DashboardContent() {
       }
     }
   }, [currentUser, activeTab, hasRadioStation, userMode]);
+
+  // Restrict studio admin admin mode to tracks list, contact, and account-menu pages
+  useEffect(() => {
+    const role = currentUser?.real_role || currentUser?.role;
+    if (currentUser && role === 'studio_admin' && userMode === 'admin') {
+      const allowed = new Set([
+        'track-list',
+        'contact',
+        'profile',
+        'studio-profile',
+        'tracks',
+        'reports',
+        'admin-password-reset',
+      ]);
+      if (!allowed.has(activeTab)) {
+        setActiveTab('track-list');
+      }
+    }
+  }, [currentUser, activeTab, userMode]);
 
   useEffect(() => {
     if (activeTab === 'discover') {
@@ -281,6 +301,8 @@ function DashboardContent() {
         return <UsersManagement />;
       case 'tracks':
         return <TracksManagement onViewReport={viewQualityReport} />;
+      case 'track-list':
+        return <StudioTrackList />;
       case 'contact':
         return <Contact />;
       case 'broadcaster-download':
