@@ -85,7 +85,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const data = await res.json();
         const userWithSub: User = {
           ...data,
-          subscription: data.role === 'admin' ? 'premium' : (data.subscription || 'free'),
+          subscription: data.subscription || 'free',
           subscription_cycle: data.subscription_cycle || null,
           must_reset_password: data.must_reset_password ?? false,
         };
@@ -242,13 +242,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return diffDays >= 0 && diffDays <= 7;
   };
 
+  const userRole = currentUser?.real_role || currentUser?.role;
+
   const isPremium =
     ['premium', 'unlimited'].includes(currentUser?.subscription || '') ||
-    currentUser?.role === 'admin' ||
-    currentUser?.role === 'studio_admin' ||
+    userRole === 'admin' ||
+    userRole === 'studio_admin' ||
+    userRole === 'radio_admin' ||
     (currentUser?.subscription === 'free' && isTrialActive());
-
-  const userRole = currentUser?.real_role || currentUser?.role;
   const isStaffInAdminMode =
     (userRole === 'radio_admin' || userRole === 'studio_admin') && userMode === 'admin';
   const canUsePlaylists = !!token && !isStaffInAdminMode;

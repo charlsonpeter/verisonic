@@ -1,7 +1,8 @@
 import React from 'react';
-import { Crown, CheckCircle2, X, Star, Zap, ShieldCheck } from 'lucide-react';
+import { Crown, CheckCircle2, X } from 'lucide-react';
 import { useAudio } from '../../context/AudioContext';
 import { useAuth } from '../../context/AuthContext';
+import { showInfo } from '../../utils/swal';
 
 interface PremiumModalProps {
   onNavigate: (tab: string) => void;
@@ -29,6 +30,13 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({ onNavigate }) => {
 
   const handleUpgradeClick = () => {
     setShowPremiumModal(false);
+    if (currentUser) {
+      showInfo(
+        'Studio VIP',
+        'Self-service checkout is not available yet. Contact your platform administrator to upgrade to Premium or Unlimited.',
+      );
+      return;
+    }
     onNavigate('settings');
   };
 
@@ -87,7 +95,7 @@ export const PremiumModal: React.FC<PremiumModalProps> = ({ onNavigate }) => {
               onClick={handleUpgradeClick}
               className="w-full md:w-auto px-8 py-3.5 bg-gradient-to-r from-rose-600 to-rose-500 text-white text-sm font-bold rounded-2xl hover:scale-[1.01] hover:shadow-lg hover:shadow-rose-600/25 transition duration-300"
             >
-              Upgrade Subscriptions
+              Request Studio VIP Upgrade
             </button>
           ) : (
             <>

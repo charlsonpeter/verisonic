@@ -25,6 +25,45 @@ export const Settings: React.FC = () => {
     return Math.max(0, Math.ceil(7 - diffDays));
   };
 
+  const userRole = currentUser?.real_role || currentUser?.role;
+
+  const getAccountTierLabel = () => {
+    if (!currentUser) return 'Not signed in';
+    if (userRole === 'admin' || userRole === 'studio_admin') return 'Studio Master VIP (Active)';
+    if (userRole === 'radio_admin') return 'Radio Broadcaster VIP (Active)';
+    if (currentUser.subscription === 'unlimited') return 'Super Master Unlimited (Active)';
+    if (currentUser.subscription === 'premium') {
+      return currentUser.subscription_cycle === 'yearly'
+        ? 'Premium - Yearly Subscription (Active)'
+        : 'Premium - Monthly Subscription (Active)';
+    }
+    const trialDays = getTrialDaysLeft();
+    if (trialDays > 0) return `Free Trial (Active - ${trialDays} Days Left)`;
+    return 'Free Preview Tier';
+  };
+
+  const getSubscriptionMessage = () => {
+    if (!currentUser) return '';
+    if (userRole === 'admin' || userRole === 'studio_admin' || userRole === 'radio_admin') {
+      return 'You have full platform access through your staff account.';
+    }
+    if (currentUser.subscription === 'premium' || currentUser.subscription === 'unlimited') {
+      return 'Your subscription is active. Thank you for supporting authentic lossless music and radio artists.';
+    }
+    const trialDays = getTrialDaysLeft();
+    if (trialDays > 0) {
+      return `Your free trial includes premium features for ${trialDays} more day${trialDays === 1 ? '' : 's'}.`;
+    }
+    return 'Upgrade to access uncompressed audio, save playlists, and listen without 30-second previews.';
+  };
+
+  const handleVipUpgrade = () => {
+    showInfo(
+      'Studio VIP',
+      'Self-service checkout is not available yet. Contact your platform administrator to upgrade to Premium or Unlimited.',
+    );
+  };
+
   // Broadcaster states
   const [station, setStation] = useState<any>(null);
   const [isRegeneratingKey, setIsRegeneratingKey] = useState(false);
@@ -341,31 +380,21 @@ export const Settings: React.FC = () => {
               <div>
                 <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Current Account Tier</span>
                 <span className="text-base font-extrabold text-white mt-1 block">
-                  {currentUser?.subscription === 'unlimited' && "Super Master Unlimited (Active)"}
-                  {currentUser?.subscription === 'premium' && (
-                    currentUser?.subscription_cycle === 'yearly'
-                      ? "Premium - Yearly Subscription (Active)"
-                      : "Premium - Monthly Subscription (Active)"
-                  )}
-                  {(!currentUser?.subscription || currentUser?.subscription === 'free') && (
-                    currentUser?.role === 'admin' || currentUser?.role === 'studio_admin'
-                      ? "Studio Master VIP (Active)"
-                      : getTrialDaysLeft() > 0
-                        ? `Free Trial (Active - ${getTrialDaysLeft()} Days Left)`
-                        : "Free Preview Tier"
-                  )}
+                  {getAccountTierLabel()}
                 </span>
               </div>
 
               <p className="text-[11px] text-slate-400 leading-relaxed font-semibold">
-                {isPremium 
-                  ? "Your billing cycle renews automatically. Thank you for supporting authentic lossless music and radio artists." 
-                  : "You are currently in guest mode. Upgrade to access uncompressed FLAC audio, save playlists, and listen without 30s limits."}
+                {getSubscriptionMessage()}
               </p>
 
               {!isPremium && (
-                <button className="w-full sm:w-auto px-6 py-2.5 bg-gradient-to-r from-amber-500 to-yellow-600 text-slate-955 text-xs font-bold rounded-xl shadow-md hover:scale-[1.01] transition duration-300 uppercase tracking-wider cursor-pointer">
-                  Activate Studio VIP ($14.99/mo)
+                <button
+                  type="button"
+                  onClick={handleVipUpgrade}
+                  className="w-full sm:w-auto px-6 py-2.5 bg-gradient-to-r from-amber-500 to-yellow-600 text-slate-955 text-xs font-bold rounded-xl shadow-md hover:scale-[1.01] transition duration-300 uppercase tracking-wider cursor-pointer"
+                >
+                  Request Studio VIP Upgrade
                 </button>
               )}
             </div>
