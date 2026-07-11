@@ -155,6 +155,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [activeStreamLabel, setActiveStreamLabel] = useState<string | null>(null);
   const qualityLevelSettingRef = useRef<QualityLevelSetting>('normal');
   const pendingSeekRef = useRef<number | null>(null);
+  const currentTimeRef = useRef(0);
   const applyQualityChangeRef = useRef<(quality: QualityLevelSetting) => void>(() => {});
   const playTrackRef = useRef<(track: Track, isRadio?: boolean, autoPlay?: boolean) => void | Promise<void>>(async () => {});
   const [equalizerBars, setEqualizerBars] = useState<number[]>(new Array(20).fill(0));
@@ -435,6 +436,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     };
     const onTimeUpdate = () => {
+      currentTimeRef.current = audio.currentTime;
       setCurrentTime(audio.currentTime);
       // Update Chrome's notification seek bar position
       if ('mediaSession' in navigator && !activeRadioStationRef.current && audio.duration && isFinite(audio.duration)) {
@@ -703,6 +705,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const playTrack = async (track: Track, isRadio = false, autoPlay = true) => {
     if (!audioRef.current) return;
     const epoch = playbackEpochRef.current;
+    const resumePosition = pendingSeekRef.current;
+    pendingSeekRef.current = null;
 
     if (isRadio) {
       hasSyncedLiveHeadRef.current = false;
@@ -763,9 +767,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
 
-    const seekAfterLoad = pendingSeekRef.current;
-    pendingSeekRef.current = null;
+    const seekAfterLoad = resumePosition;
     let seekRestoreCleanup: (() => void) | null = null;
+    const shouldRestorePosition =
+      seekAfterLoad !== null && Number.isFinite(seekAfterLoad) && seekAfterLoad > 0.25;
 
     const beginPlayback = () => {
       if (epoch !== playbackEpochRef.current || !audioRef.current) return;
@@ -787,13 +792,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         seekRestoreCleanup?.();
         seekRestoreCleanup = null;
 
-        if (seekAfterLoad === null || seekAfterLoad < 0 || !audioRef.current) {
+        if (!shouldRestorePosition || !audioRef.current) {
           resolve();
           return;
         }
 
         const audio = audioRef.current;
-        const target = seekAfterLoad;
+        const target = seekAfterLoad as number;
         let settled = false;
 
         const finish = () => {
@@ -804,48 +809,75 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           resolve();
         };
 
-        const trySeek = () => {
-          if (settled || !audioRef.current) return;
+        const seekToTarget = (): boolean => {
+          if (!audioRef.current) return true;
           const maxTime =
             audio.duration && Number.isFinite(audio.duration) ? audio.duration : target;
           const seekTo = Math.min(target, maxTime);
-          if (Math.abs(audio.currentTime - seekTo) > 0.25) {
+          if (Math.abs(audio.currentTime - seekTo) > 0.35) {
             try {
               audio.currentTime = seekTo;
             } catch {
-              // Buffer not ready yet — retry on media events.
+              return false;
             }
           }
-          if (Math.abs(audio.currentTime - seekTo) <= 0.5) {
-            finish();
-          }
+          return Math.abs(audio.currentTime - seekTo) <= 0.5;
         };
 
         const cleanup = () => {
-          seekEvents.forEach((event) => audio.removeEventListener(event, trySeek));
-          hlsRef.current?.off(Hls.Events.FRAG_BUFFERED, onFragBuffered);
+          seekEvents.forEach((event) => audio.removeEventListener(event, onMediaEvent));
+          hlsRef.current?.off(Hls.Events.FRAG_BUFFERED, onHlsBuffered);
+          hlsRef.current?.off(Hls.Events.LEVEL_LOADED, onHlsBuffered);
           clearTimeout(timeoutId);
           if (seekRestoreCleanup === cleanup) {
             seekRestoreCleanup = null;
           }
         };
 
-        const seekEvents = ['loadedmetadata', 'canplay', 'durationchange', 'seeked'] as const;
-        seekEvents.forEach((event) => audio.addEventListener(event, trySeek));
+        const onMediaEvent = () => {
+          if (seekToTarget()) finish();
+        };
 
-        const onFragBuffered = () => trySeek();
+        const onHlsBuffered = () => {
+          if (seekToTarget()) finish();
+        };
+
+        const seekEvents = ['loadedmetadata', 'canplay', 'durationchange', 'seeked'] as const;
+        seekEvents.forEach((event) => audio.addEventListener(event, onMediaEvent));
+
         if (isHls && hlsRef.current) {
-          hlsRef.current.on(Hls.Events.FRAG_BUFFERED, onFragBuffered);
+          hlsRef.current.on(Hls.Events.FRAG_BUFFERED, onHlsBuffered);
+          hlsRef.current.on(Hls.Events.LEVEL_LOADED, onHlsBuffered);
         }
 
-        const timeoutId = setTimeout(finish, isHls ? 5000 : 2000);
+        const timeoutId = setTimeout(() => {
+          seekToTarget();
+          finish();
+        }, isHls ? 12000 : 3000);
+
         seekRestoreCleanup = cleanup;
-        trySeek();
+        seekToTarget();
       });
     };
 
     const onStreamReady = (isHls = false) => {
       void restorePlaybackPosition(isHls).then(() => {
+        if (shouldRestorePosition && audioRef.current) {
+          const target = seekAfterLoad as number;
+          if (Math.abs(audioRef.current.currentTime - target) > 1) {
+            try {
+              audioRef.current.currentTime = Math.min(
+                target,
+                audioRef.current.duration && Number.isFinite(audioRef.current.duration)
+                  ? audioRef.current.duration
+                  : target,
+              );
+              setCurrentTime(audioRef.current.currentTime);
+            } catch {
+              console.warn('Could not restore playback position after stream reload.');
+            }
+          }
+        }
         if (autoPlay) {
           beginPlayback();
         } else if (audioRef.current) {
@@ -889,8 +921,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (streamUrl.includes('.m3u8')) {
         if (Hls.isSupported()) {
           const hlsOptions =
-            seekAfterLoad !== null && seekAfterLoad > 0
-              ? { startPosition: seekAfterLoad }
+            shouldRestorePosition
+              ? { startPosition: seekAfterLoad as number }
               : undefined;
           const hls = new Hls(hlsOptions);
           hlsRef.current = hls;
@@ -999,6 +1031,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const track = currentTrackRef.current;
     const wasPlaying = isPlayingRef.current && !(audioRef.current?.paused ?? true);
+    const positionBeforeSave = Math.max(
+      audioRef.current?.currentTime ?? 0,
+      currentTimeRef.current,
+    );
 
     void (async () => {
       if (token && currentUser) {
@@ -1012,7 +1048,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       qualityLevelSettingRef.current = quality;
 
       if (track && !activeRadioStationRef.current) {
-        pendingSeekRef.current = audioRef.current?.currentTime ?? 0;
+        const positionAfterSave = Math.max(
+          audioRef.current?.currentTime ?? 0,
+          currentTimeRef.current,
+          positionBeforeSave,
+        );
+        pendingSeekRef.current = positionAfterSave >= 0.25 ? positionAfterSave : null;
         void playTrackRef.current(track, false, wasPlaying);
       }
     })();
@@ -1475,7 +1516,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
     if (prevPremiumRef.current && !isPremium && currentTrackRef.current && !activeRadioStationRef.current) {
-      pendingSeekRef.current = audioRef.current?.currentTime ?? 0;
+      const savedPosition = Math.max(
+        audioRef.current?.currentTime ?? 0,
+        currentTimeRef.current,
+      );
+      pendingSeekRef.current = savedPosition >= 0.25 ? savedPosition : null;
       void playTrackRef.current(currentTrackRef.current, false);
     }
     prevPremiumRef.current = isPremium;
