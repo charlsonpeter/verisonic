@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from './AuthContext';
 import Hls from 'hls.js';
 import {
@@ -13,6 +13,15 @@ import {
 } from '../utils/streamQuality';
 import { parseStoredStreamQuality } from '../utils/userSettings';
 import { showError } from '../utils/swal';
+import {
+  applyAudioSinkId,
+  enumerateAudioOutputDevices,
+  loadStoredOutputDeviceId,
+  saveStoredOutputDeviceId,
+  supportsAudioOutputSelection,
+  supportsSelectAudioOutput,
+  type AudioOutputDeviceInfo,
+} from '../utils/audioOutputDevices';
 
 export interface Track {
   id: number;
@@ -97,6 +106,10 @@ interface AudioContextType {
   qualityLevelSetting: QualityLevelSetting;
   activeStreamLabel: string | null;
   analyser: AnalyserNode | null;
+  outputDevices: AudioOutputDeviceInfo[];
+  selectedOutputDeviceId: string;
+  outputDeviceSupported: boolean;
+  outputDevicesLoading: boolean;
 
   playTrack: (track: Track, isRadio?: boolean, autoPlay?: boolean) => void | Promise<void>;
   playRadioStation: (station: RadioStation) => void;
@@ -117,6 +130,9 @@ interface AudioContextType {
   setShowPremiumModal: (show: boolean) => void;
   setQualityLevelSetting: (quality: QualityLevelSetting) => void;
   updateTrackMetadata: (track: Track) => void;
+  refreshOutputDevices: () => Promise<void>;
+  setOutputDevice: (deviceId: string) => Promise<void>;
+  promptSelectOutputDevice: () => Promise<void>;
 }
 
 const AudioContext = createContext<AudioContextType | undefined>(undefined);
@@ -155,6 +171,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return loadStoredQuality(null) ?? 'normal';
   });
   const [activeStreamLabel, setActiveStreamLabel] = useState<string | null>(null);
+  const [outputDevices, setOutputDevices] = useState<AudioOutputDeviceInfo[]>([]);
+  const [selectedOutputDeviceId, setSelectedOutputDeviceId] = useState<string>(
+    () => loadStoredOutputDeviceId(null) ?? '',
+  );
+  const [outputDeviceSupported] = useState(() => supportsAudioOutputSelection());
+  const [outputDevicesLoading, setOutputDevicesLoading] = useState(false);
+  const selectedOutputDeviceIdRef = useRef(selectedOutputDeviceId);
   const qualityLevelSettingRef = useRef<QualityLevelSetting>('normal');
   const pendingSeekRef = useRef<number | null>(null);
   const currentTimeRef = useRef(0);
@@ -307,6 +330,86 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     applyQualityChangeRef.current(quality);
   };
 
+  useEffect(() => {
+    selectedOutputDeviceIdRef.current = selectedOutputDeviceId;
+  }, [selectedOutputDeviceId]);
+
+  useEffect(() => {
+    const stored = loadStoredOutputDeviceId(currentUser?.id ?? null);
+    if (stored !== null) {
+      setSelectedOutputDeviceId(stored);
+      selectedOutputDeviceIdRef.current = stored;
+    }
+  }, [currentUser?.id]);
+
+  const applySelectedOutputDevice = useCallback(async (deviceId?: string) => {
+    const audio = audioRef.current;
+    if (!audio || !outputDeviceSupported) return false;
+    return applyAudioSinkId(audio, deviceId ?? selectedOutputDeviceIdRef.current);
+  }, [outputDeviceSupported]);
+
+  const refreshOutputDevices = useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      setOutputDevices([]);
+      return;
+    }
+
+    setOutputDevicesLoading(true);
+    try {
+      const devices = await enumerateAudioOutputDevices();
+      setOutputDevices(devices);
+    } finally {
+      setOutputDevicesLoading(false);
+    }
+  }, []);
+
+  const setOutputDevice = useCallback(async (deviceId: string) => {
+    if (!outputDeviceSupported) return;
+
+    const applied = await applySelectedOutputDevice(deviceId);
+    if (!applied) {
+      showError('Output Device', 'Could not switch to that device. It may have been disconnected.');
+      await refreshOutputDevices();
+      return;
+    }
+
+    setSelectedOutputDeviceId(deviceId);
+    selectedOutputDeviceIdRef.current = deviceId;
+    saveStoredOutputDeviceId(deviceId, currentUser?.id ?? null);
+  }, [applySelectedOutputDevice, currentUser?.id, outputDeviceSupported, refreshOutputDevices]);
+
+  const promptSelectOutputDevice = useCallback(async () => {
+    if (!supportsSelectAudioOutput()) return;
+
+    try {
+      const device = await (
+        navigator.mediaDevices as MediaDevices & { selectAudioOutput: () => Promise<MediaDeviceInfo> }
+      ).selectAudioOutput();
+      await setOutputDevice(device.deviceId);
+      await refreshOutputDevices();
+    } catch {
+      // User dismissed the browser picker.
+    }
+  }, [refreshOutputDevices, setOutputDevice]);
+
+  useEffect(() => {
+    if (!outputDeviceSupported) return;
+
+    void refreshOutputDevices();
+
+    const handleDeviceChange = () => {
+      void refreshOutputDevices();
+    };
+
+    navigator.mediaDevices?.addEventListener('devicechange', handleDeviceChange);
+    return () => navigator.mediaDevices?.removeEventListener('devicechange', handleDeviceChange);
+  }, [outputDeviceSupported, refreshOutputDevices]);
+
+  useEffect(() => {
+    if (!outputDeviceSupported) return;
+    void applySelectedOutputDevice(selectedOutputDeviceId);
+  }, [applySelectedOutputDevice, outputDeviceSupported, selectedOutputDeviceId]);
+
   useEffect(() => { activeRadioStationRef.current = activeRadioStation; }, [activeRadioStation]);
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { repeatModeRef.current = repeatMode; }, [repeatMode]);
@@ -405,6 +508,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     audio.setAttribute('playsinline', 'true');
     (audio as any).playsInline = true;
     audioRef.current = audio;
+
+    if (outputDeviceSupported) {
+      void applyAudioSinkId(audio, selectedOutputDeviceIdRef.current);
+    }
 
     const onPlay = () => {
       setIsPlaying(true);
@@ -1571,6 +1678,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       qualityLevelSetting,
       activeStreamLabel,
       analyser,
+      outputDevices,
+      selectedOutputDeviceId,
+      outputDeviceSupported,
+      outputDevicesLoading,
 
       playTrack,
       playRadioStation,
@@ -1590,7 +1701,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       playPrevious,
       setShowPremiumModal,
       setQualityLevelSetting,
-      updateTrackMetadata
+      updateTrackMetadata,
+      refreshOutputDevices,
+      setOutputDevice,
+      promptSelectOutputDevice,
     }}>
       {children}
     </AudioContext.Provider>

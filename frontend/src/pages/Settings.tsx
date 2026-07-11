@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { 
   Settings as SettingsIcon, Monitor, Crown, 
-  Laptop, Headphones,
+  Laptop, Headphones, Speaker, RefreshCw,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
@@ -19,11 +19,42 @@ import {
   getTrialDaysLeft,
   hasPaidSubscription,
 } from '../utils/accountTier';
+import {
+  isOutputDeviceSelected,
+  supportsSelectAudioOutput,
+  type AudioOutputDeviceInfo,
+} from '../utils/audioOutputDevices';
+
+function getDeviceIcon(device: AudioOutputDeviceInfo) {
+  if (device.type === 'HDMI / Display') return Monitor;
+  if (device.type === 'Built-in Speakers') return Laptop;
+  if (device.type === 'Bluetooth' || device.type === 'Headphones' || device.type === 'USB Audio') {
+    return Headphones;
+  }
+  return Speaker;
+}
 
 export const Settings: React.FC = () => {
   const { currentUser, isPremium, canConfigureStreamQuality, canAccessPlatformSettings, switchUserMode } = useAuth();
-  const { qualityLevelSetting, setQualityLevelSetting, activeStreamLabel } = useAudio();
+  const {
+    qualityLevelSetting,
+    setQualityLevelSetting,
+    activeStreamLabel,
+    outputDevices,
+    selectedOutputDeviceId,
+    outputDeviceSupported,
+    outputDevicesLoading,
+    refreshOutputDevices,
+    setOutputDevice,
+    promptSelectOutputDevice,
+  } = useAudio();
   const activeQuality = canConfigureStreamQuality ? qualityLevelSetting : 'normal';
+
+  useEffect(() => {
+    if (outputDeviceSupported) {
+      void refreshOutputDevices();
+    }
+  }, [outputDeviceSupported, refreshOutputDevices]);
 
   if (!canAccessPlatformSettings) {
     return (
@@ -73,12 +104,6 @@ export const Settings: React.FC = () => {
     }
     setQualityLevelSetting(id);
   };
-
-  const devices = [
-    { name: "Schiit Bifrost 2/64 DAC", type: "USB External DAC", status: "Active (24-bit / 96kHz Mode)", icon: Headphones },
-    { name: "Sony WH-1000XM4", type: "Bluetooth Receiver", status: "Connected (LDAC 990kbps)", icon: Headphones },
-    { name: "Built-in Speakers", type: "Local Core Audio", status: "Standby", icon: Laptop }
-  ];
 
   const qualityOptions: Array<{
     id: QualityLevelSetting;
@@ -203,37 +228,81 @@ export const Settings: React.FC = () => {
         </section>
 
         <section className="bg-slate-900/10 border border-white/3 p-6 rounded-3xl space-y-4 shadow-inner">
-          <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
-            <Monitor className="w-4.5 h-4.5" /> Active SoundStage Output Nodes
-          </h3>
-          
-          <div className="space-y-2.5">
-            {devices.map((dev, idx) => {
-              const Icon = dev.icon;
-              const isActive = dev.status.includes('Active');
-              return (
-                <div 
-                  key={idx}
-                  className={`flex items-center justify-between p-3.5 rounded-2xl border ${
-                    isActive ? 'bg-rose-600/5 border-rose-500/15' : 'bg-slate-900/40 border-white/3'
-                  }`}
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
+              <Monitor className="w-4.5 h-4.5" /> Output Devices
+            </h3>
+            {outputDeviceSupported && (
+              <div className="flex items-center gap-2">
+                {supportsSelectAudioOutput() && (
+                  <button
+                    type="button"
+                    onClick={() => { void promptSelectOutputDevice(); }}
+                    className="px-3 py-1.5 rounded-lg border border-white/10 bg-slate-900/50 text-[10px] font-bold uppercase tracking-wider text-slate-300 hover:text-white hover:border-rose-500/30 transition"
+                  >
+                    Browse
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => { void refreshOutputDevices(); }}
+                  disabled={outputDevicesLoading}
+                  className="p-1.5 rounded-lg border border-white/10 bg-slate-900/50 text-slate-400 hover:text-white hover:border-rose-500/30 transition disabled:opacity-50"
+                  aria-label="Refresh output devices"
                 >
-                  <div className="flex items-center gap-3.5">
-                    <div className={`p-2.5 rounded-xl border ${isActive ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' : 'bg-slate-900 border-white/5 text-slate-500'}`}>
-                      <Icon className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-200">{dev.name}</h4>
-                      <p className="text-[9px] text-slate-505 font-semibold mt-0.5">{dev.type}</p>
-                    </div>
-                  </div>
-                  <span className={`text-[9.5px] font-extrabold uppercase ${isActive ? 'text-rose-455 animate-pulse font-sans' : 'text-slate-650 font-sans'}`}>
-                    {dev.status}
-                  </span>
-                </div>
-              );
-            })}
+                  <RefreshCw className={`w-4 h-4 ${outputDevicesLoading ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+            )}
           </div>
+
+          {!outputDeviceSupported ? (
+            <p className="text-[11px] text-slate-400 leading-relaxed font-semibold">
+              Your browser does not support selecting an audio output device. Playback uses your system default.
+            </p>
+          ) : outputDevices.length === 0 ? (
+            <p className="text-[11px] text-slate-400 leading-relaxed font-semibold">
+              {outputDevicesLoading
+                ? 'Scanning for output devices...'
+                : 'No output devices found. Connect a device and refresh.'}
+            </p>
+          ) : (
+            <div className="space-y-2.5">
+              {outputDevices.map((dev) => {
+                const Icon = getDeviceIcon(dev);
+                const isActive = isOutputDeviceSelected(selectedOutputDeviceId, dev.deviceId);
+                return (
+                  <button
+                    key={dev.deviceId}
+                    type="button"
+                    onClick={() => { void setOutputDevice(dev.deviceId); }}
+                    className={`w-full flex items-center justify-between p-3.5 rounded-2xl border text-left transition ${
+                      isActive ? 'bg-rose-600/5 border-rose-500/15' : 'bg-slate-900/40 border-white/3 hover:border-white/10'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3.5">
+                      <div className={`p-2.5 rounded-xl border ${isActive ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' : 'bg-slate-900 border-white/5 text-slate-500'}`}>
+                        <Icon className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-bold text-slate-200">{dev.label}</h4>
+                        <p className="text-[9px] text-slate-505 font-semibold mt-0.5">{dev.type}</p>
+                      </div>
+                    </div>
+                    <span className={`text-[9.5px] font-extrabold uppercase ${isActive ? 'text-rose-455 font-sans' : 'text-slate-650 font-sans'}`}>
+                      {isActive ? 'Active' : 'Select'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {outputDeviceSupported && (
+            <p className="text-[10px] text-slate-500 font-semibold">
+              Device names may appear as generic labels until your browser grants audio permissions.
+            </p>
+          )}
         </section>
       </div>
     </div>
