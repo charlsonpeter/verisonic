@@ -3,10 +3,13 @@ import { createPortal } from 'react-dom';
 import { Radio as RadioIcon, RadioIcon as LiveIcon, Plus, Sparkles, X, Users, Calendar, Play, Pause, Wifi, MapPin } from 'lucide-react';
 import { useAudio, RadioStation } from '../context/AudioContext';
 import { useAuth } from '../context/AuthContext';
-import { RadioCard } from '../components/shared/RadioCard';
+import { RadioCard, RadioTile } from '../components/shared/RadioCard';
 import { showError } from '../utils/swal';
 
 const API_URL = '/api';
+
+const mobileScrollStrip =
+  'flex md:hidden items-start gap-3 overflow-x-auto pb-1 -mx-4 px-4 snap-x snap-mandatory [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden';
 
 export const Radio: React.FC = () => {
   const { playRadioStation, activeRadioStation, isPlaying, togglePlay } = useAudio();
@@ -355,7 +358,7 @@ export const Radio: React.FC = () => {
   }
 
   return (
-    <div className="space-y-10 w-full">
+    <div className="space-y-6 md:space-y-10 w-full">
 
       {/* Page Title */}
       <div className="hidden md:block">
@@ -449,13 +452,13 @@ export const Radio: React.FC = () => {
 
           {/* ── Case 3: Radio Admin with stations → Live Monitor Dashboard ─ */}
           {currentUser.role === 'radio_admin' && hasStation && (
-            <div className="space-y-5 w-full animate-fade-in">
+            <div className="space-y-4 md:space-y-5 w-full animate-fade-in">
 
               <p className="text-[11px] text-slate-500 font-semibold uppercase tracking-widest font-sans">
                 Your Station Nodes — Live Monitor
               </p>
 
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
                 {stations.filter(s => s.owner_id === currentUser.id).map(st => {
                   const isLive = st.stream_url?.includes('/live');
                   const timezone = (st as any).timezone || 'UTC';
@@ -759,16 +762,23 @@ export const Radio: React.FC = () => {
       {/* Public station list for all non-radio-admin users */}
       {currentUser?.role !== 'radio_admin' && (
         filteredStations.length === 0 ? (
-          <div className="glass-card border border-white/5 rounded-3xl p-16 text-center max-w-xl animate-pulse">
+          <div className="glass-card border border-white/5 rounded-3xl p-8 md:p-16 text-center max-w-xl animate-pulse">
             <LiveIcon className="w-12 h-12 text-slate-600 mx-auto mb-4" />
             <p className="text-slate-400 text-xs">No live stations matching selection found.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {filteredStations.map((st) => (
-              <RadioCard key={st.id} station={st} />
-            ))}
-          </div>
+          <>
+            <div className={mobileScrollStrip}>
+              {filteredStations.map((st) => (
+                <RadioTile key={st.id} station={st} />
+              ))}
+            </div>
+            <div className="hidden md:grid md:grid-cols-1 lg:grid-cols-2 gap-6">
+              {filteredStations.map((st) => (
+                <RadioCard key={st.id} station={st} />
+              ))}
+            </div>
+          </>
         )
       )}
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Settings, Plus, Edit2, ArrowLeft, Radio, Info, MapPin, Globe, Eye, EyeOff, Copy, Check, RefreshCw, Wifi } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { showConfirm, showError } from '../utils/swal';
+import { showConfirm, showError, showSuccess } from '../utils/swal';
 import Swal from 'sweetalert2';
 
 interface StationProfileProps {
@@ -269,13 +269,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
         });
         if (res.ok) {
           await fetchStations();
-          Swal.fire({
-            icon: 'success',
-            title: 'Station Disabled',
-            background: '#0f172a',
-            color: '#fff',
-            confirmButtonColor: '#e11d48'
-          });
+          showSuccess('Station Disabled');
         } else {
           showError("Failed to disable station");
         }
@@ -347,14 +341,10 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
         });
         if (res.ok) {
           await fetchStations();
-          Swal.fire({
-            icon: 'success',
-            title: 'Request Submitted',
-            text: 'Reactivation request sent successfully to super admins.',
-            background: '#0f172a',
-            color: '#fff',
-            confirmButtonColor: '#e11d48'
-          });
+          showSuccess(
+            'Request Submitted',
+            'Reactivation request sent successfully to super admins.',
+          );
         } else {
           showError("Failed to submit request");
         }

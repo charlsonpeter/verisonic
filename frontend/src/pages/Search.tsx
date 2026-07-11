@@ -81,7 +81,7 @@ export const Search: React.FC<SearchProps> = ({
   const trendingQueries = ['Clara Schumann', 'FLAC 96kHz', 'Live Jazz Orchestra', 'Beethoven Symphony', 'Ambient White Noise'];
 
   return (
-    <div className="space-y-10 w-full">
+    <div className="flex flex-col gap-4 md:gap-10 w-full">
       {/* Title */}
       <div className="hidden md:block">
         <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">

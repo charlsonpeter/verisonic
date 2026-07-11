@@ -20,6 +20,7 @@ import { AudioPlayer } from './components/player/AudioPlayer';
 
 // Shared UI
 import { PremiumModal } from './components/shared/PremiumModal';
+import { BannerHost } from './components/shared/BannerHost';
 import { TrackRow } from './components/shared/TrackRow';
 import { LyricsModal } from './components/shared/LyricsModal';
 
@@ -587,6 +588,8 @@ function DashboardContent() {
 
       {/* 6. VIP Upgrade Modal Overlay */}
       <PremiumModal onNavigate={setActiveTab} />
+
+      <BannerHost />
     </div>
   );
 }

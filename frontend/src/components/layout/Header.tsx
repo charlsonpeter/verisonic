@@ -72,27 +72,35 @@ export const Header: React.FC<HeaderProps> = ({
       : getPageTitle(activeTab, { currentUser, userMode });
 
   return (
-    <header className="relative flex-shrink-0 px-4 md:px-8 py-3 md:py-4 flex items-center justify-between border-b border-white/5 bg-slate-950/45 backdrop-blur-md z-30">
+    <header className="relative flex-shrink-0 px-4 md:px-8 py-2.5 md:py-4 min-h-[3rem] md:min-h-0 flex items-center justify-between border-b border-white/5 bg-slate-950/80 md:bg-slate-950/45 backdrop-blur-xl md:backdrop-blur-md z-30">
       
       {mobilePageTitle && (
-        <h1 className="md:hidden absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-sm font-extrabold text-white truncate max-w-[42vw] pointer-events-none text-center">
+        <h1 className="md:hidden absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[15px] font-bold text-white truncate max-w-[50vw] pointer-events-none text-center tracking-tight">
           {mobilePageTitle}
         </h1>
       )}
 
       {/* 1. Left: Brand Mark */}
       <div 
-        className="relative z-10 flex items-center gap-2.5 cursor-pointer flex-shrink-0" 
+        className="relative z-10 flex-shrink-0 cursor-pointer" 
         onClick={handleLogoClick}
       >
-        <div className="bg-gradient-to-tr from-rose-600 via-rose-500 to-pink-600 p-2 rounded-xl shadow-lg border border-white/10 flex items-center justify-center">
-          <Radio className="w-5 h-5 text-white animate-pulse" />
+        {/* Mobile — compact app icon */}
+        <div className="md:hidden w-9 h-9 rounded-full bg-slate-900/70 border border-white/8 flex items-center justify-center active:scale-95 transition-transform">
+          <Radio className="w-[18px] h-[18px] text-rose-400" />
         </div>
-        <div className="hidden lg:block">
-          <h1 className="text-base font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400 font-sans tracking-tight leading-none">
-            VeriSonic
-          </h1>
-          <span className="text-[8px] text-rose-400 font-extrabold uppercase tracking-wider block mt-0.5">Studio Master</span>
+
+        {/* Desktop — full brand */}
+        <div className="hidden md:flex items-center gap-2.5">
+          <div className="bg-gradient-to-tr from-rose-600 via-rose-500 to-pink-600 p-2 rounded-xl shadow-lg border border-white/10 flex items-center justify-center">
+            <Radio className="w-5 h-5 text-white animate-pulse" />
+          </div>
+          <div className="hidden lg:block">
+            <h1 className="text-base font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400 font-sans tracking-tight leading-none">
+              VeriSonic
+            </h1>
+            <span className="text-[8px] text-rose-400 font-extrabold uppercase tracking-wider block mt-0.5">Studio Master</span>
+          </div>
         </div>
       </div>
 
@@ -120,7 +128,7 @@ export const Header: React.FC<HeaderProps> = ({
       </nav>
 
       {/* 3. Right: Search & Profile & telemetry status */}
-      <div className="relative z-10 flex items-center gap-4 flex-shrink-0 ml-auto">
+      <div className="relative z-10 flex items-center gap-3 md:gap-4 flex-shrink-0 ml-auto">
         
         {/* Compact Search Trigger */}
         {activeTab !== 'search' && userMode !== 'admin' && (
@@ -197,12 +205,23 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* User Account trigger dropdown */}
         {currentUser ? (
-          <div className="flex items-center gap-3 relative" ref={dropdownRef}>
+          <div className="relative" ref={dropdownRef}>
             
-            {/* Profile Selector */}
+            {/* Mobile — avatar only */}
             <button 
+              type="button"
               onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="flex items-center gap-1.5 p-1 bg-slate-900/50 hover:bg-slate-900 border border-white/5 rounded-2xl transition duration-305 outline-none"
+              className="md:hidden w-9 h-9 rounded-full bg-slate-800/90 border border-white/10 flex items-center justify-center active:scale-95 transition-transform outline-none"
+              aria-label="Account menu"
+            >
+              <User className="w-[18px] h-[18px] text-slate-300" />
+            </button>
+
+            {/* Desktop — profile with chevron */}
+            <button 
+              type="button"
+              onClick={() => setDropdownOpen(!dropdownOpen)}
+              className="hidden md:flex items-center gap-1.5 p-1 bg-slate-900/50 hover:bg-slate-900 border border-white/5 rounded-2xl transition duration-305 outline-none"
             >
               <div className="w-8 h-8 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300">
                 <User className="w-4 h-4" />
@@ -212,7 +231,7 @@ export const Header: React.FC<HeaderProps> = ({
 
             {/* Dropdown Menu Overlay Card */}
             {dropdownOpen && (
-              <div className="absolute right-0 top-11 w-56 bg-slate-900 border border-white/5 rounded-2xl p-2 shadow-2xl z-40 space-y-0.5 backdrop-blur-xl">
+              <div className="absolute right-0 top-10 md:top-11 w-56 bg-slate-900 border border-white/5 rounded-2xl p-2 shadow-2xl z-40 space-y-0.5 backdrop-blur-xl">
                 
                 {/* User info */}
                 <div className="p-2.5 border-b border-white/3 mb-1.5">
@@ -345,13 +364,24 @@ export const Header: React.FC<HeaderProps> = ({
 
           </div>
         ) : (
-          <button 
-            onClick={() => setActiveTab('auth')}
-            className="flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow transition"
-          >
-            <ShieldAlert className="w-3.5 h-3.5 text-white" />
-            Enter Platform
-          </button>
+          <>
+            <button 
+              type="button"
+              onClick={() => setActiveTab('auth')}
+              className="md:hidden w-9 h-9 rounded-full bg-slate-900/70 border border-white/8 flex items-center justify-center active:scale-95 transition-transform"
+              aria-label="Sign in"
+            >
+              <User className="w-[18px] h-[18px] text-slate-400" />
+            </button>
+            <button 
+              type="button"
+              onClick={() => setActiveTab('auth')}
+              className="hidden md:flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow transition"
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-white" />
+              Enter Platform
+            </button>
+          </>
         )}
 
       </div>

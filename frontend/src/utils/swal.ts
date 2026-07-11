@@ -1,39 +1,27 @@
 import Swal from 'sweetalert2';
+import { showBanner } from './banner';
+
+const isMobileViewport = () =>
+  typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
 
 export const showSuccess = (title: string, text?: string) => {
-  return Swal.fire({
-    icon: 'success',
-    title,
-    text,
-    background: '#0f172a',
-    color: '#fff',
-    confirmButtonColor: '#e11d48'
-  });
+  showBanner('success', title, text);
 };
 
 export const showError = (title: string, text?: string) => {
-  return Swal.fire({
-    icon: 'error',
-    title,
-    text,
-    background: '#0f172a',
-    color: '#fff',
-    confirmButtonColor: '#e11d48'
-  });
+  showBanner('error', title, text);
 };
 
 export const showInfo = (title: string, text?: string) => {
-  return Swal.fire({
-    icon: 'info',
-    title,
-    text,
-    background: '#0f172a',
-    color: '#fff',
-    confirmButtonColor: '#e11d48'
-  });
+  showBanner('info', title, text);
 };
 
-export const showConfirm = async (title: string, text: string, confirmText: string = "Yes, proceed") => {
+export const showConfirm = async (
+  title: string,
+  text: string,
+  confirmText: string = 'Yes, proceed',
+) => {
+  const mobile = isMobileViewport();
   const result = await Swal.fire({
     title,
     text,
@@ -44,7 +32,18 @@ export const showConfirm = async (title: string, text: string, confirmText: stri
     confirmButtonText: confirmText,
     cancelButtonText: 'Cancel',
     background: '#0f172a',
-    color: '#fff'
+    color: '#fff',
+    width: mobile ? 'min(92vw, 22rem)' : undefined,
+    padding: mobile ? '1.25rem' : '1.5rem',
+    reverseButtons: mobile,
+    customClass: {
+      popup: 'verisonic-swal-popup',
+      title: 'verisonic-swal-title',
+      htmlContainer: 'verisonic-swal-text',
+      confirmButton: 'verisonic-swal-confirm',
+      cancelButton: 'verisonic-swal-cancel',
+      actions: 'verisonic-swal-actions',
+    },
   });
   return result.isConfirmed;
 };

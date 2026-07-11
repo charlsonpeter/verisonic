@@ -336,3 +336,43 @@
     border-color: transparent !important;
   }
 }
+
+/* SweetAlert — mobile-friendly confirmation dialogs */
+.verisonic-swal-popup {
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 1.25rem !important;
+}
+
+.verisonic-swal-title {
+  font-size: 1.05rem !important;
+  font-weight: 800 !important;
+}
+
+.verisonic-swal-text {
+  font-size: 0.8125rem !important;
+  line-height: 1.5 !important;
+  color: #94a3b8 !important;
+}
+
+.verisonic-swal-confirm,
+.verisonic-swal-cancel {
+  border-radius: 0.75rem !important;
+  font-weight: 700 !important;
+  font-size: 0.8125rem !important;
+  padding: 0.65rem 1rem !important;
+}
+
+@media (max-width: 767px) {
+  .verisonic-swal-actions {
+    flex-direction: column-reverse !important;
+    width: 100% !important;
+    gap: 0.5rem !important;
+    margin-top: 1rem !important;
+  }
+
+  .verisonic-swal-confirm,
+  .verisonic-swal-cancel {
+    width: 100% !important;
+    margin: 0 !important;
+  }
+}

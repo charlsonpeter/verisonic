@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Disc, Settings, Edit2, ArrowLeft, Info, Eye, EyeOff, BookOpen, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { showConfirm, showError } from '../utils/swal';
+import { showConfirm, showError, showSuccess } from '../utils/swal';
 import Swal from 'sweetalert2';
 
 export const StudioProfile: React.FC = () => {
@@ -130,13 +130,7 @@ export const StudioProfile: React.FC = () => {
         });
         if (res.ok) {
           await fetchStudios();
-          Swal.fire({
-            icon: 'success',
-            title: 'Studio Disabled',
-            background: '#0f172a',
-            color: '#fff',
-            confirmButtonColor: '#e11d48'
-          });
+          showSuccess('Studio Disabled');
         } else {
           showError("Failed to disable studio");
         }
@@ -209,14 +203,10 @@ export const StudioProfile: React.FC = () => {
         });
         if (res.ok) {
           if (fetchCurrentUser) await fetchCurrentUser();
-          Swal.fire({
-            icon: 'success',
-            title: 'Appeal Submitted',
-            text: 'Reactivation request sent successfully to super admins.',
-            background: '#0f172a',
-            color: '#fff',
-            confirmButtonColor: '#e11d48'
-          });
+          showSuccess(
+            'Appeal Submitted',
+            'Reactivation request sent successfully to super admins.',
+          );
         } else {
           showError("Failed to submit request");
         }

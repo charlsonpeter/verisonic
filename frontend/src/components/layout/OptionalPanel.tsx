@@ -176,7 +176,7 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
         onClick={onClose}
         aria-hidden
       />
-      <aside className="w-full sm:w-80 glass-card border-l border-white/5 flex flex-col z-[1001] shadow-2xl fixed max-md:inset-x-0 max-md:bottom-0 max-md:top-auto max-md:h-[min(75dvh,520px)] max-md:rounded-t-3xl max-md:border-l-0 max-md:border-t max-md:border-white/10 max-md:pt-4 max-md:pb-[calc(1rem+env(safe-area-inset-bottom,0px))] md:right-0 md:top-[73px] md:h-[calc(100vh-73px)] md:pt-4 md:pb-28">
+      <aside className="w-full sm:w-80 glass-card border-l border-white/5 flex flex-col z-[1001] shadow-2xl fixed max-md:inset-0 max-md:h-dvh max-md:rounded-none max-md:border-l-0 max-md:border-t-0 max-md:pt-[calc(1rem+env(safe-area-inset-top,0px))] max-md:pb-[calc(1rem+env(safe-area-inset-bottom,0px))] md:right-0 md:top-[73px] md:h-[calc(100vh-73px)] md:pt-4 md:pb-28">
       {/* Header */}
       <div className="px-4 flex items-center justify-between border-b border-white/5 pb-4">
         <div className="flex items-center gap-2">

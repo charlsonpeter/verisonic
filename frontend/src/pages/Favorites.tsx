@@ -69,14 +69,13 @@ export const Favorites: React.FC<FavoritesProps> = ({ onViewDetails }) => {
           <p className="text-xs text-slate-450">No favorite songs added yet.</p>
         </div>
       ) : (
-        <div className="space-y-2.5 bg-slate-900/10 p-4 rounded-3xl shadow-inner">
+        <div className="space-y-2">
           {favoriteTracks.map((track, idx) => (
             <TrackRow
               key={track.id}
               track={track}
               index={idx}
               onViewDetails={onViewDetails}
-              borderless
             />
           ))}
         </div>
