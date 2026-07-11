@@ -128,7 +128,7 @@ const resolveStreamUrl = (url?: string): string => {
 };
 
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { token, isPremium, userMode, currentUser } = useAuth();
+  const { token, isPremium, canConfigureStreamQuality, userMode, currentUser } = useAuth();
 
   // State variables
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
@@ -177,6 +177,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Keep latest state refs to avoid stale closures in audio event handlers
   const currentTrackRef = useRef(currentTrack);
   const isPremiumRef = useRef(isPremium);
+  const canConfigureStreamQualityRef = useRef(canConfigureStreamQuality);
   const activeRadioStationRef = useRef(activeRadioStation);
   const isPlayingRef = useRef(isPlaying);
   const repeatModeRef = useRef(repeatMode);
@@ -190,10 +191,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   useEffect(() => { currentTrackRef.current = currentTrack; }, [currentTrack]);
   useEffect(() => { isPremiumRef.current = isPremium; }, [isPremium]);
+  useEffect(() => { canConfigureStreamQualityRef.current = canConfigureStreamQuality; }, [canConfigureStreamQuality]);
   useEffect(() => { qualityLevelSettingRef.current = qualityLevelSetting; }, [qualityLevelSetting]);
 
   useEffect(() => {
-    if (!isPremium) {
+    if (!canConfigureStreamQuality) {
       setQualityLevelSettingState('normal');
       localStorage.setItem(QUALITY_STORAGE_KEY, 'normal');
       return;
@@ -206,7 +208,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setQualityLevelSettingState('lossless');
       localStorage.setItem(QUALITY_STORAGE_KEY, 'lossless');
     }
-  }, [isPremium]);
+  }, [canConfigureStreamQuality]);
 
   const setQualityLevelSetting = (quality: QualityLevelSetting) => {
     applyQualityChangeRef.current(quality);
@@ -846,7 +848,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   playTrackRef.current = playTrack;
 
   applyQualityChangeRef.current = (quality: QualityLevelSetting) => {
-    if (!isPremiumRef.current && quality !== 'normal') {
+    if (!canConfigureStreamQualityRef.current && quality !== 'normal') {
       return;
     }
     if (qualityLevelSettingRef.current === quality) {

@@ -33,6 +33,7 @@ interface AuthContextType {
   isLoading: boolean;
   authError: string | null;
   isPremium: boolean;
+  canConfigureStreamQuality: boolean;
   userMode: 'admin' | 'listener';
   canUsePlaylists: boolean;
   isStaffInAdminMode: boolean;
@@ -250,6 +251,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     userRole === 'studio_admin' ||
     userRole === 'radio_admin' ||
     (currentUser?.subscription === 'free' && isTrialActive());
+
+  const canConfigureStreamQuality =
+    ['premium', 'unlimited'].includes(currentUser?.subscription || '') ||
+    userRole === 'admin' ||
+    userRole === 'studio_admin' ||
+    userRole === 'radio_admin';
   const isStaffInAdminMode =
     (userRole === 'radio_admin' || userRole === 'studio_admin') && userMode === 'admin';
   const canUsePlaylists = !!token && !isStaffInAdminMode;
@@ -264,6 +271,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isLoading,
       authError,
       isPremium,
+      canConfigureStreamQuality,
       userMode,
       canUsePlaylists,
       isStaffInAdminMode,

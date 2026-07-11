@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { 
-  Settings as SettingsIcon, ShieldCheck, Volume2, Monitor, Crown, 
+  Settings as SettingsIcon, ShieldCheck, Monitor, Crown, 
   ToggleLeft, ToggleRight, Laptop, Headphones, Speaker, CheckCircle2,
   Copy, Eye, EyeOff
 } from 'lucide-react';
@@ -14,8 +14,8 @@ import {
 } from '../utils/streamQuality';
 
 export const Settings: React.FC = () => {
-  const { currentUser, isPremium, token, fetchCurrentUser, userMode } = useAuth();
-  const { qualityLevelSetting, setQualityLevelSetting, setShowPremiumModal, activeStreamLabel } = useAudio();
+  const { currentUser, isPremium, canConfigureStreamQuality, token, fetchCurrentUser, userMode } = useAuth();
+  const { qualityLevelSetting, setQualityLevelSetting, activeStreamLabel } = useAudio();
 
   const getTrialDaysLeft = () => {
     if (!currentUser?.created_at) return 0;
@@ -234,9 +234,16 @@ export const Settings: React.FC = () => {
     { id: 'normal', label: QUALITY_LABELS.normal, desc: QUALITY_DESCRIPTIONS.normal, premium: false },
   ];
 
-  const handleQualitySelect = (id: QualityLevelSetting) => {
-    if (!isPremium && id !== 'normal') {
-      setShowPremiumModal(true);
+  const handleQualitySelect = async (id: QualityLevelSetting) => {
+    if (!canConfigureStreamQuality && id !== 'normal') {
+      const confirmed = await showConfirm(
+        'Upgrade to Premium',
+        'Higher stream quality tiers require a Premium or Unlimited subscription. Would you like to request an upgrade?',
+        'Request Upgrade',
+      );
+      if (confirmed) {
+        handleVipUpgrade();
+      }
       return;
     }
     setQualityLevelSetting(id);
@@ -320,24 +327,22 @@ export const Settings: React.FC = () => {
         <div className="space-y-10">
           {/* 1. AUDIO QUALITY RESOLUTIONS */}
           <section className="bg-slate-900/10 border border-white/3 p-6 rounded-3xl space-y-6 shadow-inner">
-            <h3 className="text-sm font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
-              <Volume2 className="w-4.5 h-4.5" /> Audiophile Stream Quality Configuration
-            </h3>
+            <h3 className="text-base font-bold text-white">Stream Quality</h3>
             
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               {qualityOptions.map((q) => {
                 const isActive = qualityLevelSetting === q.id;
-                const isLocked = !isPremium && q.premium;
+                const isLocked = !canConfigureStreamQuality && q.premium;
                 return (
                   <div
                     key={q.id}
                     onClick={() => handleQualitySelect(q.id)}
-                    className={`relative p-4 rounded-2xl border transition duration-200 cursor-pointer flex flex-col justify-between ${
-                      isActive 
-                        ? 'bg-rose-600/10 border-rose-500/35 shadow-md shadow-rose-500/5' 
-                        : isLocked
-                          ? 'bg-slate-950/30 border-white/5 hover:border-amber-500/25'
-                          : 'bg-slate-950/40 border-white/5 hover:border-slate-800'
+                    className={`relative p-4 rounded-2xl border transition duration-200 flex flex-col justify-between ${
+                      isLocked
+                        ? 'bg-slate-950/20 border-white/5 opacity-60 cursor-not-allowed'
+                        : isActive 
+                          ? 'bg-rose-600/10 border-rose-500/35 shadow-md shadow-rose-500/5 cursor-pointer' 
+                          : 'bg-slate-950/40 border-white/5 hover:border-slate-800 cursor-pointer'
                     }`}
                   >
                     {q.premium && (
@@ -354,9 +359,9 @@ export const Settings: React.FC = () => {
                 );
               })}
             </div>
-            {!isPremium && (
+            {!canConfigureStreamQuality && (
               <p className="text-[10px] text-slate-500 font-semibold">
-                Free accounts stream at Normal Quality. Upgrade to unlock higher tiers.
+                Free accounts are locked to Normal quality. Upgrade to unlock higher tiers.
               </p>
             )}
             {activeStreamLabel && (
