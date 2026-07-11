@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Settings, Plus, Edit2, ArrowLeft, Radio, Info, MapPin, Globe, Eye, EyeOff, Copy, Check, RefreshCw, Wifi } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { showConfirm, showError } from '../utils/swal';
+import { showConfirm, showError, showSuccess } from '../utils/swal';
+import { fetchBroadcastKey, getAccessToken } from '../utils/authTokens';
 import Swal from 'sweetalert2';
 
 interface StationProfileProps {
@@ -21,6 +22,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
   
   // Credentials & Settings Subsections per Station Card
   const [showCredentialsMap, setShowCredentialsMap] = useState<Record<number, boolean>>({});
+  const [broadcastKeyMap, setBroadcastKeyMap] = useState<Record<number, string>>({});
   const [copiedKeyMap, setCopiedKeyMap] = useState<Record<number, boolean>>({});
   const [isRegeneratingKey, setIsRegeneratingKey] = useState<Record<number, boolean>>({});
 
@@ -101,32 +103,18 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
     fetchStations();
   }, [currentUser]);
 
-  // Automatically refresh stations list if any connection key is expired (to trigger auto-regeneration on the backend)
-  useEffect(() => {
-    const checkExpiry = () => {
-      let hasExpiredKey = false;
-      myStations.forEach(station => {
-        if (station.stream_key) {
-          const parts = station.stream_key.split('_');
-          if (parts.length >= 4) {
-            const timestamp = parseInt(parts[parts.length - 1], 10);
-            const now = Math.floor(Date.now() / 1000);
-            if (now - timestamp >= 300) { // 5 minutes expiry
-              hasExpiredKey = true;
-            }
-          }
-        }
-      });
-      if (hasExpiredKey) {
-        console.log("Detected expired stream key, silently auto-refreshing/regenerating key on server...");
-        fetchStationsSilently();
-      }
-    };
+  // Stream keys are fetched on demand via /broadcast-key when credentials are opened.
 
-    // Check key expiration every 5 seconds
-    const interval = setInterval(checkExpiry, 5000);
-    return () => clearInterval(interval);
-  }, [myStations]);
+  const toggleCredentials = async (stationId: number) => {
+    const willOpen = !showCredentialsMap[stationId];
+    setShowCredentialsMap(prev => ({ ...prev, [stationId]: willOpen }));
+    if (willOpen && !broadcastKeyMap[stationId]) {
+      const key = await fetchBroadcastKey(stationId);
+      if (key) {
+        setBroadcastKeyMap(prev => ({ ...prev, [stationId]: key }));
+      }
+    }
+  };
 
   const handleEditClick = (station: any) => {
     setEditingStationId(station.id);
@@ -269,13 +257,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
         });
         if (res.ok) {
           await fetchStations();
-          Swal.fire({
-            icon: 'success',
-            title: 'Station Disabled',
-            background: '#0f172a',
-            color: '#fff',
-            confirmButtonColor: '#e11d48'
-          });
+          showSuccess('Station Disabled');
         } else {
           showError("Failed to disable station");
         }
@@ -347,14 +329,10 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
         });
         if (res.ok) {
           await fetchStations();
-          Swal.fire({
-            icon: 'success',
-            title: 'Request Submitted',
-            text: 'Reactivation request sent successfully to super admins.',
-            background: '#0f172a',
-            color: '#fff',
-            confirmButtonColor: '#e11d48'
-          });
+          showSuccess(
+            'Request Submitted',
+            'Reactivation request sent successfully to super admins.',
+          );
         } else {
           showError("Failed to submit request");
         }
@@ -416,6 +394,10 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
       if (res.ok) {
         const updatedStation = await res.json();
         setMyStations(prev => prev.map(s => s.id === stationId ? updatedStation : s));
+        const key = await fetchBroadcastKey(stationId);
+        if (key) {
+          setBroadcastKeyMap(prev => ({ ...prev, [stationId]: key }));
+        }
       } else {
         const err = await res.json();
         showError('Error', err.detail || 'Failed to regenerate key.');
@@ -446,17 +428,10 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
       
       {/* Title Header */}
       <div className="flex justify-between items-center">
-        <div>
+        <div className="hidden md:block">
           <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
             <Radio className="w-8 h-8 text-rose-455 animate-pulse" /> Station Profiles
           </h2>
-          <p className="text-sm text-slate-400 mt-1">
-            {viewMode === 'list' 
-              ? 'Manage your registered live radio station nodes, credentials, and settings.' 
-              : viewMode === 'edit' 
-                ? 'Update location details and settings for your station node.'
-                : 'Register a new station node to stream live over the network.'}
-          </p>
         </div>
 
         {viewMode === 'list' && (
@@ -632,7 +607,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
                   )}
                   {currentUser && (currentUser.real_role || currentUser.role) !== 'admin' && station.is_active && (
                     <button
-                      onClick={() => setShowCredentialsMap(prev => ({ ...prev, [station.id]: !prev[station.id] }))}
+                      onClick={() => toggleCredentials(station.id)}
                       className={`flex-1 py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-wider flex items-center justify-center gap-1 transition cursor-pointer border ${
                         showCredentialsMap[station.id] 
                           ? 'bg-rose-500/10 border-rose-500/25 text-rose-400' 
@@ -661,13 +636,13 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
                         <div className="flex gap-2">
                           <input 
                             type="text" 
-                            value={station.stream_key || ''} 
+                            value={broadcastKeyMap[station.id] || ''} 
                             readOnly 
                             className="w-full bg-slate-950 border border-white/5 text-[10px] p-2.5 rounded-xl text-white font-mono font-semibold outline-none tracking-wider"
                           />
                           <button
                             type="button"
-                            onClick={() => handleCopy(station.stream_key || '', station.id)}
+                            onClick={() => handleCopy(broadcastKeyMap[station.id] || '', station.id)}
                             className="px-3 bg-slate-900 hover:bg-slate-800 border border-white/5 text-slate-405 hover:text-white rounded-xl transition cursor-pointer font-bold text-[10px]"
                           >
                             {copiedKeyMap[station.id] ? 'Copied' : 'Copy'}

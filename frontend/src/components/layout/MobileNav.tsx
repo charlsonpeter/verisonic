@@ -1,5 +1,5 @@
 import React from 'react';
-import { Compass, Radio, Search, Heart, User } from 'lucide-react';
+import { Compass, Radio, Search, Heart, FolderHeart, Music, Mail } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 interface MobileNavProps {
@@ -8,23 +8,37 @@ interface MobileNavProps {
 }
 
 export const MobileNav: React.FC<MobileNavProps> = ({ activeTab, setActiveTab }) => {
-  const { currentUser } = useAuth();
+  const { currentUser, userMode, canUsePlaylists, token } = useAuth();
 
-  const items = (currentUser && currentUser.role === 'radio_admin')
-    ? [
-        { id: 'radio', label: 'Radio', icon: Radio },
-        { id: 'profile', label: 'Profile', icon: User }
-      ]
-    : [
+  const isRadioAdminInAdminMode =
+    !!currentUser &&
+    (currentUser.real_role || currentUser.role) === 'radio_admin' &&
+    userMode === 'admin';
+
+  const isStudioAdminInAdminMode =
+    !!currentUser &&
+    (currentUser.real_role || currentUser.role) === 'studio_admin' &&
+    userMode === 'admin';
+
+  const items = isRadioAdminInAdminMode
+    ? [{ id: 'radio', label: 'Radio', icon: Radio }]
+    : isStudioAdminInAdminMode
+      ? [
+          { id: 'track-list', label: 'Tracks', icon: Music },
+          { id: 'contact', label: 'Contact', icon: Mail },
+        ]
+      : [
         { id: 'home', label: 'Home', icon: Compass },
         { id: 'radio', label: 'Radio', icon: Radio },
         { id: 'search', label: 'Search', icon: Search },
         { id: 'favorites', label: 'Favorites', icon: Heart },
-        { id: 'profile', label: 'Profile', icon: User }
+        ...(canUsePlaylists || !token
+          ? [{ id: 'playlists', label: 'Playlists', icon: FolderHeart }]
+          : []),
       ];
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 h-16 bg-slate-950/95 border-t border-white/5 flex items-center justify-around z-20 md:hidden backdrop-blur-lg">
+    <nav className="relative flex-shrink-0 w-full h-16 bg-slate-950/95 border-t border-white/5 flex items-center justify-around z-20 md:hidden backdrop-blur-lg">
       {items.map((item) => {
         const Icon = item.icon;
         const isActive = activeTab === item.id;

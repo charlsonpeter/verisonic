@@ -1,22 +1,27 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Search, Crown, Signal, User, ShieldAlert, ChevronDown, 
-  Compass, Music, Radio, Heart, FolderHeart, UploadCloud, 
-  ShieldCheck, BarChart2, Settings, LogOut, Disc, Mail, Laptop
+  Search, Crown, Signal, User, ChevronDown, 
+  Compass, Radio, Heart, FolderHeart, UploadCloud,
+  ShieldCheck, BarChart2, Settings, LogOut, Disc, Mail, Laptop, Music
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { useAudio } from '../../context/AudioContext';
+import { getPageTitle } from '../../utils/pageTitles';
+import { getAccountTierLabel, hasPaidSubscription, isOnFreeTrial } from '../../utils/accountTier';
 
 interface HeaderProps {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  pageTitleOverride?: string | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
-  searchQuery, setSearchQuery, activeTab, setActiveTab 
+  searchQuery, setSearchQuery, activeTab, setActiveTab, pageTitleOverride
 }) => {
-  const { currentUser, isPremium, logout, token, userMode, switchUserMode } = useAuth();
+  const { currentUser, logout, token, userMode, switchUserMode, canUsePlaylists, canAccessPlatformSettings, canAccessStationProfile } = useAuth();
+  const { setShowPremiumModal } = useAudio();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -31,19 +36,37 @@ export const Header: React.FC<HeaderProps> = ({
     return () => document.removeEventListener('mousedown', handleOutsideClick);
   }, []);
 
-  const navItems = (currentUser && currentUser.role === 'radio_admin')
+  const isRadioAdminInAdminMode =
+    !!currentUser &&
+    (currentUser.real_role || currentUser.role) === 'radio_admin' &&
+    userMode === 'admin';
+
+  const isStudioAdminInAdminMode =
+    !!currentUser &&
+    (currentUser.real_role || currentUser.role) === 'studio_admin' &&
+    userMode === 'admin';
+
+  const isPaidSubscriber = hasPaidSubscription(currentUser);
+  const isOnTrial = isOnFreeTrial(currentUser);
+  const tierLabel = getAccountTierLabel(currentUser);
+
+  const navItems = isRadioAdminInAdminMode
     ? [
-        { id: 'radio', label: 'Radio Dashboard', icon: Radio },
+        { id: 'radio', label: 'Radio Stations', icon: Radio },
         { id: 'broadcaster-download', label: 'Broadcaster App', icon: Laptop },
         { id: 'contact', label: 'Contact Us', icon: Mail }
       ]
-    : [
+    : isStudioAdminInAdminMode
+      ? [
+          { id: 'track-list', label: 'Tracks List', icon: Music },
+          { id: 'contact', label: 'Contact Us', icon: Mail }
+        ]
+      : [
         { id: 'home', label: 'Home Feed', icon: Compass },
-        { id: 'discover', label: 'Discover Hub', icon: Music },
-        { id: 'radio', label: 'Live Radio', icon: Radio },
+        { id: 'radio', label: 'Radio Stations', icon: Radio },
         { id: 'search', label: 'Search', icon: Search },
         { id: 'favorites', label: 'Favorites', icon: Heart },
-        { id: 'playlists', label: 'Playlists', icon: FolderHeart },
+        ...(canUsePlaylists || !token ? [{ id: 'playlists', label: 'Playlists', icon: FolderHeart }] : []),
         { id: 'contact', label: 'Contact Us', icon: Mail }
       ];
 
@@ -52,27 +75,57 @@ export const Header: React.FC<HeaderProps> = ({
     setDropdownOpen(false);
   };
 
+  const handleLogoClick = () => {
+    if (currentUser && userMode === 'admin') {
+      const role = currentUser.real_role || currentUser.role;
+      if (role === 'radio_admin') setActiveTab('radio');
+      else if (role === 'studio_admin') setActiveTab('track-list');
+      else setActiveTab('home');
+      return;
+    }
+    setActiveTab('home');
+  };
+
+  const mobilePageTitle =
+    pageTitleOverride !== undefined
+      ? pageTitleOverride
+      : getPageTitle(activeTab, { currentUser, userMode });
+
   return (
-    <header className="px-8 py-4 flex items-center justify-between border-b border-white/5 bg-slate-950/45 backdrop-blur-md z-30 sticky top-0">
+    <header className="relative flex-shrink-0 px-4 md:px-5 lg:px-8 py-2.5 md:py-3 lg:py-4 min-h-[3rem] md:min-h-0 flex items-center justify-between gap-2 border-b border-white/5 bg-slate-950/80 md:bg-slate-950/45 backdrop-blur-xl md:backdrop-blur-md z-30">
       
+      {mobilePageTitle && (
+        <h1 className="md:hidden absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[15px] font-bold text-white truncate max-w-[50vw] pointer-events-none text-center tracking-tight">
+          {mobilePageTitle}
+        </h1>
+      )}
+
       {/* 1. Left: Brand Mark */}
       <div 
-        className="flex items-center gap-2.5 cursor-pointer" 
-        onClick={() => setActiveTab('landing')}
+        className="relative z-10 flex-shrink-0 cursor-pointer" 
+        onClick={handleLogoClick}
       >
-        <div className="bg-gradient-to-tr from-rose-600 via-rose-500 to-pink-600 p-2 rounded-xl shadow-lg border border-white/10 flex items-center justify-center">
-          <Radio className="w-5 h-5 text-white animate-pulse" />
+        {/* Mobile — compact app icon */}
+        <div className="md:hidden w-9 h-9 rounded-full bg-slate-900/70 border border-white/8 flex items-center justify-center active:scale-95 transition-transform">
+          <Radio className="w-[18px] h-[18px] text-rose-400" />
         </div>
-        <div className="hidden lg:block">
-          <h1 className="text-base font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400 font-sans tracking-tight leading-none">
-            VeriSonic
-          </h1>
-          <span className="text-[8px] text-rose-400 font-extrabold uppercase tracking-wider block mt-0.5">Studio Master</span>
+
+        {/* Desktop — full brand */}
+        <div className="hidden md:flex items-center gap-2.5">
+          <div className="bg-gradient-to-tr from-rose-600 via-rose-500 to-pink-600 p-2 rounded-xl shadow-lg border border-white/10 flex items-center justify-center">
+            <Radio className="w-5 h-5 text-white animate-pulse" />
+          </div>
+          <div className="hidden lg:block">
+            <h1 className="text-base font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-white via-slate-100 to-slate-400 font-sans tracking-tight leading-none">
+              VeriSonic
+            </h1>
+            <span className="text-[8px] text-rose-400 font-extrabold uppercase tracking-wider block mt-0.5">Studio Master</span>
+          </div>
         </div>
       </div>
 
-      {/* 2. Center: Desktop Primary Navigation Link Tabs */}
-      <nav className="hidden md:flex items-center gap-4 bg-slate-900/10 px-4 py-2 rounded-2xl border border-white/3">
+      {/* 2. Center: Desktop / tablet nav — icon-only until lg */}
+      <nav className="hidden md:flex items-center gap-1 lg:gap-4 bg-slate-900/10 px-2 lg:px-4 py-1.5 lg:py-2 rounded-2xl border border-white/3 min-w-0 flex-shrink">
         {navItems.map((nav) => {
           const Icon = nav.icon;
           const isActive = activeTab === nav.id;
@@ -80,12 +133,14 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               key={nav.id}
               onClick={() => setActiveTab(nav.id)}
-              className={`flex items-center gap-1.5 px-1 py-1.5 text-xs font-extrabold transition-all duration-300 uppercase tracking-widest relative group ${
+              title={nav.label}
+              aria-label={nav.label}
+              className={`flex items-center gap-1.5 px-1.5 lg:px-1 py-1.5 text-xs font-extrabold transition-all duration-300 uppercase tracking-widest relative group flex-shrink-0 ${
                 isActive ? 'text-rose-400 font-extrabold' : 'text-slate-455 hover:text-slate-200'
               }`}
             >
               <Icon className={`w-4 h-4 transition ${isActive ? 'text-rose-400' : 'text-slate-500 group-hover:text-slate-350'}`} />
-              <span>{nav.label}</span>
+              <span className="hidden lg:inline">{nav.label}</span>
               {isActive && (
                 <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-rose-500 to-pink-500 rounded-full shadow-[0_0_10px_rgba(244,63,94,0.8)]" />
               )}
@@ -95,12 +150,12 @@ export const Header: React.FC<HeaderProps> = ({
       </nav>
 
       {/* 3. Right: Search & Profile & telemetry status */}
-      <div className="flex items-center gap-4">
+      <div className="relative z-10 flex items-center gap-3 md:gap-4 flex-shrink-0 ml-auto">
         
-        {/* Compact Search Trigger */}
+        {/* Compact Search — visible from tablet up; narrower until lg */}
         {activeTab !== 'search' && userMode !== 'admin' && (
-          <div className="hidden lg:flex items-center gap-2 bg-slate-900/40 border border-white/5 rounded-xl px-3 py-1.5 hover:border-slate-800 transition duration-300 w-48">
-            <Search className="w-4 h-4 text-slate-500" />
+          <div className="hidden md:flex items-center gap-2 bg-slate-900/40 border border-white/5 rounded-xl px-2.5 lg:px-3 py-1.5 hover:border-slate-800 transition duration-300 w-28 lg:w-48 flex-shrink-0">
+            <Search className="w-4 h-4 text-slate-500 flex-shrink-0" />
             <input 
               type="text" 
               placeholder="Search..." 
@@ -109,31 +164,64 @@ export const Header: React.FC<HeaderProps> = ({
                 setSearchQuery(e.target.value);
                 setActiveTab('search');
               }}
-              className="bg-transparent text-xs text-slate-200 outline-none w-full placeholder-slate-505"
+              className="bg-transparent text-xs text-slate-200 outline-none w-full min-w-0 placeholder-slate-505"
             />
           </div>
         )}
         {/* VIP badge */}
         {currentUser && userMode !== 'admin' && (
-          !isPremium ? (
-            <button 
-              onClick={() => setActiveTab('settings')}
-              className="hidden sm:flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-450 hover:to-yellow-500 text-slate-950 text-[10px] font-extrabold rounded-xl transition shadow-md shadow-amber-500/10 uppercase tracking-wide cursor-pointer"
-            >
-              <Crown className="w-3.5 h-3.5 fill-current" />
-              Go VIP
-            </button>
+          isPaidSubscriber ? (
+            <>
+              <span
+                title={tierLabel}
+                className="hidden md:flex lg:hidden items-center justify-center w-8 h-8 bg-rose-500/10 border border-rose-500/20 rounded-full text-rose-400"
+              >
+                <Crown className="w-3.5 h-3.5 fill-current" />
+              </span>
+              <span className="hidden lg:flex items-center gap-1 px-2.5 py-1 bg-rose-500/10 border border-rose-500/20 rounded-full text-[9px] text-rose-400 font-extrabold uppercase">
+                <Crown className="w-3.5 h-3.5 fill-current text-rose-400" />
+                {tierLabel}
+              </span>
+            </>
+          ) : isOnTrial ? (
+            <>
+              <span
+                title={tierLabel}
+                className="hidden md:flex lg:hidden items-center justify-center w-8 h-8 bg-amber-500/10 border border-amber-500/20 rounded-full text-amber-400"
+              >
+                <Crown className="w-3.5 h-3.5 fill-current" />
+              </span>
+              <span className="hidden lg:flex items-center gap-1 px-2.5 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full text-[9px] text-amber-400 font-extrabold uppercase">
+                <Crown className="w-3.5 h-3.5 fill-current text-amber-400" />
+                {tierLabel}
+              </span>
+            </>
           ) : (
-            <span className="hidden sm:flex items-center gap-1 px-2.5 py-1 bg-rose-500/10 border border-rose-500/20 rounded-full text-[9px] text-rose-400 font-extrabold uppercase">
-              <Crown className="w-3.5 h-3.5 fill-current text-rose-400" />
-              VIP Master
-            </span>
+            <>
+              <button
+                type="button"
+                onClick={() => setShowPremiumModal(true)}
+                title="Go VIP"
+                aria-label="Go VIP"
+                className="hidden md:flex lg:hidden items-center justify-center w-8 h-8 bg-gradient-to-r from-amber-500 to-yellow-600 text-slate-950 rounded-xl transition shadow-md shadow-amber-500/10 cursor-pointer"
+              >
+                <Crown className="w-3.5 h-3.5 fill-current" />
+              </button>
+              <button 
+                type="button"
+                onClick={() => setShowPremiumModal(true)}
+                className="hidden lg:flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-450 hover:to-yellow-500 text-slate-950 text-[10px] font-extrabold rounded-xl transition shadow-md shadow-amber-500/10 uppercase tracking-wide cursor-pointer"
+              >
+                <Crown className="w-3.5 h-3.5 fill-current" />
+                Go VIP
+              </button>
+            </>
           )
         )}
 
         {/* Mode Switcher */}
         {currentUser && ['radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role) && (
-          <div className="hidden sm:flex items-center select-none font-sans">
+          <div className="hidden md:flex items-center select-none font-sans flex-shrink-0">
             <button
               onClick={() => {
                 if (userMode === 'admin') {
@@ -141,7 +229,8 @@ export const Header: React.FC<HeaderProps> = ({
                   setActiveTab('home');
                 } else {
                   switchUserMode('admin');
-                  setActiveTab(currentUser.real_role === 'radio_admin' ? 'radio' : 'home');
+                  const role = currentUser.real_role || currentUser.role;
+                  setActiveTab(role === 'radio_admin' ? 'radio' : role === 'studio_admin' ? 'track-list' : 'home');
                 }
               }}
               className={`w-20 h-7 rounded-full p-0.5 transition-colors duration-300 outline-none cursor-pointer relative flex items-center ${
@@ -172,12 +261,23 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* User Account trigger dropdown */}
         {currentUser ? (
-          <div className="flex items-center gap-3 relative" ref={dropdownRef}>
+          <div className="relative" ref={dropdownRef}>
             
-            {/* Profile Selector */}
+            {/* Mobile — avatar only */}
             <button 
+              type="button"
               onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="flex items-center gap-1.5 p-1 bg-slate-900/50 hover:bg-slate-900 border border-white/5 rounded-2xl transition duration-305 outline-none"
+              className="md:hidden w-9 h-9 rounded-full bg-slate-800/90 border border-white/10 flex items-center justify-center active:scale-95 transition-transform outline-none"
+              aria-label="Account menu"
+            >
+              <User className="w-[18px] h-[18px] text-slate-300" />
+            </button>
+
+            {/* Desktop — profile with chevron */}
+            <button 
+              type="button"
+              onClick={() => setDropdownOpen(!dropdownOpen)}
+              className="hidden md:flex items-center gap-1.5 p-1 bg-slate-900/50 hover:bg-slate-900 border border-white/5 rounded-2xl transition duration-305 outline-none"
             >
               <div className="w-8 h-8 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300">
                 <User className="w-4 h-4" />
@@ -187,7 +287,7 @@ export const Header: React.FC<HeaderProps> = ({
 
             {/* Dropdown Menu Overlay Card */}
             {dropdownOpen && (
-              <div className="absolute right-0 top-11 w-56 bg-slate-900 border border-white/5 rounded-2xl p-2 shadow-2xl z-40 space-y-0.5 backdrop-blur-xl">
+              <div className="absolute right-0 top-10 md:top-11 w-56 bg-slate-900 border border-white/5 rounded-2xl p-2 shadow-2xl z-40 space-y-0.5 backdrop-blur-xl">
                 
                 {/* User info */}
                 <div className="p-2.5 border-b border-white/3 mb-1.5">
@@ -197,7 +297,7 @@ export const Header: React.FC<HeaderProps> = ({
 
                 {/* Mobile User Mode Switcher inside dropdown */}
                 {currentUser && ['radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role) && (
-                  <div className="sm:hidden p-2 border-b border-white/3 mb-1 flex items-center justify-between font-sans select-none">
+                  <div className="md:hidden p-2 border-b border-white/3 mb-1 flex items-center justify-between font-sans select-none">
                     <span className="text-[8px] text-slate-550 font-bold uppercase tracking-wider block">Active Mode</span>
                     <button
                       onClick={() => {
@@ -206,7 +306,8 @@ export const Header: React.FC<HeaderProps> = ({
                           handleDropdownSelect('home');
                         } else {
                           switchUserMode('admin');
-                          handleDropdownSelect(currentUser.real_role === 'radio_admin' ? 'radio' : 'home');
+                          const role = currentUser.real_role || currentUser.role;
+                          handleDropdownSelect(role === 'radio_admin' ? 'radio' : role === 'studio_admin' ? 'track-list' : 'home');
                         }
                       }}
                       className={`w-20 h-7 rounded-full p-0.5 transition-colors duration-300 outline-none cursor-pointer relative flex items-center ${
@@ -243,10 +344,7 @@ export const Header: React.FC<HeaderProps> = ({
                   My Profile
                 </button>
 
-                {currentUser && (
-                  (currentUser.real_role || currentUser.role) === 'admin' ||
-                  ((currentUser.real_role || currentUser.role) === 'radio_admin' && userMode === 'admin')
-                ) && (
+                {currentUser && canAccessStationProfile && (
                   <button 
                     onClick={() => handleDropdownSelect('station-profile')}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
@@ -256,7 +354,7 @@ export const Header: React.FC<HeaderProps> = ({
                   </button>
                 )}
 
-                {currentUser && ['studio_admin', 'admin'].includes(currentUser.real_role || currentUser.role) && (
+                {(currentUser?.real_role || currentUser?.role) === 'admin' || isStudioAdminInAdminMode ? (
                   <button 
                     onClick={() => handleDropdownSelect('studio-profile')}
                     className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
@@ -264,29 +362,16 @@ export const Header: React.FC<HeaderProps> = ({
                     <Disc className="w-4 h-4 text-slate-450" />
                     {(currentUser.real_role || currentUser.role) === 'admin' ? 'Music Studios' : 'Studio Profile'}
                   </button>
-                )}
+                ) : null}
 
-                {currentUser && (currentUser.real_role || currentUser.role) !== 'radio_admin' && (
+                {((currentUser?.real_role || currentUser?.role) === 'admin' || isStudioAdminInAdminMode) && (
                   <button 
-                    onClick={() => handleDropdownSelect('settings')}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
+                    onClick={() => handleDropdownSelect('tracks')}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-455 hover:bg-slate-800 hover:text-white transition"
                   >
-                    <Settings className="w-4 h-4 text-slate-450" />
-                    Platform Settings
+                    <UploadCloud className="w-4 h-4 text-slate-455" />
+                    Upload & Manage Tracks
                   </button>
-                )}
-
-                {/* Artist/Admin actions */}
-                {(currentUser.role === 'studio_admin' || currentUser.role === 'admin') && (
-                  <>
-                    <button 
-                      onClick={() => handleDropdownSelect('tracks')}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-455 hover:bg-slate-800 hover:text-white transition"
-                    >
-                      <UploadCloud className="w-4 h-4 text-slate-455" />
-                      Upload & Manage Tracks
-                    </button>
-                  </>
                 )}
 
                 {currentUser.role === 'admin' && (
@@ -308,6 +393,16 @@ export const Header: React.FC<HeaderProps> = ({
                   </>
                 )}
 
+                {currentUser && canAccessPlatformSettings && (
+                  <button 
+                    onClick={() => handleDropdownSelect('settings')}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
+                  >
+                    <Settings className="w-4 h-4 text-slate-450" />
+                    Settings
+                  </button>
+                )}
+
                 <div className="border-t border-white/3 my-1.5" />
 
                 <button 
@@ -323,13 +418,16 @@ export const Header: React.FC<HeaderProps> = ({
 
           </div>
         ) : (
-          <button 
-            onClick={() => setActiveTab('auth')}
-            className="flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow transition"
-          >
-            <ShieldAlert className="w-3.5 h-3.5 text-white" />
-            Enter Platform
-          </button>
+          <>
+            <button 
+              type="button"
+              onClick={() => setActiveTab('auth')}
+              className="w-9 h-9 rounded-full bg-slate-900/70 border border-white/8 flex items-center justify-center active:scale-95 transition-transform md:hidden"
+              aria-label="Sign in"
+            >
+              <User className="w-[18px] h-[18px] text-slate-400" />
+            </button>
+          </>
         )}
 
       </div>

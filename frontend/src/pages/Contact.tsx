@@ -80,11 +80,10 @@ export const Contact: React.FC = () => {
   return (
     <div className="w-full max-w-4xl space-y-10 pb-10">
       {/* Title Header */}
-      <div>
+      <div className="hidden md:block">
         <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
           <Mail className="w-8 h-8 text-rose-400 animate-pulse" /> Contact Support Hub
         </h2>
-        <p className="text-sm text-slate-400 mt-1">Submit technical questions or request platform role upgrades to manage studios or live streams.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
@@ -101,14 +100,6 @@ export const Contact: React.FC = () => {
             <p className="text-[11.5px] leading-relaxed text-slate-400 font-sans">
               Once approved, you will unlock specialized administrative panels directly inside your dashboard.
             </p>
-          </div>
-
-          <div className="bg-slate-900/10 border border-white/3 p-6 rounded-3xl space-y-3 font-sans">
-            <h4 className="text-[10px] font-extrabold text-slate-500 uppercase tracking-wider">Helpful Resources</h4>
-            <div className="space-y-2 text-[11px] text-rose-400 font-semibold">
-              <a href="#FAQ" className="block hover:underline">Lossless upload standards →</a>
-              <a href="#HLS" className="block hover:underline">HLS stream setup guides →</a>
-            </div>
           </div>
         </div>
 

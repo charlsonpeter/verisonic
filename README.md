@@ -1,116 +1,233 @@
-# 🎙️ VeriSonic
+# VeriSonic
 
-VeriSonic is a high-fidelity desktop audio live streaming ecosystem. It allows you to broadcast system audio, music, or microphone inputs in real time from a standalone desktop broadcaster to a web-based dashboard and streaming portal.
-
-The application leverages Python WebSockets for low-latency live audio streaming, FastAPI/Celery for task processing, and React (Vite + TypeScript) for a premium, responsive frontend.
+VeriSonic is a high-fidelity audio platform for **lossless music streaming**, **live radio broadcasting**, and **studio-grade catalog management**. It combines a React web portal, a FastAPI backend with Celery processing, Razorpay subscription checkout, and a PyQt5 desktop broadcaster for real-time station ingest.
 
 ---
 
-## 🛠️ Architecture & System Design
+## Features
+
+### Listeners
+- **Home Feed** — recently played, trending tracks, popular artists (mobile tile/scroll layouts)
+- **Radio Stations** — browse live and external stations; compact mobile tiles with location and frequency
+- **Search** — tracks and radio with filters, recent searches, and trending queries
+- **Favorites & Playlists** — sync favorites to the API; create playlists with drag-reorder
+- **Global audio player** — queue, lyrics, shuffle/repeat, playback speed, quality tiers, MediaSession
+- **Mobile-first UI** — bottom navigation, expanded full-screen player, banner notifications
+
+### Studio admins
+- Studio profile onboarding (`profile_complete` gate before track management)
+- Upload lossless audio (FLAC/WAV/AIFF/ALAC) with automatic metadata extraction
+- Celery pipeline: spectral analysis, quality scoring, spectrogram, FFmpeg transcoding (MP3/AAC/HLS)
+- Track management, approval workflow, OpenAI Whisper lyrics transcription (optional)
+- Studio profile and reactivation appeals
+
+### Radio admins
+- Register and manage radio station nodes (profile, location, frequency, programs)
+- **Live broadcast** via desktop broadcaster (WebSocket MP3 ingest → HTTP/WebRTC listeners)
+- Stream key generation/regeneration (time-limited OTP-style keys)
+- Program schedule editor with timezone-aware active program detection
+- Admin/listener mode toggle
+
+### Platform admins
+- User management (roles, subscriptions)
+- Studio and station moderation (enable/disable, reactivation)
+- Analytics dashboard (plays, bandwidth, quality distribution)
+- Acoustic quality reports with admin approve/reject
+- Mandatory password reset gate for seeded admin account
+
+### Subscriptions
+- **Free** — 7-day full-access trial, then 30s track preview / 60s radio preview / AAC 128 only
+- **Premium** — full playback, higher quality streams (MP3 320, AAC 256, lossless master)
+  - Self-service via Razorpay: Premium Monthly (₹99) or Premium Yearly (₹999)
+  - Plan changes can be queued for end of billing period; cancel-at-period-end supported
+- **Unlimited** — admin-assigned only (no checkout)
+- Checkout UI: Landing page pricing, Settings, and in-player Premium modal
+
+---
+
+## Architecture
 
 ```mermaid
 graph TD
-    subgraph Client Application
-        Broadcaster[PyQt5 Broadcaster Client] -->|Capture Audio & Encode MP3| WS_Send[WebSocket connection]
+    subgraph Clients
+        Browser[React Web Portal]
+        Broadcaster[PyQt5 Broadcaster]
+        Razorpay[Razorpay Checkout]
     end
 
-    subgraph Service Stack (Docker Compose)
-        Nginx[Nginx Reverse Proxy] -->|Port 80| FastAPI[FastAPI Backend]
-        Nginx -->|Port 80| Vite[React/Vite Frontend]
-        
-        FastAPI -->|Stream Routing| WS_Send
-        FastAPI -->|Async Tasks| Celery[Celery Task Worker]
-        
-        Celery -->|Queue Broker| Redis[(Redis Cache / Broker)]
-        Celery -->|Write Metadata| Postgres[(PostgreSQL DB)]
-        Celery -->|Upload Recordings| MinIO[(MinIO S3 Audio Storage)]
+    subgraph Docker Compose Stack
+        Nginx[Nginx :80]
+        Frontend[Vite/React :5173]
+        Backend[FastAPI :8001]
+        Worker[Celery Worker]
+        Redis[(Redis)]
+        Postgres[(PostgreSQL)]
+        MinIO[(MinIO S3)]
     end
 
-    classDef client fill:#f43f5e,stroke:#333,stroke-width:1px,color:#fff;
-    classDef service fill:#151d30,stroke:#1e293b,stroke-width:1px,color:#fff;
-    classDef storage fill:#0f172a,stroke:#334155,stroke-width:1px,color:#94a3b8;
-    
-    class Broadcaster,WS_Send client;
-    class Nginx,FastAPI,Vite,Celery service;
-    class Redis,Postgres,MinIO storage;
+    Browser --> Nginx
+    Broadcaster -->|WebSocket MP3| Backend
+    Browser --> Razorpay
+    Razorpay -->|Payment verify| Backend
+    Nginx --> Frontend
+    Nginx --> Backend
+    Backend --> Redis
+    Backend --> Postgres
+    Backend --> MinIO
+    Worker --> Redis
+    Worker --> Postgres
+    Worker --> MinIO
 ```
+
+**Live radio path:** Broadcaster → `WS /api/radio/stream/ws` → `LiveStreamManager` (in-memory + optional Redis fan-out) → listeners via `GET /api/radio/{id}/live` or WebRTC.
+
+**Music path:** Upload → Celery analyze → quality score → transcode → S3 → HLS/MP3/AAC playback in browser. Lossless master streams use short-lived tickets.
+
+**Subscription path:** Client → `POST /api/subscriptions/create-order` → Razorpay Checkout → `POST /api/subscriptions/verify` → plan activated.
 
 ---
 
-## 📦 Repository Layout
+## Repository layout
 
 ```text
 verisonic/
-├── backend/                  # FastAPI Application (API, WebSockets, DB Models, Celery worker)
-│   ├── app/                  # Main server logic and endpoints
-│   ├── Dockerfile            # Container build definition for backend & worker
-│   └── requirements.txt      # Python backend packages
-├── frontend/                 # Web Portal Dashboard (Vite + TS + Tailwind)
-│   ├── src/                  # React components and layouts
-│   └── Dockerfile            # Container build definition for frontend
-├── broadcaster/              # Standalone PyQt5 desktop broadcaster client
-│   ├── verisonic_broadcaster.py  # Main desktop app logic & fallback Tkinter view
-│   ├── generate_icons.py     # Script to generate asset icons for executable bundling
-│   └── distributing_broadcaster.md # Platform compile guidelines (Mac, Windows, Linux, Android)
-├── .github/workflows/        # Automated multi-platform build pipelines (CI/CD)
-│   └── build-broadcaster.yml # Matrix builder workflow
-├── nginx.conf                # reverse proxy configuration for development routing
-└── docker-compose.yml        # Orchestration configurations for local services
+├── backend/                 # FastAPI API, WebSockets, Celery tasks, services
+│   ├── app/
+│   │   ├── api/             # auth, music, radio, playlist, favorites, analytics, subscriptions
+│   │   ├── core/            # config, premium gating, subscription plans, security
+│   │   ├── db/              # migrations runner
+│   │   ├── services/        # storage, live_stream, audio, razorpay, subscription
+│   │   └── tasks/           # Celery analyze + transcode
+│   └── tests/
+├── frontend/                # Vite + React + TypeScript + Tailwind
+│   └── src/
+│       ├── pages/           # Home, Radio, Search, Playlists, admin pages, …
+│       ├── components/      # player, layout, subscription, shared UI
+│       ├── context/         # AuthContext, AudioContext
+│       └── utils/           # subscriptionCheckout, streamQuality, accountTier
+├── broadcaster/             # PyQt5 desktop live broadcaster
+├── .github/workflows/       # backend-tests.yml, build-broadcaster.yml
+├── docker-compose.yml
+├── nginx.conf
+└── implementation_plan.md   # Living spec & implementation status
 ```
 
 ---
 
-## 🚀 Getting Started
+## Getting started
 
 ### Prerequisites
-Make sure you have the following installed on your machine:
-* [Docker & Docker Compose](https://www.docker.com/)
-* [Python 3.10+](https://www.python.org/downloads/) (to run/test the broadcaster locally)
+- [Docker & Docker Compose](https://www.docker.com/)
+- Python 3.10+ (local broadcaster or backend dev)
+- Node.js 18+ (frontend dev outside Docker)
 
----
+### 1. Start the stack
 
-### 1. Launch the Server Infrastructure
-
-Start the database, queue manager, object storage, and backend/frontend instances:
 ```bash
 docker compose up --build
 ```
 
-#### Running Endpoints:
-* **Web Portal (Frontend)**: [http://localhost](http://localhost) (Proxied via Nginx)
-* **Backend API Documentation**: [http://localhost/api/docs](http://localhost/api/docs)
-* **MinIO Console (S3 Storage)**: [http://localhost:9001](http://localhost:9001) (User: `minioadmin` / Pass: `minioadmin`)
+| Service | URL |
+|---------|-----|
+| Web portal | http://localhost:3000 |
+| API docs | http://localhost:3000/docs |
+| MinIO console | http://localhost:9001 (`minioadmin` / `minioadmin`) |
+
+Nginx listens on port 3000 and proxies to the Vite dev server (5173) and FastAPI backend (8001).
+
+### 2. Default admin account
+
+On first startup the backend seeds:
+
+- **Email:** `admin@verisonic.com`
+- **Password:** `admin12345`
+
+Use this to log in as platform admin. You will be prompted to set a new password before admin features are unlocked.
+
+Use this account to promote users to studio/radio admin roles and assign subscription tiers.
+
+### 3. Desktop broadcaster (local dev)
+
+```bash
+python -m pip install -r broadcaster/requirements.txt
+python broadcaster/verisonic_broadcaster.py
+```
+
+Only **radio admin** accounts can broadcast. Copy the stream key from the Radio Stations dashboard (Connection Settings).
+
+Packaging and CI builds: see [broadcaster/distributing_broadcaster.md](broadcaster/distributing_broadcaster.md).
+
+### 4. Subscriptions (optional)
+
+To enable Razorpay checkout, set these in `docker-compose.yml` or your environment:
+
+```yaml
+RAZORPAY_KEY_ID: your_key_id
+RAZORPAY_KEY_SECRET: your_key_secret
+```
+
+Without keys, plan listing works but checkout returns a configuration error.
 
 ---
 
-### 2. Run the Desktop Broadcaster Client
+## Development
 
-To run the broadcaster locally in development:
+### Backend tests
 
-1. **Install broadcaster dependencies**:
-   ```bash
-   python -m pip install -r broadcaster/requirements.txt
-   ```
-2. **Run the Icon Generator** (Optional, creates target OS icon files):
-   ```bash
-   python broadcaster/generate_icons.py
-   ```
-3. **Start the App**:
-   ```bash
-   python broadcaster/verisonic_broadcaster.py
-   ```
+```bash
+cd backend && pytest tests/ -v
+```
+
+CI runs on push/PR when `backend/**` changes (`.github/workflows/backend-tests.yml`).
+
+### Frontend dev (outside Docker)
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The Vite dev server proxies `/api` to the backend.
+
+### Environment variables
+
+Key backend settings (see `docker-compose.yml` and `backend/app/core/config.py`):
+
+- `POSTGRES_*`, `REDIS_HOST`, `S3_ENDPOINT_URL`
+- `SECRET_KEY` — required in production (32+ characters); docker-compose sets a dev-only value locally
+- `ENVIRONMENT` — set to `production` in deployed environments (enables stricter checks, hides API docs)
+- `CORS_ORIGINS` — comma-separated allowed web origins
+- `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` — enable Premium checkout (INR)
+- `OPENAI_API_KEY` (optional, for lyrics transcription)
+
+**Production checklist:** set `ENVIRONMENT=production`, a strong `SECRET_KEY`, strong database/MinIO credentials, Razorpay live keys, and restrict service ports to localhost or remove host bindings entirely.
 
 ---
 
-## 💾 Compiling the Broadcaster for Distribution
+## User roles
 
-The desktop broadcaster client can be packaged into standalone executables (`.exe` on Windows, `.app` on macOS, and native binaries on Linux) using PyInstaller.
+| Role | Capabilities |
+|------|----------------|
+| `listener` | Browse, play, favorites, playlists, search, subscribe |
+| `studio_admin` | Upload/manage tracks, studio profile (onboarding gate) |
+| `radio_admin` | Own station(s), live broadcast, program schedule |
+| `admin` | Full platform management, subscription assignment |
 
-### Automatic Builds (Recommended)
-This repository includes a pre-configured **GitHub Actions Pipeline**. 
-* Whenever code inside the `broadcaster/` folder is pushed, a matrix pipeline builds binaries for macOS, Linux, and Windows automatically.
-* Check your repository's **Actions** tab to download your compiled builds from the build artifacts.
+Staff roles support **Admin mode** vs **Listen mode** (toggle in header). Playlists and library playback are disabled in admin mode.
 
-### Manual Builds
-For instructions on manual compiling, loopback sound setup (streaming browser/system audio), background services config, and packaging for Android (using Buildozer), refer to the detailed distribution guide:
-👉 [broadcaster/distributing_broadcaster.md](file:///Users/charlsonpeter/Documents/Projects/My_Projects/verisonic/broadcaster/distributing_broadcaster.md)
+---
+
+## Documentation
+
+| Document | Purpose |
+|----------|---------|
+| [implementation_plan.md](implementation_plan.md) | Technical spec, API summary, implementation status, gaps |
+| [walkthrough.md](walkthrough.md) | Live broadcaster setup walkthrough |
+| [broadcaster/distributing_broadcaster.md](broadcaster/distributing_broadcaster.md) | Build & distribute desktop broadcaster |
+
+---
+
+## License
+
+Proprietary — VeriSonic project.

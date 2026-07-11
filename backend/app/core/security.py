@@ -1,10 +1,16 @@
 import bcrypt
+import secrets
 from datetime import datetime, timedelta
 from typing import Any, Union
 from jose import jwt
 from app.core.config import settings
+from app.core.redis_client import get_redis
 
 ALGORITHM = "HS256"
+REFRESH_TOKEN_TTL_DAYS = 30
+STREAM_TICKET_EXPIRE_MINUTES = 5
+REFRESH_COOKIE_NAME = "verisonic_refresh"
+
 
 def create_access_token(subject: Union[str, Any], expires_delta: timedelta = None) -> str:
     if expires_delta:
@@ -18,11 +24,73 @@ def create_access_token(subject: Union[str, Any], expires_delta: timedelta = Non
     return encoded_jwt
 
 def create_refresh_token(subject: Union[str, Any]) -> str:
-    # Refresh tokens last longer, e.g., 30 days
-    expire = datetime.utcnow() + timedelta(days=30)
-    to_encode = {"exp": expire, "sub": str(subject), "type": "refresh"}
+    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_TTL_DAYS)
+    jti = secrets.token_urlsafe(16)
+    to_encode = {"exp": expire, "sub": str(subject), "type": "refresh", "jti": jti}
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
+    _store_refresh_jti(int(subject), jti)
     return encoded_jwt
+
+
+def create_stream_ticket(user_id: int, track_id: int) -> str:
+    expire = datetime.utcnow() + timedelta(minutes=STREAM_TICKET_EXPIRE_MINUTES)
+    to_encode = {
+        "exp": expire,
+        "sub": str(user_id),
+        "type": "stream",
+        "track_id": track_id,
+    }
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
+
+
+def validate_stream_ticket(ticket: str, track_id: int) -> int:
+    payload = jwt.decode(ticket, settings.SECRET_KEY, algorithms=[ALGORITHM])
+    if payload.get("type") != "stream":
+        raise ValueError("Invalid stream ticket")
+    if int(payload.get("track_id", -1)) != track_id:
+        raise ValueError("Stream ticket track mismatch")
+    user_id = payload.get("sub")
+    if user_id is None:
+        raise ValueError("Invalid stream ticket subject")
+    return int(user_id)
+
+
+def _refresh_key(user_id: int) -> str:
+    return f"auth:refresh:{user_id}"
+
+
+def _store_refresh_jti(user_id: int, jti: str) -> None:
+    client = get_redis()
+    if client is None:
+        if settings.REQUIRE_REDIS:
+            raise RuntimeError("Redis is required for refresh token storage.")
+        return
+    client.setex(_refresh_key(user_id), REFRESH_TOKEN_TTL_DAYS * 86400, jti)
+
+
+def validate_refresh_token(refresh_token: str) -> int:
+    payload = jwt.decode(refresh_token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+    user_id = payload.get("sub")
+    token_type = payload.get("type")
+    jti = payload.get("jti")
+    if user_id is None or token_type != "refresh" or not jti:
+        raise ValueError("Invalid refresh token")
+    client = get_redis()
+    if client is None:
+        if settings.REQUIRE_REDIS:
+            raise ValueError("Refresh token validation unavailable")
+        return int(user_id)
+    stored = client.get(_refresh_key(int(user_id)))
+    if stored is None or stored.decode() != jti:
+        raise ValueError("Refresh token revoked or expired")
+    return int(user_id)
+
+
+def revoke_refresh_token(user_id: int) -> None:
+    client = get_redis()
+    if client is None:
+        return
+    client.delete(_refresh_key(user_id))
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(

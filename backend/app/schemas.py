@@ -30,7 +30,27 @@ class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: str
 
+class ResetInitialPasswordRequest(BaseModel):
+    new_password: str
+
 # --- Artist Schemas ---
+class ArtistProfileFields(BaseModel):
+    stage_name: Optional[str] = None
+    bio: Optional[str] = None
+    category: Optional[str] = None
+    licence: Optional[str] = None
+    street_address: Optional[str] = None
+    city: Optional[str] = None
+    state_province: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    website: Optional[str] = None
+    languages: Optional[str] = None
+    social_twitter: Optional[str] = None
+    social_instagram: Optional[str] = None
+
 class ArtistCreate(BaseModel):
     stage_name: str
     bio: Optional[str] = None
@@ -44,17 +64,34 @@ class ArtistResponse(BaseModel):
     disabled_reason: Optional[str] = None
     reactivation_reason: Optional[str] = None
     reactivation_requested: Optional[bool] = None
+    profile_complete: bool = False
+    category: Optional[str] = None
+    licence: Optional[str] = None
+    street_address: Optional[str] = None
+    city: Optional[str] = None
+    state_province: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    website: Optional[str] = None
+    languages: Optional[str] = None
+    social_twitter: Optional[str] = None
+    social_instagram: Optional[str] = None
 
     class Config:
         from_attributes = True
 
-class ArtistUpdate(BaseModel):
-    stage_name: Optional[str] = None
-    bio: Optional[str] = None
+class ArtistUpdate(ArtistProfileFields):
     is_active: Optional[bool] = None
     disabled_reason: Optional[str] = None
     reactivation_reason: Optional[str] = None
     reactivation_requested: Optional[bool] = None
+    profile_complete: Optional[bool] = None
+
+class StudioProfileUpdate(ArtistProfileFields):
+    stage_name: str
+    bio: str
 
 class UserResponse(BaseModel):
     id: int
@@ -63,13 +100,24 @@ class UserResponse(BaseModel):
     role: str
     subscription: str
     subscription_cycle: Optional[str] = None
+    subscription_expires_at: Optional[datetime] = None
+    subscription_activated_at: Optional[datetime] = None
     real_role: Optional[str] = None
     is_active: bool
+    must_reset_password: bool = False
     created_at: datetime
+    stream_quality: Optional[str] = None
+    pending_plan_id: Optional[str] = None
+    pending_plan_paid: bool = False
+    subscription_cancel_at_period_end: bool = False
     artist_profile: Optional[ArtistResponse] = None
 
     class Config:
         from_attributes = True
+
+
+class UserSettingsUpdate(BaseModel):
+    stream_quality: Optional[str] = None
 
 # --- Album Schemas ---
 class AlbumCreate(BaseModel):
@@ -127,6 +175,7 @@ class TrackResponse(BaseModel):
     lyricist: Optional[str] = None
     year: Optional[int] = None
     language: Optional[str] = None
+    genres: Optional[List[str]] = []
     created_at: datetime
 
     class Config:
@@ -144,13 +193,43 @@ class AudioAnalysisReportResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
+class ScoreBreakdownItem(BaseModel):
+    check: str
+    description: str
+    value: str
+    threshold: str
+    passed: bool
+    deduction: int
+    max_points: int
+    points_achieved: int
+    calculation: str
+
+
+class QualityScoreTier(BaseModel):
+    min_score: int
+    label: str
+    description: str
+
+
+class QualityReportDetailResponse(AudioAnalysisReportResponse):
+    base_score: int = 100
+    final_score: Optional[int] = None
+    quality_level: Optional[str] = None
+    score_breakdown: List[ScoreBreakdownItem] = []
+    rejection_reasons: List[str] = []
+    quality_tiers: List[QualityScoreTier] = []
+
 # --- Playlist Schemas ---
 class PlaylistCreate(BaseModel):
     name: str
-    is_public: Optional[bool] = True
+    is_public: Optional[bool] = False
 
 class PlaylistTrackAdd(BaseModel):
     track_id: int
+
+class PlaylistTrackReorder(BaseModel):
+    track_ids: List[int]
 
 class PlaylistResponse(BaseModel):
     id: int
@@ -256,6 +335,12 @@ class RadioStationResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+class VerifyBroadcastKeyRequest(BaseModel):
+    stream_key: str
+
+class VerifyBroadcastKeyResponse(BaseModel):
+    valid: bool
 
 class RadioScheduleCreate(BaseModel):
     track_id: int

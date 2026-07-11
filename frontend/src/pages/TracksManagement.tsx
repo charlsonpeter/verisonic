@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { Music, Trash2, CheckCircle2, XCircle, RefreshCw, Star, Play, Ban, Check, Edit3, X, UploadCloud, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
+import { AppModal } from '../components/shared/AppModal';
 import { showError, showConfirm } from '../utils/swal';
+import { trackHasPlayableStream } from '../utils/streamQuality';
+import { createAuthenticatedWebSocket } from '../utils/authTokens';
 
 interface UploadQueueItem {
   id: string;
@@ -35,6 +37,8 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
   const [tracks, setTracks] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const [selectedTrackIds, setSelectedTrackIds] = useState<number[]>([]);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   // Studio registration states (for studio_admin post-approval setup)
   const [registerStageName, setRegisterStageName] = useState(currentUser?.artist_profile?.stage_name || currentUser?.full_name || '');
@@ -284,11 +288,16 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
   }, []);
 
   useEffect(() => {
+    setSelectedTrackIds((prev) => prev.filter((id) => tracks.some((t) => t.id === id)));
+  }, [tracks]);
+
+  useEffect(() => {
     if (!token) return;
 
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProtocol}//${window.location.host}/api/music/ws/tracks/status?token=${token}`;
-    const socket = new WebSocket(wsUrl);
+    const wsUrl = `${wsProtocol}//${window.location.host}/api/music/ws/tracks/status`;
+    const socket = createAuthenticatedWebSocket(wsUrl, token);
+    if (!socket) return;
 
     socket.onmessage = (event) => {
       try {
@@ -355,6 +364,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       });
       if (res.ok) {
         setMessage({ type: 'success', text: 'Track deleted successfully.' });
+        setSelectedTrackIds((prev) => prev.filter((id) => id !== trackId));
         fetchTracks();
       } else {
         const data = await res.json();
@@ -362,6 +372,73 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       }
     } catch {
       setMessage({ type: 'error', text: 'Connection failed.' });
+    }
+  };
+
+  const allTracksSelected = tracks.length > 0 && selectedTrackIds.length === tracks.length;
+
+  const toggleSelectAll = () => {
+    if (allTracksSelected) {
+      setSelectedTrackIds([]);
+    } else {
+      setSelectedTrackIds(tracks.map((t) => t.id));
+    }
+  };
+
+  const toggleTrackSelection = (trackId: number) => {
+    setSelectedTrackIds((prev) =>
+      prev.includes(trackId) ? prev.filter((id) => id !== trackId) : [...prev, trackId]
+    );
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedTrackIds.length === 0 || isBulkDeleting) return;
+
+    const count = selectedTrackIds.length;
+    const confirmed = await showConfirm(
+      `Delete ${count} Track${count === 1 ? '' : 's'}?`,
+      `Are you sure you want to permanently delete ${count} selected track${count === 1 ? '' : 's'}? This will remove all audio transcode masters.`,
+      `Yes, delete ${count}`
+    );
+    if (!confirmed) return;
+
+    setMessage(null);
+    setIsBulkDeleting(true);
+    try {
+      const results = await Promise.allSettled(
+        selectedTrackIds.map((trackId) =>
+          fetch(`/api/music/${trackId}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${token}` },
+          })
+        )
+      );
+
+      const failed = results.filter(
+        (r) => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok)
+      ).length;
+      const deleted = count - failed;
+
+      setSelectedTrackIds([]);
+      fetchTracks(true);
+
+      if (failed === 0) {
+        setMessage({
+          type: 'success',
+          text: `${deleted} track${deleted === 1 ? '' : 's'} deleted successfully.`,
+        });
+      } else if (deleted > 0) {
+        setMessage({
+          type: 'error',
+          text: `${deleted} deleted, ${failed} failed. Refresh and try again for remaining tracks.`,
+        });
+      } else {
+        setMessage({ type: 'error', text: 'Failed to delete selected tracks.' });
+      }
+    } catch {
+      setMessage({ type: 'error', text: 'Connection failed.' });
+    } finally {
+      setIsBulkDeleting(false);
     }
   };
 
@@ -510,23 +587,30 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     <div className="space-y-8 w-full max-w-6xl">
       {/* Title */}
       <div className="flex justify-between items-center">
-        <div>
+        <div className="hidden md:block">
           <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
             <Music className="w-8 h-8 text-rose-400 animate-pulse" /> Manage Tracks
           </h2>
-          <p className="text-sm text-slate-400 mt-1">
-            {currentUser?.role === 'admin' 
-              ? 'Upload audio master files, monitor spectral analysis validation, and override approvals.'
-              : 'Upload and monitor the status of your audio masters and manage your release catalog.'}
-          </p>
         </div>
-        <button
-          onClick={() => setIsUploadModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 rounded-xl text-xs font-bold text-white shadow-lg transition"
-        >
-          <UploadCloud className="w-3.5 h-3.5" />
-          Upload New Track
-        </button>
+        <div className="flex items-center gap-2">
+          {selectedTrackIds.length > 0 && (
+            <button
+              onClick={handleBulkDelete}
+              disabled={isBulkDeleting}
+              className="flex items-center gap-2 px-4 py-2 bg-rose-600/15 hover:bg-rose-600/25 border border-rose-500/30 rounded-xl text-xs font-bold text-rose-400 transition disabled:opacity-50"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Delete Selected ({selectedTrackIds.length})
+            </button>
+          )}
+          <button
+            onClick={() => setIsUploadModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 rounded-xl text-xs font-bold text-white shadow-lg transition"
+          >
+            <UploadCloud className="w-3.5 h-3.5" />
+            Upload New Track
+          </button>
+        </div>
       </div>
 
       {/* Studio Profile Registration Form (Studio Admin post-approval setup) */}
@@ -572,30 +656,56 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
         </form>
       )}
 
-      {/* Upload Master Modal */}
-      {/* Upload Master Modal */}
-      {isUploadModalOpen && createPortal(
-        <div className="fixed inset-0 z-50 flex justify-center items-start overflow-y-auto p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
-          <div className="bg-slate-900 border border-white/10 rounded-3xl w-full max-w-4xl max-h-[90vh] flex flex-col relative shadow-2xl my-auto overflow-hidden">
-            {/* Header (Sticky/Static, no scroll) */}
-            <div className="p-6 pb-4 border-b border-white/5 relative flex-shrink-0">
-              <button 
-                onClick={() => setIsUploadModalOpen(false)}
-                className="absolute top-6 right-6 p-2 bg-slate-950/50 hover:bg-slate-950 rounded-full text-slate-400 hover:text-white transition"
-                title="Close modal"
-              >
-                <X className="w-4 h-4" />
-              </button>
-              <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                <UploadCloud className="w-6 h-6 text-rose-400" /> Upload Studio Master
-              </h3>
-              <p className="text-xs text-slate-400 mt-1 font-sans">
-                Process acoustic FLAC/WAV/MP3 files through live Librosa spectral checks.
-              </p>
-            </div>
-
-            {/* Scrollable Content Area */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      <AppModal
+        open={isUploadModalOpen}
+        onClose={() => setIsUploadModalOpen(false)}
+        maxWidth="4xl"
+        align="start"
+        showGradient={false}
+        panelClassName="bg-slate-900 max-h-[90vh] flex flex-col overflow-hidden"
+        bodyClassName="flex-1 overflow-y-auto p-6 space-y-6 min-h-0"
+        header={(
+          <div className="border-b border-white/5 pb-4">
+            <h3 className="text-xl font-bold text-white flex items-center gap-2">
+              <UploadCloud className="w-6 h-6 text-rose-400" /> Upload Studio Master
+            </h3>
+            <p className="text-xs text-slate-400 mt-1 font-sans">
+              Process acoustic FLAC/WAV/MP3 files through live Librosa spectral checks.
+            </p>
+          </div>
+        )}
+        footer={uploadQueue.length > 0 ? (
+          isQueueUploading ? (
+            <button
+              type="button"
+              disabled
+              className="w-full bg-slate-900 border border-white/5 text-slate-500 font-bold py-3 rounded-xl transition text-xs font-sans cursor-not-allowed text-center"
+            >
+              Uploading queue... {uploadQueue.filter(q => q.status === 'completed' || q.status === 'failed').length} / {uploadQueue.length} done
+            </button>
+          ) : uploadQueue.some(q => q.status === 'completed' || q.status === 'failed') ? (
+            <button
+              type="button"
+              onClick={() => {
+                setUploadQueue([]);
+                setIsUploadModalOpen(false);
+              }}
+              className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-xl transition text-xs shadow flex items-center justify-center gap-1.5 font-sans"
+            >
+              Close & Finish
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleUploadQueue}
+              className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-xl transition text-xs shadow flex items-center justify-center gap-1.5 font-sans"
+            >
+              Verify and Upload Queue
+            </button>
+          )
+        ) : undefined}
+        footerClassName="w-full flex-shrink-0 !justify-stretch px-6 py-4"
+      >
               {uploadMessage && (
                 <div className={`p-4 rounded-xl text-xs flex items-center gap-2 font-semibold ${uploadMessage.type === 'success' ? 'bg-emerald-500/10 border border-emerald-500/25 text-emerald-400' : 'bg-rose-500/10 border border-rose-500/25 text-rose-400'}`}>
                   {uploadMessage.type === 'success' ? <CheckCircle2 className="w-5 h-5 flex-shrink-0" /> : <AlertTriangle className="w-5 h-5 flex-shrink-0" />}
@@ -855,42 +965,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                   </div>
                 </div>
               )}
-            </div>
-
-            {/* Footer (Sticky/Static with Action Button) */}
-            {uploadQueue.length > 0 && (
-              <div className="p-6 pt-4 border-t border-white/5 bg-slate-950/20 flex-shrink-0">
-                {isQueueUploading ? (
-                  <button 
-                    disabled 
-                    className="w-full bg-slate-900 border border-white/5 text-slate-500 font-bold py-3 rounded-xl transition text-xs font-sans cursor-not-allowed text-center"
-                  >
-                    Uploading queue... {uploadQueue.filter(q => q.status === 'completed' || q.status === 'failed').length} / {uploadQueue.length} done
-                  </button>
-                ) : uploadQueue.some(q => q.status === 'completed' || q.status === 'failed') ? (
-                  <button 
-                    onClick={() => {
-                      setUploadQueue([]);
-                      setIsUploadModalOpen(false);
-                    }}
-                    className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-xl transition text-xs shadow flex items-center justify-center gap-1.5 font-sans"
-                  >
-                    Close & Finish
-                  </button>
-                ) : (
-                  <button 
-                    onClick={handleUploadQueue}
-                    className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-xl transition text-xs shadow flex items-center justify-center gap-1.5 font-sans"
-                  >
-                    Verify and Upload Queue
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        </div>,
-        document.body
-      )}
+      </AppModal>
 
       {message && (
         <div className={`p-4 rounded-xl text-xs flex items-center gap-2 font-semibold font-sans ${
@@ -902,7 +977,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
+      <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
         {isLoading && tracks.length === 0 ? (
           <p className="p-8 text-xs text-slate-500 text-center">Loading audio catalog files...</p>
         ) : tracks.length === 0 ? (
@@ -914,6 +989,15 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="border-b border-white/5 bg-slate-950/40 text-slate-400 uppercase font-bold tracking-wider">
+                <th className="p-5 w-10">
+                  <input
+                    type="checkbox"
+                    checked={allTracksSelected}
+                    onChange={toggleSelectAll}
+                    className="w-3.5 h-3.5 accent-rose-500 cursor-pointer"
+                    aria-label="Select all tracks"
+                  />
+                </th>
                 <th className="p-5">Track Details</th>
                 {currentUser?.role === 'admin' && <th className="p-5">Artist</th>}
                 <th className="p-5">Acoustic Specs</th>
@@ -928,6 +1012,15 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                 const status = getStatusDetails(t);
                 return (
                   <tr key={t.id} className="hover:bg-slate-900/20 transition">
+                    <td className="p-5">
+                      <input
+                        type="checkbox"
+                        checked={selectedTrackIds.includes(t.id)}
+                        onChange={() => toggleTrackSelection(t.id)}
+                        className="w-3.5 h-3.5 accent-rose-500 cursor-pointer"
+                        aria-label={`Select ${t.title}`}
+                      />
+                    </td>
                     <td className="p-5">
                       <div className="font-bold text-slate-200">{t.title}</div>
                       {t.album_title && <div className="text-[10px] text-slate-455 mt-0.5">Album: {t.album_title}</div>}
@@ -977,7 +1070,11 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                     <td className="p-5 text-center">
                       <button
                         onClick={() => playTrack(t)}
-                        disabled={!t.approved || !t.hls_playlist_path}
+                        disabled={
+                          currentUser?.role === 'studio_admin'
+                            ? !trackHasPlayableStream(t)
+                            : !t.approved || !t.hls_playlist_path
+                        }
                         className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 hover:text-rose-400 hover:border-rose-500/30 disabled:opacity-30 disabled:cursor-not-allowed transition"
                         title="Preview Audio"
                       >
@@ -1034,31 +1131,183 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
         )}
       </div>
 
-      {/* Edit Modal Overlay */}
-      {editingTrack && createPortal(
-        <div className="fixed inset-0 z-50 flex justify-center items-start overflow-y-auto p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in font-sans">
-          <div className="glass-card max-w-3xl w-full rounded-3xl border border-white/10 shadow-2xl relative bg-gradient-to-br from-slate-950 to-slate-900 max-h-[90vh] flex flex-col overflow-hidden my-auto">
-            {/* Soft background glow */}
-            <div className="absolute -top-24 -right-24 w-48 h-48 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
-            
-            {/* Header (Sticky/Static) */}
-            <div className="p-6 pb-4 border-b border-white/5 relative flex-shrink-0">
-              <button 
-                onClick={() => setEditingTrack(null)}
-                className="absolute top-6 right-6 p-2 text-slate-400 hover:text-white rounded-xl hover:bg-white/5 transition"
-                title="Close"
-              >
-                <X className="w-4.5 h-4.5" />
-              </button>
-              
-              <div>
-                <h3 className="text-xl font-extrabold text-white">Edit Track Details</h3>
-                <p className="text-xs text-slate-400">Update track information, upload custom artwork, or edit lyrics transcription.</p>
-              </div>
-            </div>
+      <div className="md:hidden space-y-3">
+        {isLoading && tracks.length === 0 ? (
+          <p className="p-8 text-xs text-slate-500 text-center">Loading audio catalog files...</p>
+        ) : tracks.length === 0 ? (
+          <div className="p-12 text-center space-y-3 rounded-2xl border border-white/5 bg-slate-900/10">
+            <Music className="w-10 h-10 text-slate-600 mx-auto" />
+            <p className="text-xs text-slate-500">No tracks found. Upload tracks to see them here.</p>
+          </div>
+        ) : (
+          tracks.map((t) => {
+            const status = getStatusDetails(t);
+            const isSelected = selectedTrackIds.includes(t.id);
+            const canPlay =
+              currentUser?.role === 'studio_admin'
+                ? trackHasPlayableStream(t)
+                : !!(t.approved && t.hls_playlist_path);
 
-            {/* Scrollable Content Area & Form Wrapper */}
+            return (
+              <div
+                key={t.id}
+                className={`rounded-2xl border p-4 space-y-3 transition ${
+                  isSelected
+                    ? 'border-rose-500/30 bg-rose-600/5'
+                    : 'border-white/5 bg-slate-900/20'
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleTrackSelection(t.id)}
+                    className="w-4 h-4 mt-0.5 accent-rose-500 cursor-pointer flex-shrink-0"
+                    aria-label={`Select ${t.title}`}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-bold text-slate-200 truncate">{t.title}</div>
+                    {t.album_title && (
+                      <div className="text-[10px] text-slate-455 truncate mt-0.5">Album: {t.album_title}</div>
+                    )}
+                    {currentUser?.role === 'admin' && (
+                      <div className="text-[10px] text-slate-350 truncate mt-0.5">
+                        {t.artist_name || 'Unknown Artist'}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {t.file_format ? (
+                  <div className="text-[10px] text-slate-400 space-y-0.5">
+                    <div>
+                      Format: <strong className="text-slate-300">{t.file_format}</strong>
+                    </div>
+                    <div>
+                      Specs:{' '}
+                      <span className="text-slate-455">
+                        {t.sample_rate ? `${t.sample_rate}Hz` : 'N/A'} /{' '}
+                        {t.bit_depth ? `${t.bit_depth}-bit` : 'N/A'}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <span className="text-[10px] text-slate-650 italic">Pending analysis</span>
+                )}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  {t.quality_score !== null ? (
+                    <button
+                      type="button"
+                      onClick={() => onViewReport?.(t)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition ${
+                        t.quality_score >= 86
+                          ? 'bg-emerald-500/10 text-emerald-400'
+                          : t.quality_score >= 71
+                            ? 'bg-cyan-500/10 text-cyan-400'
+                            : 'bg-rose-500/10 text-rose-400'
+                      }`}
+                      title="View spectral analysis report"
+                    >
+                      {t.quality_score}%
+                    </button>
+                  ) : (
+                    <span className="text-[10px] text-slate-600">Score: —</span>
+                  )}
+                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}>
+                    {status.label}
+                  </span>
+                </div>
+
+                <p className="text-[9px] text-slate-500 leading-normal">{status.desc}</p>
+
+                <div className="flex items-center justify-end gap-2 pt-1 border-t border-white/5">
+                  <button
+                    type="button"
+                    onClick={() => playTrack(t)}
+                    disabled={!canPlay}
+                    className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 active:text-rose-400 disabled:opacity-30 disabled:cursor-not-allowed transition"
+                    title="Preview Audio"
+                  >
+                    <Play className={`w-4 h-4 fill-current ${currentTrack?.id === t.id && isPlaying ? 'text-rose-400' : ''}`} />
+                  </button>
+
+                  {currentUser?.role === 'admin' && t.quality_score !== null && (
+                    t.approved ? (
+                      <button
+                        type="button"
+                        onClick={() => handleApproveToggle(t.id, false)}
+                        className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 active:text-amber-500 transition"
+                        title="Reject Track"
+                      >
+                        <Ban className="w-4 h-4" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleApproveToggle(t.id, true)}
+                        className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 active:text-emerald-500 transition"
+                        title="Approve Track"
+                      >
+                        <Check className="w-4 h-4" />
+                      </button>
+                    )
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => handleEditClick(t)}
+                    className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 active:text-cyan-400 transition"
+                    title="Edit Details"
+                  >
+                    <Edit3 className="w-4 h-4" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(t.id)}
+                    className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 active:text-rose-500 transition"
+                    title="Delete Track"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {editingTrack && (
+      <AppModal
+        open
+        onClose={() => setEditingTrack(null)}
+        maxWidth="3xl"
+        align="start"
+        showGradient={false}
+        hideHeaderSection
+        panelClassName="glass-card max-h-[90vh] flex flex-col overflow-hidden bg-gradient-to-br from-slate-950 to-slate-900"
+        bodyClassName="flex-1 flex flex-col overflow-hidden p-0 min-h-0"
+      >
             <form onSubmit={handleEditSubmit} className="flex-1 flex flex-col overflow-hidden">
+              <div className="p-6 pb-4 border-b border-white/5 relative flex-shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setEditingTrack(null)}
+                  className="absolute top-6 right-6 p-2 text-slate-400 hover:text-white rounded-xl hover:bg-white/5 transition"
+                  title="Close"
+                >
+                  <X className="w-4.5 h-4.5" />
+                </button>
+
+                <div>
+                  <h3 className="text-xl font-extrabold text-white">Edit Track Details</h3>
+                  <p className="text-xs text-slate-400">Update track information, upload custom artwork, or edit lyrics transcription.</p>
+                </div>
+              </div>
+
+              <div className="absolute -top-24 -right-24 w-48 h-48 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
+
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
                 {editError && (
                   <div className="p-3 bg-rose-500/10 border border-rose-500/25 text-rose-455 rounded-xl text-[11px] font-semibold text-center">
@@ -1290,9 +1539,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                 </button>
               </div>
             </form>
-          </div>
-        </div>,
-        document.body
+      </AppModal>
       )}
 
       {/* Autocomplete Suggestions Datalists */}

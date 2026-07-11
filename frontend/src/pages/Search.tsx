@@ -5,14 +5,13 @@ import { TrackRow } from '../components/shared/TrackRow';
 import { RadioCard } from '../components/shared/RadioCard';
 
 interface SearchProps {
-  onViewReport: (track: Track) => void;
   onViewDetails: (track: Track) => void;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
 }
 
 export const Search: React.FC<SearchProps> = ({ 
-  onViewReport, onViewDetails, searchQuery, setSearchQuery 
+  onViewDetails, searchQuery, setSearchQuery 
 }) => {
   const { playTrack } = useAudio();
 
@@ -82,13 +81,12 @@ export const Search: React.FC<SearchProps> = ({
   const trendingQueries = ['Clara Schumann', 'FLAC 96kHz', 'Live Jazz Orchestra', 'Beethoven Symphony', 'Ambient White Noise'];
 
   return (
-    <div className="space-y-10 w-full">
+    <div className="flex flex-col gap-4 md:gap-10 w-full">
       {/* Title */}
-      <div>
+      <div className="hidden md:block">
         <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
-          <SearchIcon className="w-8 h-8 text-rose-400" /> Search Archives
+          <SearchIcon className="w-8 h-8 text-rose-400" /> Search
         </h2>
-        <p className="text-sm text-slate-400 mt-1">Instant query search matching tracks, artists, albums, or live broadcasting radio nodes.</p>
       </div>
 
       {/* Input container */}
@@ -193,7 +191,6 @@ export const Search: React.FC<SearchProps> = ({
                     key={track.id} 
                     track={track} 
                     index={idx}
-                    onViewReport={onViewReport}
                     onViewDetails={onViewDetails}
                   />
                 ))}

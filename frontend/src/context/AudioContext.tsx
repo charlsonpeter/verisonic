@@ -1,11 +1,35 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from './AuthContext';
 import Hls from 'hls.js';
+import {
+  describeStreamPath,
+  getEffectiveQuality,
+  getStreamCandidatesForQuality,
+  getOwnerStreamCandidates,
+  loadStoredQuality,
+  saveStoredQuality,
+  isStudioMasterQuality,
+  isMasterStreamPath,
+  resolveStreamUrl as resolveMasterStreamUrl,
+  QUALITY_LABELS,
+  type QualityLevelSetting,
+} from '../utils/streamQuality';
+import { parseStoredStreamQuality } from '../utils/userSettings';
 import { showError } from '../utils/swal';
+import {
+  applyAudioSinkId,
+  enumerateAudioOutputDevices,
+  loadStoredOutputDeviceId,
+  saveStoredOutputDeviceId,
+  supportsAudioOutputSelection,
+  supportsSelectAudioOutput,
+  type AudioOutputDeviceInfo,
+} from '../utils/audioOutputDevices';
 
 export interface Track {
   id: number;
   title: string;
+  artist_id?: number;
   artist_name: string;
   artist_name_override?: string;
   album_title?: string;
@@ -13,6 +37,9 @@ export interface Track {
   stream_url?: string;
   hls_playlist_path?: string;
   mp3_320_path?: string;
+  aac_256_path?: string;
+  aac_128_path?: string;
+  original_file_path?: string;
   duration: number;
   sample_rate?: number;
   bit_depth?: number;
@@ -25,6 +52,7 @@ export interface Track {
   lyricist?: string;
   year?: number;
   language?: string;
+  genres?: string[];
 }
 
 export interface RadioStation {
@@ -79,10 +107,15 @@ interface AudioContextType {
   currentQueueIndex: number;
   showPremiumModal: boolean;
   equalizerBars: number[];
-  qualityLevelSetting: 'normal' | 'high' | 'hires' | 'lossless';
+  qualityLevelSetting: QualityLevelSetting;
+  activeStreamLabel: string | null;
   analyser: AnalyserNode | null;
+  outputDevices: AudioOutputDeviceInfo[];
+  selectedOutputDeviceId: string;
+  outputDeviceSupported: boolean;
+  outputDevicesLoading: boolean;
 
-  playTrack: (track: Track, isRadio?: boolean) => void | Promise<void>;
+  playTrack: (track: Track, isRadio?: boolean, autoPlay?: boolean) => void | Promise<void>;
   playRadioStation: (station: RadioStation) => void;
   togglePlay: () => void;
   seek: (time: number) => void;
@@ -99,21 +132,32 @@ interface AudioContextType {
   playNext: () => void;
   playPrevious: () => void;
   setShowPremiumModal: (show: boolean) => void;
-  setQualityLevelSetting: (quality: 'normal' | 'high' | 'hires' | 'lossless') => void;
+  setQualityLevelSetting: (quality: QualityLevelSetting) => void;
   updateTrackMetadata: (track: Track) => void;
+  refreshOutputDevices: () => Promise<void>;
+  setOutputDevice: (deviceId: string) => Promise<void>;
+  promptSelectOutputDevice: () => Promise<void>;
 }
 
 const AudioContext = createContext<AudioContextType | undefined>(undefined);
 
 const API_URL = '/api';
 
-const resolveStreamUrl = (url?: string): string => {
+export type { QualityLevelSetting } from '../utils/streamQuality';
+export { QUALITY_LABELS } from '../utils/streamQuality';
+
+const resolveStorageUrl = (url?: string): string => {
   if (!url) return "";
-  return url.replace("http://localhost/storage", `${window.location.protocol}//${window.location.host}/storage`);
+  if (url.startsWith("/api/")) return url;
+  if (url.startsWith("/storage") || url.includes("/storage/")) {
+    const normalized = url.startsWith('/') ? url : `/${url}`;
+    return `${window.location.protocol}//${window.location.host}${normalized}`;
+  }
+  return "";
 };
 
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { token, isPremium, userMode, currentUser } = useAuth();
+  const { token, isPremium, canConfigureStreamQuality, userMode, currentUser, isStaffInAdminMode, updateStreamQuality } = useAuth();
 
   // State variables
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
@@ -131,7 +175,22 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [playQueue, setPlayQueue] = useState<Track[]>([]);
   const [currentQueueIndex, setCurrentQueueIndex] = useState<number>(-1);
   const [showPremiumModal, setShowPremiumModal] = useState<boolean>(false);
-  const [qualityLevelSetting, setQualityLevelSetting] = useState<'normal' | 'high' | 'hires' | 'lossless'>('lossless');
+  const [qualityLevelSetting, setQualityLevelSettingState] = useState<QualityLevelSetting>(() => {
+    return loadStoredQuality(null) ?? 'normal';
+  });
+  const [activeStreamLabel, setActiveStreamLabel] = useState<string | null>(null);
+  const [outputDevices, setOutputDevices] = useState<AudioOutputDeviceInfo[]>([]);
+  const [selectedOutputDeviceId, setSelectedOutputDeviceId] = useState<string>(
+    () => loadStoredOutputDeviceId(null) ?? '',
+  );
+  const [outputDeviceSupported] = useState(() => supportsAudioOutputSelection());
+  const [outputDevicesLoading, setOutputDevicesLoading] = useState(false);
+  const selectedOutputDeviceIdRef = useRef(selectedOutputDeviceId);
+  const qualityLevelSettingRef = useRef<QualityLevelSetting>('normal');
+  const pendingSeekRef = useRef<number | null>(null);
+  const currentTimeRef = useRef(0);
+  const applyQualityChangeRef = useRef<(quality: QualityLevelSetting) => void>(() => {});
+  const playTrackRef = useRef<(track: Track, isRadio?: boolean, autoPlay?: boolean) => void | Promise<void>>(async () => {});
   const [equalizerBars, setEqualizerBars] = useState<number[]>(new Array(20).fill(0));
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
 
@@ -157,6 +216,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Keep latest state refs to avoid stale closures in audio event handlers
   const currentTrackRef = useRef(currentTrack);
   const isPremiumRef = useRef(isPremium);
+  const canConfigureStreamQualityRef = useRef(canConfigureStreamQuality);
   const activeRadioStationRef = useRef(activeRadioStation);
   const isPlayingRef = useRef(isPlaying);
   const repeatModeRef = useRef(repeatMode);
@@ -167,9 +227,197 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const isMutedRef = useRef(isMuted);
   // Tracks whether the user EXPLICITLY pressed pause (vs browser-initiated background pause)
   const userPausedRef = useRef(false);
+  const playbackEpochRef = useRef(0);
+  const ownedBlobUrlRef = useRef<string | null>(null);
+
+  const resetAudioElementForNewSource = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    audio.pause();
+
+    if (hlsRef.current) {
+      hlsRef.current.stopLoad();
+      hlsRef.current.detachMedia();
+      hlsRef.current.destroy();
+      hlsRef.current = null;
+    }
+
+    if (ownedBlobUrlRef.current) {
+      URL.revokeObjectURL(ownedBlobUrlRef.current);
+      ownedBlobUrlRef.current = null;
+    }
+
+    try {
+      const src = audio.currentSrc || audio.src;
+      if (src.startsWith('blob:')) {
+        URL.revokeObjectURL(src);
+      }
+    } catch {
+      // Blob may already be revoked by hls.js / MSE teardown.
+    }
+
+    audio.removeAttribute('src');
+    audio.src = '';
+    audio.srcObject = null;
+    audio.load();
+  };
+
+  const stopAllPlayback = () => {
+    playbackEpochRef.current += 1;
+    userPausedRef.current = true;
+    isPlayingRef.current = false;
+
+    if (fadeIntervalRef.current) {
+      clearInterval(fadeIntervalRef.current);
+      fadeIntervalRef.current = null;
+    }
+
+    resetAudioElementForNewSource();
+    if (webrtcPCRef.current) {
+      webrtcPCRef.current.close();
+      webrtcPCRef.current = null;
+    }
+    if (websocketRef.current) {
+      websocketRef.current.close();
+      websocketRef.current = null;
+    }
+
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'paused';
+      navigator.mediaSession.metadata = null;
+    }
+
+    setIsPlaying(false);
+    setCurrentTrack(null);
+    setActiveRadioStation(null);
+    setIsRadioSync(false);
+    setCurrentTime(0);
+    setDuration(0);
+    setPlayQueue([]);
+    setCurrentQueueIndex(-1);
+    setActiveStreamLabel(null);
+  };
 
   useEffect(() => { currentTrackRef.current = currentTrack; }, [currentTrack]);
   useEffect(() => { isPremiumRef.current = isPremium; }, [isPremium]);
+  useEffect(() => { canConfigureStreamQualityRef.current = canConfigureStreamQuality; }, [canConfigureStreamQuality]);
+  useEffect(() => { qualityLevelSettingRef.current = qualityLevelSetting; }, [qualityLevelSetting]);
+
+  useEffect(() => {
+    if (token && currentUser) {
+      const fromDb = parseStoredStreamQuality(currentUser.stream_quality ?? null);
+      if (fromDb) {
+        setQualityLevelSettingState(fromDb);
+        qualityLevelSettingRef.current = fromDb;
+        return;
+      }
+      if (canConfigureStreamQuality && currentUser.stream_quality == null) {
+        setQualityLevelSettingState('lossless');
+        qualityLevelSettingRef.current = 'lossless';
+        void updateStreamQuality('lossless');
+        return;
+      }
+      setQualityLevelSettingState('normal');
+      qualityLevelSettingRef.current = 'normal';
+      return;
+    }
+
+    const stored = loadStoredQuality(null);
+    if (stored) {
+      setQualityLevelSettingState(stored);
+      qualityLevelSettingRef.current = stored;
+      return;
+    }
+
+    setQualityLevelSettingState('normal');
+    qualityLevelSettingRef.current = 'normal';
+  }, [token, currentUser?.id, currentUser?.stream_quality, canConfigureStreamQuality, updateStreamQuality]);
+
+  const setQualityLevelSetting = (quality: QualityLevelSetting) => {
+    applyQualityChangeRef.current(quality);
+  };
+
+  useEffect(() => {
+    selectedOutputDeviceIdRef.current = selectedOutputDeviceId;
+  }, [selectedOutputDeviceId]);
+
+  useEffect(() => {
+    const stored = loadStoredOutputDeviceId(currentUser?.id ?? null);
+    if (stored !== null) {
+      setSelectedOutputDeviceId(stored);
+      selectedOutputDeviceIdRef.current = stored;
+    }
+  }, [currentUser?.id]);
+
+  const applySelectedOutputDevice = useCallback(async (deviceId?: string) => {
+    const audio = audioRef.current;
+    if (!audio || !outputDeviceSupported) return false;
+    return applyAudioSinkId(audio, deviceId ?? selectedOutputDeviceIdRef.current);
+  }, [outputDeviceSupported]);
+
+  const refreshOutputDevices = useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) {
+      setOutputDevices([]);
+      return;
+    }
+
+    setOutputDevicesLoading(true);
+    try {
+      const devices = await enumerateAudioOutputDevices();
+      setOutputDevices(devices);
+    } finally {
+      setOutputDevicesLoading(false);
+    }
+  }, []);
+
+  const setOutputDevice = useCallback(async (deviceId: string) => {
+    if (!outputDeviceSupported) return;
+
+    const applied = await applySelectedOutputDevice(deviceId);
+    if (!applied) {
+      showError('Output Device', 'Could not switch to that device. It may have been disconnected.');
+      await refreshOutputDevices();
+      return;
+    }
+
+    setSelectedOutputDeviceId(deviceId);
+    selectedOutputDeviceIdRef.current = deviceId;
+    saveStoredOutputDeviceId(deviceId, currentUser?.id ?? null);
+  }, [applySelectedOutputDevice, currentUser?.id, outputDeviceSupported, refreshOutputDevices]);
+
+  const promptSelectOutputDevice = useCallback(async () => {
+    if (!supportsSelectAudioOutput()) return;
+
+    try {
+      const device = await (
+        navigator.mediaDevices as MediaDevices & { selectAudioOutput: () => Promise<MediaDeviceInfo> }
+      ).selectAudioOutput();
+      await setOutputDevice(device.deviceId);
+      await refreshOutputDevices();
+    } catch {
+      // User dismissed the browser picker.
+    }
+  }, [refreshOutputDevices, setOutputDevice]);
+
+  useEffect(() => {
+    if (!outputDeviceSupported) return;
+
+    void refreshOutputDevices();
+
+    const handleDeviceChange = () => {
+      void refreshOutputDevices();
+    };
+
+    navigator.mediaDevices?.addEventListener('devicechange', handleDeviceChange);
+    return () => navigator.mediaDevices?.removeEventListener('devicechange', handleDeviceChange);
+  }, [outputDeviceSupported, refreshOutputDevices]);
+
+  useEffect(() => {
+    if (!outputDeviceSupported) return;
+    void applySelectedOutputDevice(selectedOutputDeviceId);
+  }, [applySelectedOutputDevice, outputDeviceSupported, selectedOutputDeviceId]);
+
   useEffect(() => { activeRadioStationRef.current = activeRadioStation; }, [activeRadioStation]);
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { repeatModeRef.current = repeatMode; }, [repeatMode]);
@@ -178,6 +426,26 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { isShuffleRef.current = isShuffle; }, [isShuffle]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+
+  useEffect(() => {
+    setFavorites([]);
+    if (!token) {
+      return;
+    }
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/favorites`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const tracks = await res.json();
+          setFavorites(tracks.map((t: Track) => t.id));
+        }
+      } catch (e) {
+        console.warn('Failed to load favorites:', e);
+      }
+    })();
+  }, [token]);
 
   const fadeVolume = (targetVolume: number, durationMs: number): Promise<void> => {
     return new Promise((resolve) => {
@@ -223,39 +491,17 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Stop playback and reset audio states when user logs out
   useEffect(() => {
     if (!token) {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = '';
-        audioRef.current.srcObject = null;
-      }
-      if (hlsRef.current) {
-        hlsRef.current.destroy();
-        hlsRef.current = null;
-      }
-      if (webrtcPCRef.current) {
-        webrtcPCRef.current.close();
-        webrtcPCRef.current = null;
-      }
-      if (websocketRef.current) {
-        websocketRef.current.close();
-        websocketRef.current = null;
-      }
-      setIsPlaying(false);
-      setCurrentTrack(null);
-      setActiveRadioStation(null);
-      setIsRadioSync(false);
-      setCurrentTime(0);
-      setDuration(0);
-      setPlayQueue([]);
-      setCurrentQueueIndex(-1);
+      stopAllPlayback();
     }
   }, [token]);
 
-  // Stop library music/other stations playback when switching to Admin Mode for Radio Admins
-  // Pre-load station or stop other feeds when switching to Admin Mode
+  // Stop library music/other stations playback when radio admin switches to Admin Mode
   useEffect(() => {
-    if (userMode === 'admin' && currentUser && ['radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role)) {
-      // Instantly pause and reset any running playback to prevent leakage
+    if (
+      userMode === 'admin' &&
+      currentUser &&
+      (currentUser.real_role || currentUser.role) === 'radio_admin'
+    ) {
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = '';
@@ -264,62 +510,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setCurrentTrack(null);
       setActiveRadioStation(null);
       setIsRadioSync(false);
-
-      // If we are a radio_admin, pre-load their own station in a paused state so the player is always visible
-      if ((currentUser.real_role || currentUser.role) === 'radio_admin') {
-        const loadBroadcasterStation = async () => {
-          try {
-            const res = await fetch('/api/radio');
-            if (res.ok) {
-              const data = await res.json();
-              const myStation = data.find((s: any) => s.owner_id === currentUser.id);
-              if (myStation) {
-                setActiveRadioStation(myStation);
-                setIsRadioSync(true);
-                const virtualTrack: Track = {
-                  id: myStation.id * 100,
-                  title: myStation.current_track_title || "Standby Broadcast",
-                  artist_name: myStation.current_track_artist || myStation.name,
-                  duration: 0,
-                  stream_url: myStation.stream_url
-                };
-                setCurrentTrack(virtualTrack);
-                if (audioRef.current && myStation.stream_url) {
-                  audioRef.current.src = resolveStreamUrl(myStation.stream_url);
-                  audioRef.current.pause();
-                }
-                setIsPlaying(false);
-              }
-            }
-          } catch (e) {
-            console.warn("Failed to load radio admin station on admin mode enter. Using mock fallback.");
-            const mockStation = {
-              id: 1,
-              name: "Mock Broadcaster FM",
-              description: "Virtual broadcast stream for offline testing.",
-              owner_id: currentUser.id,
-              stream_url: "https://pub1.freefm.lk/1.aac",
-              is_active: true
-            };
-            setActiveRadioStation(mockStation);
-            setIsRadioSync(true);
-            const virtualTrack: Track = {
-              id: mockStation.id * 100,
-              title: "Standby Broadcast",
-              artist_name: mockStation.name,
-              duration: 0,
-              stream_url: mockStation.stream_url
-            };
-            setCurrentTrack(virtualTrack);
-            if (audioRef.current && mockStation.stream_url) {
-              audioRef.current.src = resolveStreamUrl(mockStation.stream_url);
-              audioRef.current.pause();
-            }
-            setIsPlaying(false);
-          }
-        };
-        loadBroadcasterStation();
-      }
     }
   }, [userMode, currentUser]);
 
@@ -331,9 +521,20 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     (audio as any).playsInline = true;
     audioRef.current = audio;
 
+    if (outputDeviceSupported) {
+      void applyAudioSinkId(audio, selectedOutputDeviceIdRef.current);
+    }
+
     const onPlay = () => {
       setIsPlaying(true);
       audio.playbackRate = playbackSpeedRef.current;
+      const track = currentTrackRef.current;
+      if (track && token && !activeRadioStationRef.current && track.id < 100000) {
+        fetch(`${API_URL}/music/${track.id}/play`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` }
+        }).catch(() => {});
+      }
       // Tell Chrome Android this page is actively playing media — required for background audio
       if ('mediaSession' in navigator) {
         navigator.mediaSession.playbackState = 'playing';
@@ -356,6 +557,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     };
     const onTimeUpdate = () => {
+      currentTimeRef.current = audio.currentTime;
       setCurrentTime(audio.currentTime);
       // Update Chrome's notification seek bar position
       if ('mediaSession' in navigator && !activeRadioStationRef.current && audio.duration && isFinite(audio.duration)) {
@@ -621,14 +823,17 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  const playTrack = async (track: Track, isRadio = false) => {
+  const playTrack = async (track: Track, isRadio = false, autoPlay = true) => {
     if (!audioRef.current) return;
+    const epoch = playbackEpochRef.current;
+    const resumePosition = pendingSeekRef.current;
+    pendingSeekRef.current = null;
 
     if (isRadio) {
       hasSyncedLiveHeadRef.current = false;
     }
 
-    if (currentUser && currentUser.role === 'radio_admin' && !isRadio) {
+    if (isStaffInAdminMode && (currentUser?.real_role || currentUser?.role) === 'radio_admin' && !isRadio) {
       console.warn("Radio admins cannot play standard library music tracks.");
       return;
     }
@@ -641,7 +846,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       websocketRef.current.close();
       websocketRef.current = null;
     }
-    audioRef.current.srcObject = null;
+    resetAudioElementForNewSource();
 
     // Clear live radio station status if playing normal track
     if (!isRadio) {
@@ -662,26 +867,282 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
 
-    // Determine correct audio stream path (checking FLAC/Lossless settings)
-    let streamUrl = resolveStreamUrl(trackToPlay.hls_playlist_path || trackToPlay.mp3_320_path || trackToPlay.stream_url);
+    if (epoch !== playbackEpochRef.current) return;
 
-    if (!streamUrl) {
-      console.warn("No stream URL available for track:", trackToPlay.id);
+    const role = currentUser?.real_role || currentUser?.role;
+    const isOwnUpload =
+      !isRadio &&
+      role === 'studio_admin' &&
+      !!currentUser?.artist_profile?.id &&
+      trackToPlay.artist_id === currentUser.artist_profile.id;
+
+    if (isStaffInAdminMode && role === 'studio_admin' && !isRadio && !isOwnUpload) {
+      console.warn("Studio admins in admin mode can only play tracks they uploaded.");
       return;
     }
 
-    if (isRadio) {
-      // Append cache buster to force browsers to bypass cache and pull live head from the network
-      const separator = streamUrl.includes('?') ? '&' : '?';
-      streamUrl = `${streamUrl}${separator}nocache=${Date.now()}`;
-      console.log("Loading live radio stream URL with cache buster:", streamUrl);
-    } else {
-      console.log("Loading standard music library track URL:", streamUrl);
+    // Determine stream candidates from quality preference and subscription tier
+    const candidates = isRadio
+      ? [trackToPlay.stream_url || trackToPlay.hls_playlist_path || ''].filter(Boolean)
+      : isOwnUpload
+        ? getOwnerStreamCandidates(trackToPlay)
+        : getStreamCandidatesForQuality(
+            trackToPlay,
+            getEffectiveQuality(qualityLevelSettingRef.current, canConfigureStreamQualityRef.current),
+            isPremiumRef.current,
+          );
+
+    if (!isRadio && candidates.length === 0) {
+      const effectiveQuality = getEffectiveQuality(
+        qualityLevelSettingRef.current,
+        canConfigureStreamQualityRef.current,
+      );
+      if (isPremiumRef.current && isStudioMasterQuality(effectiveQuality)) {
+        showError(
+          'Studio Master Unavailable',
+          token
+            ? 'The original lossless file is not available for this track yet.'
+            : 'Sign in to stream the original studio master file.',
+        );
+      } else {
+        showError(
+          'Stream Unavailable',
+          isPremiumRef.current
+            ? 'No audio file is available for the selected quality tier yet. The track may still be transcoding.'
+            : 'Preview stream is not ready yet. Please try again shortly.',
+        );
+      }
+      return;
     }
+
+    const seekAfterLoad = resumePosition;
+    let seekRestoreCleanup: (() => void) | null = null;
+    const shouldRestorePosition =
+      seekAfterLoad !== null && Number.isFinite(seekAfterLoad) && seekAfterLoad > 0.25;
+
+    const beginPlayback = () => {
+      if (epoch !== playbackEpochRef.current || !audioRef.current) return;
+      audioRef.current.playbackRate = playbackSpeedRef.current;
+      audioRef.current.volume = 0;
+      audioRef.current
+        .play()
+        .then(() => {
+          const target = isMutedRef.current ? 0 : volumeRef.current;
+          fadeVolume(target, 300);
+        })
+        .catch((e) => console.log('Autoplay blocked: ', e));
+      userPausedRef.current = false;
+      setIsPlaying(true);
+    };
+
+    const restorePlaybackPosition = (isHls = false): Promise<void> => {
+      return new Promise((resolve) => {
+        seekRestoreCleanup?.();
+        seekRestoreCleanup = null;
+
+        if (!shouldRestorePosition || !audioRef.current) {
+          resolve();
+          return;
+        }
+
+        const audio = audioRef.current;
+        const target = seekAfterLoad as number;
+        let settled = false;
+
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          setCurrentTime(audio.currentTime);
+          resolve();
+        };
+
+        const seekToTarget = (): boolean => {
+          if (!audioRef.current) return true;
+          const maxTime =
+            audio.duration && Number.isFinite(audio.duration) ? audio.duration : target;
+          const seekTo = Math.min(target, maxTime);
+          if (Math.abs(audio.currentTime - seekTo) > 0.35) {
+            try {
+              audio.currentTime = seekTo;
+            } catch {
+              return false;
+            }
+          }
+          return Math.abs(audio.currentTime - seekTo) <= 0.75;
+        };
+
+        const cleanup = () => {
+          seekEvents.forEach((event) => audio.removeEventListener(event, onMediaEvent));
+          hlsRef.current?.off(Hls.Events.FRAG_BUFFERED, onHlsBuffered);
+          hlsRef.current?.off(Hls.Events.LEVEL_LOADED, onHlsBuffered);
+          clearTimeout(timeoutId);
+          if (seekRestoreCleanup === cleanup) {
+            seekRestoreCleanup = null;
+          }
+        };
+
+        const onMediaEvent = () => {
+          if (seekToTarget()) finish();
+        };
+
+        const onHlsBuffered = () => {
+          if (seekToTarget()) finish();
+        };
+
+        const seekEvents = ['loadedmetadata', 'canplay', 'canplaythrough', 'durationchange', 'seeked'] as const;
+        seekEvents.forEach((event) => audio.addEventListener(event, onMediaEvent));
+
+        if (isHls && hlsRef.current) {
+          const hls = hlsRef.current;
+          hls.on(Hls.Events.FRAG_BUFFERED, onHlsBuffered);
+          hls.on(Hls.Events.LEVEL_LOADED, onHlsBuffered);
+          hls.stopLoad();
+          hls.startLoad(target);
+        }
+
+        const timeoutId = setTimeout(() => {
+          if (isHls && hlsRef.current) {
+            hlsRef.current.startLoad(target);
+          }
+          seekToTarget();
+          finish();
+        }, isHls ? 15000 : 3000);
+
+        seekRestoreCleanup = cleanup;
+        seekToTarget();
+      });
+    };
+
+    const onStreamReady = (isHls = false) => {
+      void restorePlaybackPosition(isHls).then(() => {
+        if (shouldRestorePosition && audioRef.current) {
+          const target = seekAfterLoad as number;
+          if (Math.abs(audioRef.current.currentTime - target) > 1) {
+            try {
+              audioRef.current.currentTime = Math.min(
+                target,
+                audioRef.current.duration && Number.isFinite(audioRef.current.duration)
+                  ? audioRef.current.duration
+                  : target,
+              );
+              setCurrentTime(audioRef.current.currentTime);
+            } catch {
+              console.warn('Could not restore playback position after stream reload.');
+            }
+          }
+        }
+        if (autoPlay) {
+          beginPlayback();
+        } else if (audioRef.current) {
+          audioRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
+          userPausedRef.current = true;
+          isPlayingRef.current = false;
+          setIsPlaying(false);
+        }
+      });
+    };
+
+    const tryCandidate = async (index: number) => {
+      if (!audioRef.current) return;
+
+      if (index >= candidates.length) {
+        if (!isRadio) {
+          showError('Playback Error', 'Could not load audio for the selected quality tier.');
+        }
+        return;
+      }
+
+      const streamPath = candidates[index];
+      let streamUrl = isMasterStreamPath(streamPath)
+        ? await resolveMasterStreamUrl(streamPath, trackToPlay)
+        : resolveStorageUrl(streamPath);
+      if (!streamUrl) {
+        tryCandidate(index + 1);
+        return;
+      }
+
+      if (isRadio) {
+        const separator = streamUrl.includes('?') ? '&' : '?';
+        streamUrl = `${streamUrl}${separator}nocache=${Date.now()}`;
+      }
+
+      setActiveStreamLabel(
+        isRadio ? 'Live stream' : describeStreamPath(streamPath, trackToPlay),
+      );
+      console.log(`Loading stream candidate ${index + 1}/${candidates.length}:`, streamUrl);
+
+      seekRestoreCleanup?.();
+      seekRestoreCleanup = null;
+      resetAudioElementForNewSource();
+
+      if (streamUrl.includes('.m3u8')) {
+        if (Hls.isSupported()) {
+          const hls = new Hls();
+          hlsRef.current = hls;
+          hls.loadSource(streamUrl);
+          hls.attachMedia(audioRef.current);
+          hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            if (shouldRestorePosition && seekAfterLoad !== null && hlsRef.current) {
+              hlsRef.current.stopLoad();
+              hlsRef.current.startLoad(seekAfterLoad);
+            }
+            onStreamReady(true);
+          });
+          hls.on(Hls.Events.ERROR, (_event, data) => {
+            if (!data.fatal) return;
+            console.warn('HLS fatal error, trying next quality candidate:', data);
+            seekRestoreCleanup?.();
+            seekRestoreCleanup = null;
+            hls.destroy();
+            hlsRef.current = null;
+            tryCandidate(index + 1);
+          });
+        } else if (audioRef.current.canPlayType('application/vnd.apple.mpegurl')) {
+          const audio = audioRef.current;
+          const onNativeError = () => {
+            audio.removeEventListener('error', onNativeError);
+            tryCandidate(index + 1);
+          };
+          audio.addEventListener('error', onNativeError);
+          audio.src = streamUrl;
+          audio.load();
+          audio.addEventListener(
+            'loadedmetadata',
+            () => {
+              audio.removeEventListener('error', onNativeError);
+              onStreamReady(true);
+            },
+            { once: true }
+          );
+        } else {
+          tryCandidate(index + 1);
+        }
+        return;
+      }
+
+      const audio = audioRef.current;
+      const onDirectError = () => {
+        audio.removeEventListener('error', onDirectError);
+        console.warn('Direct stream failed, trying next quality candidate');
+        tryCandidate(index + 1);
+      };
+      audio.addEventListener('error', onDirectError);
+      audio.src = streamUrl;
+      audio.load();
+      audio.addEventListener(
+        'loadedmetadata',
+        () => {
+          audio.removeEventListener('error', onDirectError);
+          onStreamReady(false);
+        },
+        { once: true }
+      );
+    };
 
     // Reset details
     setCurrentTrack(trackToPlay);
-    setCurrentTime(0);
+    setCurrentTime(seekAfterLoad ?? 0);
     setDuration(trackToPlay.duration || 0);
 
     // Register MediaSession API for lock screen / notification media controls on mobile
@@ -701,7 +1162,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         audioRef.current?.pause();
       });
       navigator.mediaSession.setActionHandler('previoustrack', () => {
-        // playPrevious will be called from the queue — trigger via custom event
         window.dispatchEvent(new CustomEvent('mediasession:previous'));
       });
       navigator.mediaSession.setActionHandler('nexttrack', () => {
@@ -714,61 +1174,58 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
     }
 
-    // Destroy existing Hls sessions
-    if (hlsRef.current) {
-      hlsRef.current.destroy();
-      hlsRef.current = null;
+    tryCandidate(0);
+  };
+
+  playTrackRef.current = playTrack;
+
+  applyQualityChangeRef.current = (quality: QualityLevelSetting) => {
+    if (!canConfigureStreamQualityRef.current && quality !== 'normal') {
+      return;
+    }
+    if (qualityLevelSettingRef.current === quality) {
+      return;
     }
 
-    // Set src and load
-    if (streamUrl.includes('.m3u8')) {
-      if (Hls.isSupported()) {
-        const hls = new Hls();
-        hlsRef.current = hls;
-        hls.loadSource(streamUrl);
-        hls.attachMedia(audioRef.current);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          if (audioRef.current) {
-            audioRef.current.playbackRate = playbackSpeedRef.current;
-            audioRef.current.volume = 0; // Start at 0 for fade-in
-            audioRef.current.play()
-              .then(() => {
-                const target = isMutedRef.current ? 0 : volumeRef.current;
-                fadeVolume(target, 300);
-              })
-              .catch(e => console.log("Autoplay blocked: ", e));
-          }
-        });
-      } else if (audioRef.current.canPlayType('application/vnd.apple.mpegurl')) {
-        audioRef.current.src = streamUrl;
-        audioRef.current.playbackRate = playbackSpeedRef.current;
-        audioRef.current.volume = 0; // Start at 0 for fade-in
-        audioRef.current.load();
-        audioRef.current.play()
-          .then(() => {
-            const target = isMutedRef.current ? 0 : volumeRef.current;
-            fadeVolume(target, 300);
-          })
-          .catch(e => console.log("Autoplay blocked: ", e));
+    const track = currentTrackRef.current;
+    const wasPlaying = isPlayingRef.current && !(audioRef.current?.paused ?? true);
+    const positionBeforeSave = Math.max(
+      audioRef.current?.currentTime ?? 0,
+      currentTimeRef.current,
+    );
+
+    void (async () => {
+      if (token && currentUser) {
+        const ok = await updateStreamQuality(quality);
+        if (!ok) return;
+      } else {
+        saveStoredQuality(quality, null);
       }
-    } else {
-      audioRef.current.src = streamUrl;
-      audioRef.current.playbackRate = playbackSpeedRef.current;
-      audioRef.current.volume = 0; // Start at 0 for fade-in
-      audioRef.current.load();
-      audioRef.current.play()
-        .then(() => {
-          const target = isMutedRef.current ? 0 : volumeRef.current;
-          fadeVolume(target, 300);
-        })
-        .catch(e => console.log("Autoplay blocked: ", e));
-    }
 
-    setIsPlaying(true);
+      setQualityLevelSettingState(quality);
+      qualityLevelSettingRef.current = quality;
+
+      if (track && !activeRadioStationRef.current) {
+        const positionAfterSave = Math.max(
+          audioRef.current?.currentTime ?? 0,
+          currentTimeRef.current,
+          positionBeforeSave,
+        );
+        pendingSeekRef.current = positionAfterSave >= 0.25 ? positionAfterSave : null;
+        void playTrackRef.current(track, false, wasPlaying);
+      }
+    })();
   };
 
   const playRadioStation = async (station: RadioStation, isResume = false) => {
-    if (currentUser && currentUser.role === 'radio_admin' && station.owner_id !== currentUser.id) {
+    const epoch = playbackEpochRef.current;
+
+    if (
+      isStaffInAdminMode &&
+      currentUser &&
+      (currentUser.real_role || currentUser.role) === 'radio_admin' &&
+      station.owner_id !== currentUser.id
+    ) {
       console.warn("Radio admins cannot play other radio stations.");
       showError("Access Denied", "You are not authorized to tune in to this station.");
       return;
@@ -829,7 +1286,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           let isWsConnected = false;
 
           const startProgressiveFallback = () => {
-            if (isWsConnected) return;
+            if (isWsConnected || epoch !== playbackEpochRef.current) return;
             console.log("WebSocket connection timed out or failed, falling back to progressive HTTP stream");
             playTrack(virtualTrack, true);
           };
@@ -877,7 +1334,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                       const bufferedDuration = end - start;
                       if (bufferedDuration >= 1.5) {
                         hasStartedPlaying = true;
-                        if (audioRef.current) {
+                        if (audioRef.current && epoch === playbackEpochRef.current) {
                           // Seek to the live edge to skip the history buffer
                           try {
                             audioRef.current.currentTime = Math.max(0, end - 0.2);
@@ -912,9 +1369,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
                 // Clear any existing source and bind the MediaSource
                 if (audioRef.current) {
-                  audioRef.current.pause();
-                  audioRef.current.srcObject = null;
-                  audioRef.current.src = URL.createObjectURL(mediaSource);
+                  resetAudioElementForNewSource();
+                  const blobUrl = URL.createObjectURL(mediaSource);
+                  ownedBlobUrlRef.current = blobUrl;
+                  audioRef.current.src = blobUrl;
                 }
               };
 
@@ -946,18 +1404,19 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               ws.onclose = () => {
                 console.warn('WebSocket streaming closed');
                 clearTimeout(fallbackTimeout);
-                if (websocketRef.current === ws) {
-                  websocketRef.current = null;
-                  // If we were playing via WebSocket, fall back to progressive stream
-                  if (audioRef.current && audioRef.current.src.startsWith('blob:')) {
-                    const fallbackUrl = resolveStreamUrl(virtualTrack.stream_url);
+                if (websocketRef.current !== ws) return;
+                websocketRef.current = null;
+                if (epoch !== playbackEpochRef.current || !isPlayingRef.current) return;
+                // If we were playing via WebSocket, fall back to progressive stream
+                if (audioRef.current && audioRef.current.src.startsWith('blob:')) {
+                    resetAudioElementForNewSource();
+                    const fallbackUrl = resolveStorageUrl(virtualTrack.stream_url);
                     audioRef.current.src = fallbackUrl;
                     audioRef.current.load();
                     audioRef.current.play().catch(() => { });
                   } else {
                     startProgressiveFallback();
                   }
-                }
               };
 
             } catch (err) {
@@ -983,16 +1442,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         throw new Error();
       }
     } catch (e) {
-      // Offline mock radio streaming fallback
-      const fallbackUrl = station.stream_url || 'https://pub1.freefm.lk/1.aac';
-      const virtualTrack: Track = {
-        id: station.id * 100,
-        title: station.current_track_title || "Live stream broadcast",
-        artist_name: station.current_track_artist || station.name,
-        duration: 0,
-        stream_url: fallbackUrl
-      };
-      playTrack(virtualTrack, true);
+      showError("Station Offline", "This radio station is currently offline.");
+      setActiveRadioStation(null);
+      setIsRadioSync(false);
     }
   };
 
@@ -1021,9 +1473,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
           // Unload live audio source to stop buffering/downloading
           if (audioRef.current) {
-            audioRef.current.pause();
-            audioRef.current.src = "";
-            audioRef.current.load();
+            resetAudioElementForNewSource();
           }
         } else {
           if (audioRef.current) {
@@ -1107,18 +1557,39 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const toggleShuffle = () => setIsShuffle(!isShuffle);
 
-  const toggleFavorite = (trackId: number) => {
+  const toggleFavorite = async (trackId: number) => {
+    if (!token) return;
+    const isFav = favorites.includes(trackId);
     setFavorites(prev =>
-      prev.includes(trackId) ? prev.filter(id => id !== trackId) : [...prev, trackId]
+      isFav ? prev.filter(id => id !== trackId) : [...prev, trackId]
     );
+    try {
+      const res = await fetch(`${API_URL}/favorites/${trackId}`, {
+        method: isFav ? 'DELETE' : 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!res.ok) {
+        setFavorites(prev =>
+          isFav ? [...prev, trackId] : prev.filter(id => id !== trackId)
+        );
+      }
+    } catch (e) {
+      setFavorites(prev =>
+        isFav ? [...prev, trackId] : prev.filter(id => id !== trackId)
+      );
+      console.warn('Failed to sync favorite:', e);
+    }
   };
 
   const addToQueue = (track: Track) => {
-    setPlayQueue(prev => [...prev, track]);
-    if (playQueue.length === 0) {
-      setCurrentQueueIndex(0);
-      playTrack(track);
-    }
+    setPlayQueue(prev => {
+      if (prev.some(t => t.id === track.id)) return prev;
+      if (prev.length === 0) {
+        setCurrentQueueIndex(0);
+        playTrack(track);
+      }
+      return [...prev, track];
+    });
   };
 
   const removeFromQueue = (trackId: number) => {
@@ -1201,6 +1672,23 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setPlayQueue(prev => prev.map(t => t.id === track.id ? track : t));
   };
 
+  const prevPremiumRef = useRef(isPremium);
+  useEffect(() => {
+    if (!token) {
+      prevPremiumRef.current = isPremium;
+      return;
+    }
+    if (prevPremiumRef.current && !isPremium && currentTrackRef.current && !activeRadioStationRef.current) {
+      const savedPosition = Math.max(
+        audioRef.current?.currentTime ?? 0,
+        currentTimeRef.current,
+      );
+      pendingSeekRef.current = savedPosition >= 0.25 ? savedPosition : null;
+      void playTrackRef.current(currentTrackRef.current, false);
+    }
+    prevPremiumRef.current = isPremium;
+  }, [isPremium, token]);
+
   return (
     <AudioContext.Provider value={{
       currentTrack,
@@ -1220,7 +1708,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showPremiumModal,
       equalizerBars,
       qualityLevelSetting,
+      activeStreamLabel,
       analyser,
+      outputDevices,
+      selectedOutputDeviceId,
+      outputDeviceSupported,
+      outputDevicesLoading,
 
       playTrack,
       playRadioStation,
@@ -1240,7 +1733,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       playPrevious,
       setShowPremiumModal,
       setQualityLevelSetting,
-      updateTrackMetadata
+      updateTrackMetadata,
+      refreshOutputDevices,
+      setOutputDevice,
+      promptSelectOutputDevice,
     }}>
       {children}
     </AudioContext.Provider>

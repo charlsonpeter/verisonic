@@ -1,20 +1,18 @@
 import React from 'react';
-import { createPortal } from 'react-dom';
-import { User as UserIcon, Crown, BarChart2, ShieldCheck, Heart, Clock, Activity, Key, X, Settings } from 'lucide-react';
+import { User as UserIcon, Activity, Key, Settings } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { useAudio, Track } from '../context/AudioContext';
-import { TrackRow } from '../components/shared/TrackRow';
+import { useAudio } from '../context/AudioContext';
+import { AppModal } from '../components/shared/AppModal';
+import {
+  getAccountTierLabel,
+  hasPaidSubscription,
+  isOnFreeTrial,
+} from '../utils/accountTier';
+import { SubscriptionDates } from '../components/subscription/SubscriptionDates';
 
-interface UserProfileProps {
-  onViewReport: (track: Track) => void;
-  onViewDetails: (track: Track) => void;
-}
-
-export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDetails }) => {
-  const { currentUser, isPremium, fetchCurrentUser } = useAuth();
+export const UserProfile: React.FC = () => {
+  const { currentUser, fetchCurrentUser } = useAuth();
   const { favorites } = useAudio();
-
-  const [favoriteTracks, setFavoriteTracks] = React.useState<Track[]>([]);
 
   // Profile details update states
   const [fullName, setFullName] = React.useState(currentUser?.full_name || '');
@@ -37,36 +35,13 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
     }
   }, [currentUser]);
 
-  React.useEffect(() => {
-    const loadFavoriteTracks = async () => {
-      try {
-        const res = await fetch('/api/music?approved_only=true');
-        if (res.ok) {
-          const data = await res.json();
-          const filtered = data.filter((t: Track) => favorites.includes(t.id));
-          setFavoriteTracks(filtered);
-        }
-      } catch (e) {
-        console.error("Failed to load favorite tracks:", e);
-      }
-    };
-    loadFavoriteTracks();
-  }, [favorites]);
-
-  React.useEffect(() => {
-    const mainEl = document.querySelector('main');
-    if (isPasswordModalOpen) {
-      document.body.style.overflow = 'hidden';
-      if (mainEl) mainEl.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-      if (mainEl) mainEl.style.overflow = '';
-    }
-    return () => {
-      document.body.style.overflow = '';
-      if (mainEl) mainEl.style.overflow = '';
-    };
-  }, [isPasswordModalOpen]);
+  const closePasswordModal = () => {
+    setIsPasswordModalOpen(false);
+    setPasswordMessage(null);
+    setOldPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+  };
 
   const handleUpdateAllProfileDetails = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -153,7 +128,9 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
     averageBitrate: favorites.length > 0 ? "1,411 kbps (FLAC CD)" : "N/A"
   };
 
-
+  const tierBadge = getAccountTierLabel(currentUser);
+  const isPaidSubscriber = hasPaidSubscription(currentUser);
+  const isOnTrial = isOnFreeTrial(currentUser);
 
   return (
     <div className="space-y-10 w-full">
@@ -170,12 +147,25 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
           <div className="flex flex-col md:flex-row items-center gap-2">
             <h2 className="text-2xl font-extrabold text-white tracking-tight">{currentUser?.full_name || 'Guest User'}</h2>
             <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${
-              isPremium ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' : 'bg-slate-900 border-white/3 text-slate-500'
+              isPaidSubscriber
+                ? 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                : isOnTrial
+                  ? 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                  : 'bg-slate-900 border-white/3 text-slate-500'
             }`}>
-              {isPremium ? 'Studio VIP Premium' : 'Free Preview Account'}
+              {tierBadge}
             </span>
           </div>
           <p className="text-xs text-slate-400 font-semibold">{currentUser?.email || 'unregistered@verisonic.com'}</p>
+          {hasPaidSubscription(currentUser) && (
+            <div className="pt-1 max-w-md mx-auto md:mx-0">
+              <SubscriptionDates
+                activatedAt={currentUser?.subscription_activated_at}
+                expiresAt={currentUser?.subscription_expires_at}
+                compact
+              />
+            </div>
+          )}
         </div>
       </section>
 
@@ -272,123 +262,82 @@ export const UserProfile: React.FC<UserProfileProps> = ({ onViewReport, onViewDe
         </div>
       </form>
 
-      {/* 3. MY FAVORITES */}
-      <section className="space-y-4">
-        <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest px-1 flex items-center gap-1.5">
-          <Heart className="w-4 h-4 text-rose-500 fill-rose-500" /> Saved Favorites ({favoriteTracks.length})
-        </h3>
-        {favoriteTracks.length === 0 ? (
-          <div className="text-center py-14 bg-slate-900/10 border border-dashed border-white/5 rounded-3xl p-6">
-            <Heart className="w-8 h-8 mx-auto mb-2 text-slate-600 animate-pulse" />
-            <p className="text-xs text-slate-450">No favorite songs added yet.</p>
-          </div>
-        ) : (
-          <div className="space-y-2.5 bg-slate-900/10 border border-white/3 p-4 rounded-3xl shadow-inner">
-            {favoriteTracks.map((track, idx) => (
-              <TrackRow 
-                key={track.id} 
-                track={track} 
-                index={idx}
-                onViewReport={onViewReport}
-                onViewDetails={onViewDetails}
-              />
-            ))}
+      <AppModal
+        open={isPasswordModalOpen}
+        onClose={closePasswordModal}
+        maxWidth="md"
+        showGradient={false}
+        panelClassName="glass-card animate-scale-up"
+        header={(
+          <h3 className="text-sm font-extrabold text-white uppercase tracking-widest flex items-center gap-1.5 font-sans">
+            <Key className="w-4 h-4 text-rose-500 animate-pulse" /> Change Password
+          </h3>
+        )}
+        footer={(
+          <>
+            <button
+              type="button"
+              onClick={closePasswordModal}
+              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 border border-white/5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition text-slate-400"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form="change-password-form"
+              disabled={isSavingPassword}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-[10px] rounded-xl shadow-md transition uppercase tracking-wider cursor-pointer"
+            >
+              {isSavingPassword ? 'Updating...' : 'Update Password'}
+            </button>
+          </>
+        )}
+      >
+        {passwordMessage && (
+          <div className={`p-3 rounded-xl text-xs font-semibold ${
+            passwordMessage.type === 'success'
+              ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-450'
+              : 'bg-rose-500/10 border border-rose-500/20 text-rose-400'
+          }`}>
+            {passwordMessage.text}
           </div>
         )}
-      </section>
 
-      {/* Change Password Modal */}
-      {isPasswordModalOpen && createPortal(
-        <div className="fixed inset-0 z-55 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in overflow-y-auto">
-          <div className="glass-card w-full max-w-md p-6 rounded-3xl border border-white/10 space-y-4 shadow-2xl relative animate-scale-up m-4">
-            <button
-              onClick={() => {
-                setIsPasswordModalOpen(false);
-                setPasswordMessage(null);
-                setOldPassword('');
-                setNewPassword('');
-                setConfirmPassword('');
-              }}
-              className="absolute top-4 right-4 text-slate-400 hover:text-white transition"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            
-            <h3 className="text-sm font-extrabold text-white uppercase tracking-widest flex items-center gap-1.5 font-sans">
-              <Key className="w-4 h-4 text-rose-500 animate-pulse" /> Change Password
-            </h3>
-
-            {passwordMessage && (
-              <div className={`p-3 rounded-xl text-xs font-semibold ${
-                passwordMessage.type === 'success' 
-                  ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-450' 
-                  : 'bg-rose-500/10 border border-rose-500/20 text-rose-400'
-              }`}>
-                {passwordMessage.text}
-              </div>
-            )}
-
-            <form onSubmit={handleChangePassword} className="space-y-4 text-xs">
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-400 uppercase tracking-wider block">Current Password</label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  value={oldPassword}
-                  onChange={(e) => setOldPassword(e.target.value)}
-                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                />
-              </div>
-              
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-400 uppercase tracking-wider block">New Password</label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                />
-              </div>
-              
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-400 uppercase tracking-wider block">Confirm New Password</label>
-                <input
-                  type="password"
-                  placeholder="••••••••"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                />
-              </div>
-
-              <div className="flex gap-3 justify-end pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsPasswordModalOpen(false);
-                    setPasswordMessage(null);
-                    setOldPassword('');
-                    setNewPassword('');
-                    setConfirmPassword('');
-                  }}
-                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 border border-white/5 rounded-xl text-[10px] font-bold uppercase tracking-wider transition text-slate-400"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingPassword}
-                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-[10px] rounded-xl shadow-md transition uppercase tracking-wider cursor-pointer"
-                >
-                  {isSavingPassword ? 'Updating...' : 'Update Password'}
-                </button>
-              </div>
-            </form>
+        <form id="change-password-form" onSubmit={handleChangePassword} className="space-y-4 text-xs">
+          <div className="space-y-1.5">
+            <label className="font-bold text-slate-400 uppercase tracking-wider block">Current Password</label>
+            <input
+              type="password"
+              placeholder="••••••••"
+              value={oldPassword}
+              onChange={(e) => setOldPassword(e.target.value)}
+              className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
+            />
           </div>
-        </div>,
-        document.body
-      )}
+
+          <div className="space-y-1.5">
+            <label className="font-bold text-slate-400 uppercase tracking-wider block">New Password</label>
+            <input
+              type="password"
+              placeholder="••••••••"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="font-bold text-slate-400 uppercase tracking-wider block">Confirm New Password</label>
+            <input
+              type="password"
+              placeholder="••••••••"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
+            />
+          </div>
+        </form>
+      </AppModal>
 
     </div>
   );

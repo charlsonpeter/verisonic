@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Request, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from jose import jwt, JWTError
@@ -6,38 +6,138 @@ from typing import List, Optional
 
 from app.db.session import get_db
 from app.models import User, Artist
-from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, Token, UserResponse, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, RequestReactivationSchema
-from app.core.security import verify_password, get_password_hash, create_access_token, create_refresh_token, ALGORITHM
+from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, UserSettingsUpdate, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, StudioProfileUpdate, RequestReactivationSchema
+from app.core.security import (
+    verify_password, get_password_hash, create_access_token, create_refresh_token,
+    validate_refresh_token, revoke_refresh_token, ALGORITHM, REFRESH_COOKIE_NAME,
+    REFRESH_TOKEN_TTL_DAYS,
+)
 from app.core.config import settings
+from app.core.password_policy import validate_password
+from app.core.rate_limit import enforce_rate_limit, REFRESH_LIMIT, REFRESH_WINDOW_SEC
+from app.core.premium import paid_subscription_is_active
+from app.core.user_mode import apply_user_mode, set_user_mode
+from app.services.subscription_service import apply_admin_subscription
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+DEFAULT_ADMIN_PASSWORD = "admin12345"
+VALID_STREAM_QUALITIES = {"normal", "high", "hires", "lossless"}
+STUDIO_PROFILE_TEXT_FIELDS = (
+    "stage_name", "bio", "category", "licence", "street_address", "city",
+    "state_province", "postal_code", "country", "phone", "email", "website",
+    "languages", "social_twitter", "social_instagram",
+)
+STUDIO_ONBOARDING_REQUIRED_FIELDS = (
+    "stage_name", "bio", "city", "country", "phone", "email",
+)
+
+
+def _normalize_text(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _studio_profile_is_complete(artist: Artist) -> bool:
+    return all(_normalize_text(getattr(artist, field)) for field in STUDIO_ONBOARDING_REQUIRED_FIELDS)
+
+
+def _apply_studio_profile_fields(artist: Artist, profile_in) -> None:
+    for field in STUDIO_PROFILE_TEXT_FIELDS:
+        if hasattr(profile_in, field):
+            value = getattr(profile_in, field)
+            if value is not None:
+                setattr(artist, field, _normalize_text(value))
+    artist.profile_complete = _studio_profile_is_complete(artist)
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login-form")
 security = HTTPBearer(auto_error=False)
 
+
+def _ensure_password_reset_not_required(user: User) -> None:
+    if user.must_reset_password:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password reset required before accessing this resource",
+        )
+
+
+def _reject_default_admin_password(password: str) -> None:
+    if password == DEFAULT_ADMIN_PASSWORD:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot use the default password. Choose a unique password.",
+        )
+
 # Supporting form-based login for Swagger UI / external clients
 @router.post("/login-form", response_model=Token)
 def login_oauth2(
+    request: Request,
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
+    enforce_rate_limit(request, "login")
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Incorrect email or password"
         )
+    elif not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Inactive user"
+        )
+    return _issue_token_response(user, response)
+
+def _apply_user_mode(user: User, x_user_mode: Optional[str]) -> None:
+    apply_user_mode(user)
+
+
+def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value=refresh_token,
+        httponly=True,
+        secure=settings.is_production,
+        samesite="lax",
+        max_age=REFRESH_TOKEN_TTL_DAYS * 86400,
+        path="/api/auth",
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(key=REFRESH_COOKIE_NAME, path="/api/auth")
+
+
+def _issue_token_response(user: User, response: Response) -> dict:
+    refresh_token = create_refresh_token(subject=user.id)
+    _set_refresh_cookie(response, refresh_token)
     return {
         "access_token": create_access_token(subject=user.id),
         "token_type": "bearer",
-        "refresh_token": create_refresh_token(subject=user.id)
+        "refresh_token": refresh_token,
     }
+
+
+def get_current_user_allow_reset(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    return _resolve_authenticated_user(token, db, enforce_password_reset=False)
+
 
 def get_current_user(
     token: str = Depends(oauth2_scheme),
-    x_user_mode: Optional[str] = Header(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ) -> User:
+    return _resolve_authenticated_user(token, db, enforce_password_reset=True)
+
+
+def _resolve_authenticated_user(token: str, db: Session, *, enforce_password_reset: bool) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -51,21 +151,18 @@ def get_current_user(
         token_data = TokenPayload(sub=int(user_id))
     except JWTError:
         raise credentials_exception
-        
+
     user = db.query(User).filter(User.id == token_data.sub).first()
-    if user is None:
+    if user is None or not user.is_active:
         raise credentials_exception
 
-    # Store original database role before override
-    user._real_role = user.role
-    if x_user_mode == "listener" and user.role in ["radio_admin", "studio_admin"]:
-        user.__dict__["role"] = "listener"
-
+    _apply_user_mode(user, None)
+    if enforce_password_reset:
+        _ensure_password_reset_not_required(user)
     return user
 
 def get_optional_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    x_user_mode: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ) -> Optional[User]:
     if not credentials:
@@ -77,15 +174,15 @@ def get_optional_current_user(
         if user_id is None:
             return None
         user = db.query(User).filter(User.id == int(user_id)).first()
-        if user:
-            user._real_role = user.role
-            if x_user_mode == "listener" and user.role in ["radio_admin", "studio_admin"]:
-                user.__dict__["role"] = "listener"
+        if user is None or not user.is_active:
+            return None
+        _apply_user_mode(user, None)
         return user
     except Exception:
         return None
 
 def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
+    _ensure_password_reset_not_required(current_user)
     if current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -94,6 +191,7 @@ def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
     return current_user
 
 def get_current_studio_admin(current_user: User = Depends(get_current_user)) -> User:
+    _ensure_password_reset_not_required(current_user)
     if current_user.role not in ["studio_admin", "admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -102,6 +200,7 @@ def get_current_studio_admin(current_user: User = Depends(get_current_user)) -> 
     return current_user
 
 def get_current_radio_admin(current_user: User = Depends(get_current_user)) -> User:
+    _ensure_password_reset_not_required(current_user)
     if current_user.role not in ["radio_admin", "admin"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -110,12 +209,17 @@ def get_current_radio_admin(current_user: User = Depends(get_current_user)) -> U
     return current_user
 
 @router.post("/register", response_model=UserResponse)
-def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
+def register_user(user_in: UserCreate, request: Request, db: Session = Depends(get_db)):
     """
     Register a new user (always as listener).
     """
+    enforce_rate_limit(request, "register")
     email = user_in.email.strip().lower()
     password = user_in.password.strip()
+    try:
+        validate_password(password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     
     db_user = db.query(User).filter(User.email == email).first()
     if db_user:
@@ -139,10 +243,11 @@ def register_user(user_in: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token)
-def login(user_in: UserLogin, db: Session = Depends(get_db)):
+def login(user_in: UserLogin, request: Request, response: Response, db: Session = Depends(get_db)):
     """
     Log in with email and password to receive access token.
     """
+    enforce_rate_limit(request, "login")
     email = user_in.email.strip().lower()
     password = user_in.password.strip()
     
@@ -158,17 +263,14 @@ def login(user_in: UserLogin, db: Session = Depends(get_db)):
             detail="Inactive user"
         )
         
-    return {
-        "access_token": create_access_token(subject=user.id),
-        "token_type": "bearer",
-        "refresh_token": create_refresh_token(subject=user.id)
-    }
+    return _issue_token_response(user, response)
 
 @router.post("/google", response_model=Token)
-def login_google(body: dict, db: Session = Depends(get_db)):
+def login_google(body: dict, request: Request, response: Response, db: Session = Depends(get_db)):
     """
     Log in using Google Sign-In. Mocks backend OAuth verification for simple integration.
     """
+    enforce_rate_limit(request, "google")
     # Accept user info sent directly or decoded from mock id token
     email = body.get("email")
     name = body.get("name", "Google User")
@@ -189,16 +291,79 @@ def login_google(body: dict, db: Session = Depends(get_db)):
         db.add(user)
         db.commit()
         db.refresh(user)
+    elif not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Inactive user"
+        )
         
-    return {
-        "access_token": create_access_token(subject=user.id),
-        "token_type": "bearer",
-        "refresh_token": create_refresh_token(subject=user.id)
-    }
+    return _issue_token_response(user, response)
 
 @router.get("/me", response_model=UserResponse)
-def read_current_user(current_user: User = Depends(get_current_user)):
+def read_current_user(
+    current_user: User = Depends(get_current_user_allow_reset),
+    db: Session = Depends(get_db),
+):
+    from app.services.subscription_service import apply_pending_subscription_if_due
+
+    apply_pending_subscription_if_due(current_user, db)
+    db.refresh(current_user)
     return current_user
+
+
+@router.put("/me/settings", response_model=UserResponse)
+def update_user_settings(
+    settings_in: UserSettingsUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _ensure_password_reset_not_required(current_user)
+
+    if settings_in.stream_quality is not None:
+        quality = settings_in.stream_quality.strip().lower()
+        if quality not in VALID_STREAM_QUALITIES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid stream quality setting",
+            )
+        if quality != "normal" and not paid_subscription_is_active(current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Premium subscription required for this stream quality",
+            )
+        current_user.stream_quality = quality
+
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+
+@router.post("/logout")
+def logout(
+    response: Response,
+    current_user: User = Depends(get_current_user_allow_reset),
+):
+    revoke_refresh_token(current_user.id)
+    _clear_refresh_cookie(response)
+    return {"detail": "Logged out successfully"}
+
+
+@router.post("/switch-mode", response_model=UserResponse)
+def switch_user_mode(
+    body: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    mode = (body.get("mode") or "").strip().lower()
+    if mode not in ("admin", "listener"):
+        raise HTTPException(status_code=400, detail="Mode must be 'admin' or 'listener'")
+    db_user = db.query(User).filter(User.id == current_user.id).first()
+    if not db_user or db_user.role not in ("radio_admin", "studio_admin"):
+        raise HTTPException(status_code=400, detail="Mode switching is not available for this account")
+    set_user_mode(db_user.id, mode)
+    db.refresh(db_user)
+    apply_user_mode(db_user)
+    return db_user
 
 
 @router.post("/request-artist", response_model=UserResponse)
@@ -222,6 +387,32 @@ def request_artist(
         )
         db.add(artist)
     
+    db.commit()
+    db.refresh(artist)
+    db.refresh(current_user)
+    return current_user
+
+
+@router.put("/studio-profile", response_model=UserResponse)
+def update_studio_profile(
+    profile_in: StudioProfileUpdate,
+    current_user: User = Depends(get_current_studio_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Studio admin: update full studio profile and mark onboarding complete when required fields are filled.
+    """
+    artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+    if not artist:
+        artist = Artist(
+            user_id=current_user.id,
+            stage_name=profile_in.stage_name.strip(),
+            bio=profile_in.bio.strip(),
+            profile_complete=False,
+        )
+        db.add(artist)
+
+    _apply_studio_profile_fields(artist, profile_in)
     db.commit()
     db.refresh(artist)
     db.refresh(current_user)
@@ -266,9 +457,12 @@ def update_user_role_admin(
             artist = Artist(
                 user_id=user.id,
                 stage_name=user.full_name or user.email.split("@")[0],
-                bio=""
+                bio="",
+                profile_complete=False,
             )
             db.add(artist)
+        else:
+            artist.profile_complete = _studio_profile_is_complete(artist)
             
     db.commit()
     db.refresh(user)
@@ -284,10 +478,16 @@ def update_user_subscription_admin(
     db: Session = Depends(get_db)
 ):
     """
-    Admin user management: update a user's subscription plan and cycle.
+    Super admin user management: update a user's subscription plan and cycle.
+    Unlimited tier can only be assigned here — not via self-service checkout.
     """
     if subscription not in ["free", "premium", "unlimited"]:
         raise HTTPException(status_code=400, detail="Invalid subscription plan")
+    if subscription == "unlimited" and current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the platform super admin can assign the unlimited tier",
+        )
     if subscription_cycle is not None and subscription_cycle not in ["monthly", "yearly"]:
         raise HTTPException(status_code=400, detail="Invalid subscription cycle")
         
@@ -302,9 +502,8 @@ def update_user_subscription_admin(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-        
-    user.subscription = subscription
-    user.subscription_cycle = subscription_cycle
+
+    apply_admin_subscription(user, subscription, subscription_cycle)
     db.commit()
     db.refresh(user)
     return user
@@ -382,23 +581,68 @@ def update_profile(
 @router.put("/change-password")
 def change_password(
     pw_in: ChangePasswordRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user_allow_reset),
+    db: Session = Depends(get_db),
 ):
     if not verify_password(pw_in.old_password, current_user.hashed_password):
         raise HTTPException(status_code=400, detail="Incorrect old password")
-        
+    try:
+        validate_password(pw_in.new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     current_user.hashed_password = get_password_hash(pw_in.new_password)
+    current_user.must_reset_password = False
+    revoke_refresh_token(current_user.id)
+    db.commit()
+    return {"detail": "Password updated successfully"}
+
+
+@router.post("/reset-initial-password")
+def reset_initial_password(
+    body: ResetInitialPasswordRequest,
+    current_user: User = Depends(get_current_user_allow_reset),
+    db: Session = Depends(get_db),
+):
+    """
+    Mandatory first-login password reset for accounts flagged with must_reset_password.
+    """
+    if not current_user.must_reset_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password reset is not required for this account",
+        )
+
+    new_password = body.new_password.strip()
+    try:
+        validate_password(new_password)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    _reject_default_admin_password(new_password)
+
+    if verify_password(new_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from the current password",
+        )
+
+    current_user.hashed_password = get_password_hash(new_password)
+    current_user.must_reset_password = False
+    revoke_refresh_token(current_user.id)
     db.commit()
     return {"detail": "Password updated successfully"}
 
 @router.post("/refresh", response_model=Token)
 def refresh_token(
+    request: Request,
+    response: Response,
     body: dict,
     db: Session = Depends(get_db)
 ):
-    refresh_token = body.get("refresh_token")
-    if not refresh_token:
+    enforce_rate_limit(request, "refresh", limit=REFRESH_LIMIT, window_sec=REFRESH_WINDOW_SEC)
+    refresh_token_value = body.get("refresh_token") or request.cookies.get(REFRESH_COOKIE_NAME)
+    if not refresh_token_value:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Refresh token is required"
@@ -409,23 +653,16 @@ def refresh_token(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(refresh_token, settings.SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("sub")
-        token_type: str = payload.get("type")
-        if user_id is None or token_type != "refresh":
-            raise credentials_exception
+        user_id = validate_refresh_token(refresh_token_value)
     except Exception:
         raise credentials_exception
-        
-    user = db.query(User).filter(User.id == int(user_id)).first()
+
+    user = db.query(User).filter(User.id == user_id).first()
     if user is None or not user.is_active:
         raise credentials_exception
-        
-    return {
-        "access_token": create_access_token(subject=user.id),
-        "token_type": "bearer",
-        "refresh_token": create_refresh_token(subject=user.id)
-    }
+
+    revoke_refresh_token(user.id)
+    return _issue_token_response(user, response)
 
 @router.get("/admin/studios", response_model=List[ArtistResponse])
 def get_studios_admin(
@@ -455,6 +692,36 @@ def update_studio_admin(
         artist.stage_name = artist_in.stage_name
     if artist_in.bio is not None:
         artist.bio = artist_in.bio
+    if artist_in.category is not None:
+        artist.category = artist_in.category
+    if artist_in.licence is not None:
+        artist.licence = artist_in.licence
+    if artist_in.street_address is not None:
+        artist.street_address = artist_in.street_address
+    if artist_in.city is not None:
+        artist.city = artist_in.city
+    if artist_in.state_province is not None:
+        artist.state_province = artist_in.state_province
+    if artist_in.postal_code is not None:
+        artist.postal_code = artist_in.postal_code
+    if artist_in.country is not None:
+        artist.country = artist_in.country
+    if artist_in.phone is not None:
+        artist.phone = artist_in.phone
+    if artist_in.email is not None:
+        artist.email = artist_in.email
+    if artist_in.website is not None:
+        artist.website = artist_in.website
+    if artist_in.languages is not None:
+        artist.languages = artist_in.languages
+    if artist_in.social_twitter is not None:
+        artist.social_twitter = artist_in.social_twitter
+    if artist_in.social_instagram is not None:
+        artist.social_instagram = artist_in.social_instagram
+    if artist_in.profile_complete is not None:
+        artist.profile_complete = artist_in.profile_complete
+    else:
+        artist.profile_complete = _studio_profile_is_complete(artist)
     if artist_in.is_active is not None:
         artist.is_active = artist_in.is_active
         if artist.is_active:

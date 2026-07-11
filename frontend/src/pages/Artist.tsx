@@ -4,11 +4,10 @@ import { useAudio, Track } from '../context/AudioContext';
 import { TrackRow } from '../components/shared/TrackRow';
 
 interface ArtistProps {
-  onViewReport: (track: Track) => void;
   onViewDetails: (track: Track) => void;
 }
 
-export const Artist: React.FC<ArtistProps> = ({ onViewReport, onViewDetails }) => {
+export const Artist: React.FC<ArtistProps> = ({ onViewDetails }) => {
   const { playTrack, toggleFavorite, favorites } = useAudio();
 
   // Mock artist profile details
@@ -90,7 +89,6 @@ export const Artist: React.FC<ArtistProps> = ({ onViewReport, onViewDetails }) =
                 key={track.id} 
                 track={track} 
                 index={idx}
-                onViewReport={onViewReport}
                 onViewDetails={onViewDetails}
               />
             ))

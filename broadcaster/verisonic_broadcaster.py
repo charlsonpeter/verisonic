@@ -64,6 +64,36 @@ except ImportError:
 # Define fixed server stream URL (with env override)
 DEFAULT_SERVER_URL = os.environ.get("VERISONIC_SERVER_URL", "ws://54.66.243.141:3000/api/radio/stream/ws")
 
+
+def _config_cipher_key() -> bytes:
+    import hashlib
+    import platform
+    seed = f"{platform.node()}:{platform.system()}:verisonic".encode()
+    return hashlib.sha256(seed).digest()
+
+
+def _encode_config_value(value: str) -> str:
+    import base64
+    if not value:
+        return ""
+    key = _config_cipher_key()
+    raw = value.encode("utf-8")
+    obfuscated = bytes(b ^ key[i % len(key)] for i, b in enumerate(raw))
+    return base64.urlsafe_b64encode(obfuscated).decode("ascii")
+
+
+def _decode_config_value(value: str) -> str:
+    import base64
+    if not value:
+        return ""
+    try:
+        key = _config_cipher_key()
+        raw = base64.urlsafe_b64decode(value.encode("ascii"))
+        plain = bytes(b ^ key[i % len(key)] for i, b in enumerate(raw))
+        return plain.decode("utf-8")
+    except Exception:
+        return ""
+
 # AudioStreamTrack is only needed if we ever do full WebRTC ingest in future
 if USE_WEBRTC:
     class AudioStreamTrack(MediaStreamTrack):
@@ -430,16 +460,27 @@ class PyQtBroadcasterApp(QMainWindow):
                     config = json.load(f)
                     self.saved_email = config.get("email", "")
                     self.saved_bitrate = config.get("bitrate", 320)
+                    enc_access = config.get("access_token_enc", "")
+                    enc_refresh = config.get("refresh_token_enc", "")
+                    if enc_access:
+                        self.auth_token = _decode_config_value(enc_access)
+                    if enc_refresh:
+                        self.refresh_token = _decode_config_value(enc_refresh)
             except Exception as e:
                 print("Failed to load config:", e)
 
     def save_config(self):
         try:
+            payload = {
+                "email": self.saved_email,
+                "bitrate": self.saved_bitrate,
+            }
+            if self.auth_token:
+                payload["access_token_enc"] = _encode_config_value(self.auth_token)
+            if self.refresh_token:
+                payload["refresh_token_enc"] = _encode_config_value(self.refresh_token)
             with open(self.config_path, "w") as f:
-                json.dump({
-                    "email": self.saved_email,
-                    "bitrate": self.saved_bitrate
-                }, f)
+                json.dump(payload, f)
         except Exception as e:
             print("Failed to save config:", e)
 
@@ -886,39 +927,40 @@ class PyQtBroadcasterApp(QMainWindow):
             QMessageBox.critical(self, "Invalid Key Format", "The connection key format is invalid. Please copy it directly from your radio station dashboard.")
             return
 
-        # Fetch the latest stations from server to ensure key is synchronized
+        # Verify the key belongs to the selected station (keys are no longer in list responses)
+        matched = False
+        if self.selected_station_id and self.auth_token:
+            try:
+                result, _ = api_request(
+                    f"/radio/{self.selected_station_id}/verify-broadcast-key",
+                    method="POST",
+                    data={"stream_key": stream_key},
+                    token=self.auth_token,
+                )
+                matched = result.get("valid", False)
+            except Exception as e:
+                print("Failed to verify broadcast key:", e)
+
+        if not matched:
+            self.key_entry.clear()
+            if time.time() - timestamp > 330:
+                QMessageBox.critical(
+                    self, "Connection Key Expired",
+                    "This connection key has expired. Please regenerate a new key in your web dashboard, copy it, and paste it here."
+                )
+            else:
+                QMessageBox.critical(
+                    self, "Invalid Key",
+                    "The connection key does not match the selected radio station. "
+                    "Please ensure you have selected the correct station and pasted the key accurately."
+                )
+            return
+
         try:
             stations, _ = api_request("/radio", method="GET", token=self.auth_token)
             self.user_stations = stations
         except Exception as e:
-            print("Failed to sync stations during key validation:", e)
-
-        # Verify the key belongs to the selected station
-        matched = False
-        if self.selected_station_id:
-            for st in self.user_stations:
-                if st.get("id") == self.selected_station_id:
-                    if st.get("stream_key") == stream_key:
-                        matched = True
-                        break
-                        
-        if not matched:
-            self.key_entry.clear()
-            QMessageBox.critical(
-                self, "Invalid Key", 
-                "The connection key does not match the selected radio station. "
-                "Please ensure you have selected the correct station and pasted the key accurately."
-            )
-            return
-
-        # Check key expiration (validity is 5 minutes from generation, with 30s clock skew tolerance)
-        if time.time() - timestamp > 330:
-            self.key_entry.clear()
-            QMessageBox.critical(
-                self, "Connection Key Expired", 
-                "This connection key has expired. Please regenerate a new key in your web dashboard, copy it, and paste it here."
-            )
-            return
+            print("Failed to sync stations:", e)
             
         station_name = "VeriSonic Radio"
         if self.selected_station_id:

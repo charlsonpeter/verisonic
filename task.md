@@ -1,20 +1,34 @@
-# Tasks - VeriSonic Live Broadcaster Implementation
+# Tasks — VeriSonic
 
-- [x] Database Schema & Seeding
-  - [x] Add `stream_key` column to `RadioStation` model in `backend/app/models.py`
-  - [x] Add `stream_key` field to `RadioStationResponse` schema in `backend/app/schemas.py`
-  - [x] Implement database auto-migration in `backend/app/main.py` to create `stream_key` column on startup
-- [x] Backend Streaming Logic & API Endpoints
-  - [x] Implement in-memory `LiveStreamManager` in `backend/app/api/radio.py`
-  - [x] Create `/api/radio/stream/ws` WebSocket ingestion route for the desktop client
-  - [x] Create `/api/radio/{id}/live` HTTP stream client endpoint using `StreamingResponse`
-  - [x] Create `POST /api/radio/{id}/regenerate-key` route to change connection keys
-  - [x] Update `get_station_stream_sync` and `serialize_station` to route listeners to the live stream
-- [x] Web Application Frontend
-  - [x] Update `frontend/src/pages/Radio.tsx` to display connection credentials (URL & Stream Key)
-  - [x] Fix TypeScript compiler strict mode errors and resolve unclosed braces
-- [x] Redesign player audio visualizer (Equalizer.tsx) to match the PyQt segmented LED VU meter
+> **Living status:** see [implementation_plan.md](implementation_plan.md) for the full technical spec, API summary, and remaining gaps.
 
-- [x] Desktop Broadcaster Application
-  - [x] Create `verisonic_broadcaster.py` desktop software with Tkinter GUI
-  - [x] Add audio input device querying, WebSocket streaming thread, and fallback PCM/MP3 modes
+---
+
+## Live broadcaster (complete)
+
+- [x] Database schema — `stream_key` on `RadioStation`; tracked migrations in `backend/app/db/migrations.py`
+- [x] Backend streaming — `LiveStreamManager`, WebSocket ingest, HTTP/WebRTC playback, key rotation
+- [x] Frontend — Radio admin dashboard, connection settings, route guards, live player routing
+- [x] Desktop app — `broadcaster/verisonic_broadcaster.py` (PyQt5), CI builds for macOS/Linux/Windows
+- [x] Infrastructure — Docker Compose + nginx live-stream proxy
+
+---
+
+## Subscriptions (complete)
+
+- [x] Backend — Razorpay orders, payment verify, plan queue/cancel/reactivate (`/api/subscriptions`)
+- [x] Plans — Premium Monthly (₹99) and Premium Yearly (₹999); Unlimited admin-assigned
+- [x] Premium gating — 7-day trial, 30s/60s previews, AAC 128 for free tier (`app/core/premium.py`)
+- [x] Frontend — `SubscriptionPlans`, Settings/Landing checkout, `PremiumModal`, admin tier assignment
+
+---
+
+## Known open items
+
+- [ ] Radio schedule — list/delete/reorder API; no automated scheduled playback
+- [ ] Playlists — public discovery endpoint
+- [ ] Artists — route `Artist.tsx`; dedicated artist browse
+- [ ] Listening history — user-facing API/page
+- [ ] Google OAuth — real token verification
+- [ ] Track comments — persist beyond client mock
+- [ ] Album/genre — standalone CRUD APIs

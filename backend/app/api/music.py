@@ -2,16 +2,37 @@ import os
 import shutil
 import tempfile
 import asyncio
-from fastapi import Request, APIRouter, Depends, HTTPException, UploadFile, File, Form, status, WebSocket, WebSocketDisconnect
-from sqlalchemy.orm import Session
-from typing import List, Optional
+from fastapi import Request, APIRouter, Depends, HTTPException, UploadFile, File, Form, status, WebSocket, WebSocketDisconnect, Query
+from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy.orm import Session, joinedload
+from typing import List, Optional, Tuple
+from jose import jwt, JWTError
 
 from app.db.session import get_db, SessionLocal
 from app.models import Track, Artist, Album, Genre, AudioAnalysisReport, ListeningHistory, StreamingLog
-from app.schemas import TrackResponse, AudioAnalysisReportResponse
+from app.schemas import TrackResponse, AudioAnalysisReportResponse, QualityReportDetailResponse, ScoreBreakdownItem, QualityScoreTier
 from app.api.auth import get_current_user, get_current_studio_admin, get_current_admin, get_optional_current_user
-from app.services.storage import generate_presigned_url, delete_file, upload_file
+from app.services.storage import (
+    generate_presigned_url,
+    delete_file,
+    upload_file,
+    delete_prefix,
+    guess_content_type,
+    get_object_size,
+    open_object_stream,
+)
+from app.services.audio import build_score_breakdown, QUALITY_SCORE_TIERS, calculate_quality_score
 from app.tasks.tasks import analyze_audio_task
+from app.core.premium import user_has_premium
+from app.core.config import settings
+from app.core.security import ALGORITHM, create_stream_ticket, validate_stream_ticket
+from app.core.upload_validation import validate_audio_upload, validate_cover_upload
+from app.core.ws_auth import extract_ws_token, resolve_ws_user
+from app.models import User
+
+router = APIRouter(prefix="/music", tags=["music"])
+stream_auth = HTTPBearer(auto_error=False)
 
 def normalize_optional_string(val: Optional[str]) -> Optional[str]:
     if val is None:
@@ -21,10 +42,112 @@ def normalize_optional_string(val: Optional[str]) -> Optional[str]:
         return None
     return stripped
 
-router = APIRouter(prefix="/music", tags=["music"])
+def _user_can_manage_track(user: User, track: Track, db: Session) -> bool:
+    if user.role == "admin":
+        return True
+    artist = db.query(Artist).filter(Artist.user_id == user.id).first()
+    return bool(artist and track.artist_id == artist.id)
+
+
+def _parse_byte_range(range_header: Optional[str], file_size: int) -> Tuple[int, int]:
+    if not range_header or not range_header.startswith("bytes="):
+        return 0, file_size - 1
+    spec = range_header.replace("bytes=", "").strip()
+    if "," in spec:
+        spec = spec.split(",", 1)[0].strip()
+    if "-" not in spec:
+        return 0, file_size - 1
+    start_str, end_str = spec.split("-", 1)
+    if start_str == "":
+        suffix = int(end_str)
+        start = max(0, file_size - suffix)
+        end = file_size - 1
+    else:
+        start = int(start_str)
+        end = int(end_str) if end_str else file_size - 1
+    if start >= file_size:
+        raise HTTPException(status_code=416, detail="Range not satisfiable")
+    end = min(end, file_size - 1)
+    if end < start:
+        raise HTTPException(status_code=416, detail="Range not satisfiable")
+    return start, end
+
+
+def _radio_admin_blocked_from_music(user) -> bool:
+    if not user:
+        return False
+    real_role = getattr(user, "_real_role", None) or user.role
+    return real_role == "radio_admin" and user.role == "radio_admin"
+
+
+def _resolve_quality_score(
+    track: Track,
+    db: Session,
+    *,
+    persist: bool = False,
+) -> tuple[Optional[int], Optional[str]]:
+    """Recompute quality score from analysis report so list and report stay in sync."""
+    report = track.analysis_report
+    if not report and track.id:
+        report = db.query(AudioAnalysisReport).filter(AudioAnalysisReport.track_id == track.id).first()
+    if not report or report.cutoff_frequency is None:
+        return track.quality_score, track.quality_level
+
+    metadata = {
+        "sample_rate": track.sample_rate or 0,
+        "bit_depth": track.bit_depth or 0,
+        "codec": (track.file_format or "").lower(),
+    }
+    spectral = {
+        "cutoff_frequency": report.cutoff_frequency,
+        "max_frequency": report.max_frequency or 0,
+    }
+    quality = calculate_quality_score(metadata, spectral)
+    score = quality["quality_score"]
+    level = quality["quality_level"]
+
+    if persist and (track.quality_score != score or track.quality_level != level):
+        track.quality_score = score
+        track.quality_level = level
+        db.add(track)
+
+    return score, level
+
+
+def _resolve_stream_user(
+    ticket: Optional[str],
+    access_token: Optional[str],
+    credentials: Optional[HTTPAuthorizationCredentials],
+    db: Session,
+    track_id: int,
+) -> User:
+    if ticket:
+        try:
+            user_id = validate_stream_ticket(ticket, track_id)
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid stream ticket") from exc
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None or not user.is_active:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        return user
+
+    token = credentials.credentials if credentials else access_token
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        user = db.query(User).filter(User.id == int(user_id)).first()
+        if user is None or not user.is_active:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        return user
+    except JWTError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
 
 # Helper to serialize Track into response with pre-signed URLs
-def serialize_track(track: Track, db: Session) -> dict:
+def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) -> dict:
     artist_name = track.artist_name_override if track.artist_name_override else (track.artist.stage_name if track.artist else "Unknown Artist")
     album_title = track.album.title if track.album else None
     
@@ -41,6 +164,23 @@ def serialize_track(track: Track, db: Session) -> dict:
     if not cover_art_url:
         cover_art_url = "https://images.unsplash.com/photo-1507838153414-b4b713384a76?auto=format&fit=crop&q=80&w=150"
 
+    premium = user_has_premium(viewer)
+    is_owner_or_admin = False
+    if viewer:
+        if viewer.role == "admin":
+            is_owner_or_admin = True
+        else:
+            artist = db.query(Artist).filter(Artist.user_id == viewer.id).first()
+            is_owner_or_admin = bool(artist and track.artist_id == artist.id)
+
+    if not premium and not is_owner_or_admin:
+        original_url = None
+        mp3_url = None
+        aac_256_url = None
+        hls_url = None
+
+    quality_score, quality_level = _resolve_quality_score(track, db)
+
     return {
         "id": track.id,
         "title": track.title,
@@ -55,8 +195,8 @@ def serialize_track(track: Track, db: Session) -> dict:
         "sample_rate": track.sample_rate,
         "bit_depth": track.bit_depth,
         "channels": track.channels,
-        "quality_score": track.quality_score,
-        "quality_level": track.quality_level,
+        "quality_score": quality_score,
+        "quality_level": quality_level,
         "approved": track.approved,
         "original_file_path": original_url,
         "hls_playlist_path": hls_url,
@@ -69,6 +209,7 @@ def serialize_track(track: Track, db: Session) -> dict:
         "lyricist": track.lyricist,
         "year": track.year,
         "language": track.language,
+        "genres": [g.name for g in track.genres] if track.genres else [],
         "created_at": track.created_at
     }
 
@@ -113,123 +254,8 @@ def transcribe_audio(file_path: str, language: Optional[str] = None, track_title
         except Exception as ex:
             print(f"Failed to transcribe via OpenAI Whisper API: {ex}")
             
-    # Mock AI transcription with multi-language template generation based on title and artist
-    lang_code = "en"
-    if language:
-        l_lower = language.lower()
-        if "span" in l_lower or "esp" in l_lower or l_lower == "es":
-            lang_code = "es"
-        elif "fren" in l_lower or "fran" in l_lower or l_lower == "fr":
-            lang_code = "fr"
-        elif "germ" in l_lower or "deut" in l_lower or l_lower == "de":
-            lang_code = "de"
-        elif "hind" in l_lower or l_lower == "hi":
-            lang_code = "hi"
-        elif "chin" in l_lower or "zh" in l_lower or "mand" in l_lower:
-            lang_code = "zh"
-            
-    lyrics_templates = {
-        "en": [
-            "({Artist} - {Title} - AI Transcript)",
-            "Intro (Instrumental)",
-            "[Verse 1]",
-            "Walking down these city lights, thinking of you,",
-            "The stars are fading, but our dream stays true.",
-            "I heard the echo of your voice in the sound,",
-            "But you were nowhere to be found.",
-            "[Chorus]",
-            "This is our song, rising high in the sky,",
-            "No more tears left, no more saying goodbye.",
-            "We are the rhythm, the beat of the night,",
-            "Shining so bright, under the neon light.",
-            "[Outro]",
-            "Echoes fade... we are home."
-        ],
-        "es": [
-            "({Artist} - {Title} - AI Transcript [Spanish])",
-            "Intro (Instrumental)",
-            "[Verso 1]",
-            "Caminando bajo las luces de la ciudad, pensando en ti,",
-            "Las estrellas se apagan, pero nuestro sueño sigue aquí.",
-            "Escuché el eco de tu voz en la melodía,",
-            "Pero la distancia nos envolvía.",
-            "[Coro]",
-            "Esta es nuestra canción, volando en el viento,",
-            "Sin más lágrimas, deteniendo el tiempo.",
-            "Somos el ritmo, el latido del mar,",
-            "Bajo la luna, listos para empezar.",
-            "[Outro]",
-            "Los ecos se apagan... estamos en casa."
-        ],
-        "fr": [
-            "({Artist} - {Title} - AI Transcript [French])",
-            "Intro (Instrumental)",
-            "[Couplet 1]",
-            "Marchant sous les lumières de la ville, je pense à toi,",
-            "Les étoiles s'effacent, mais notre rêve reste là.",
-            "J'ai entendu l'écho de ta voix dans le vent,",
-            "Mais tu n'étais plus là comme avant.",
-            "[Refrain]",
-            "C'est notre chanson qui s'élève vers le ciel,",
-            "Plus de larmes, notre amour est éternel.",
-            "Nous sommes le rythme, les battements de la nuit,",
-            "Brillant si fort, là où l'espoir luit.",
-            "[Outro]",
-            "Les échos s'estompent... nous sommes chez nous."
-        ],
-        "de": [
-            "({Artist} - {Title} - AI Transcript [German])",
-            "Intro (Instrumental)",
-            "[Strophe 1]",
-            "Ich gehe durch die Lichter der Stadt und denke an dich,",
-            "Die Sterne verblassen, doch unser Traum verlässt uns nicht.",
-            "Ich hörte das Echo deiner Stimme im Wind,",
-            "Doch wo wir jetzt verloren sind.",
-            "[Refrain]",
-            "Das ist unser Lied, das zum Himmel steigt,",
-            "Keine Tränen mehr, bis die Nacht sich neigt.",
-            "Wir sind der Rhythmus, der Schlag dieser Nacht,",
-            "Der in uns das Feuer neu entfacht.",
-            "[Outro]",
-            "Die Echos verblassen... wir sind zu Hause."
-        ],
-        "hi": [
-            "({Artist} - {Title} - AI Transcript [Hindi])",
-            "संगीत (Instrumental)",
-            "[पद १]",
-            "इस शहर की रोशनी में, तेरी याद आती है,",
-            "तारे खो जाते हैं, पर हमारी उम्मीद बाकी रहती है।",
-            "हवाओं में गूंजी तेरी वो मीठी सदा,",
-            "पर तू न जाने कहाँ खो गया जुदा।",
-            "[ध्रुवपद]",
-            "यह हमारा गीत है, जो आसमान छू रहा है,",
-            "आँसू थम गए हैं, अब कोई शिकवा नहीं रहा है।",
-            "हम हैं वो धड़कन, इस रात की जान,",
-            "चमकेंगे सदा, बनकर नए आसमान।",
-            "[अंत]",
-            "गूंज थमी... हम घर आ गए।"
-        ],
-        "zh": [
-            "({Artist} - {Title} - AI Transcript [Chinese])",
-            "前奏 (Instrumental)",
-            "[主歌 1]",
-            "走在霓虹灯下，脑海中全是你的身影，",
-            "星光渐暗，但我们的梦想依然清澈透明。",
-            "我听到风中传来你温柔的呼唤，",
-            "却发现你早已不在我的身边。",
-            "[副歌]",
-            "这是属于我们的歌，在夜空中飞扬，",
-            "擦干眼泪，不再有离别的悲伤。",
-            "我们是夜的旋律，是心跳的节奏，",
-            "在闪烁的霓虹里，牵手走到最后。",
-            "[尾奏]",
-            "歌声渐弱... 我们到家了。"
-        ]
-    }
-    
-    template = lyrics_templates.get(lang_code, lyrics_templates["en"])
-    lyrics_lines = [line.replace("{Artist}", artist_name).replace("{Title}", track_title) for line in template]
-    return "\n".join(lyrics_lines)
+    # Mock AI transcription disabled — return empty when Whisper API is unavailable
+    return ""
 
 @router.post("/parse-metadata")
 async def parse_metadata(
@@ -299,7 +325,7 @@ async def upload_music(
     Validates extension and schedules async spectral check & transcoding.
     """
     filename = file.filename
-    ext = os.path.splitext(filename)[1].lower()
+    ext = await validate_audio_upload(file)
     
     # Supported and Restricted audio extensions
     allowed_exts = [".flac", ".wav", ".aiff", ".alac"]
@@ -491,7 +517,7 @@ def get_autocomplete_suggestions(
     db: Session = Depends(get_db),
     current_user = Depends(get_optional_current_user)
 ):
-    if current_user and current_user.role == "radio_admin":
+    if _radio_admin_blocked_from_music(current_user):
         raise HTTPException(status_code=403, detail="Radio admins cannot access music metadata")
     """
     Returns unique existing values for autocomplete suggestions.
@@ -540,8 +566,12 @@ def list_tracks(
     db: Session = Depends(get_db),
     current_user = Depends(get_optional_current_user)
 ):
-    if current_user and current_user.role == "radio_admin":
+    if _radio_admin_blocked_from_music(current_user):
         raise HTTPException(status_code=403, detail="Radio admins are not allowed to play music or search tracks.")
+    if not approved_only:
+        real_role = getattr(current_user, "_real_role", None) or (current_user.role if current_user else None)
+        if not current_user or real_role not in ("admin", "studio_admin"):
+            approved_only = True
     """
     List audio tracks with search filter (Title, Artist Name, Album Title, Genre).
     Uses full text pattern matching.
@@ -565,28 +595,141 @@ def list_tracks(
                      )
                      
     tracks = query.order_by(Track.created_at.desc()).all()
-    return [serialize_track(t, db) for t in tracks]
+    return [serialize_track(t, db, viewer=current_user) for t in tracks]
 
 
 @router.get("/manage", response_model=List[TrackResponse])
 def manage_tracks(
+    approved_only: bool = False,
     db: Session = Depends(get_db),
     current_user = Depends(get_current_studio_admin)
 ):
     """
     List audio tracks for management screen.
     Admin sees all uploaded tracks.
-    Artist sees only their own uploaded tracks.
+    Studio admin sees their own tracks; use approved_only=true for the tracks list tab.
     """
     if current_user.role == "admin":
-        tracks = db.query(Track).order_by(Track.created_at.desc()).all()
+        query = db.query(Track).options(joinedload(Track.analysis_report))
     else:
         artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
         if not artist:
             return []
-        tracks = db.query(Track).filter(Track.artist_id == artist.id).order_by(Track.created_at.desc()).all()
-        
-    return [serialize_track(t, db) for t in tracks]
+        query = (
+            db.query(Track)
+            .options(joinedload(Track.analysis_report))
+            .filter(Track.artist_id == artist.id)
+        )
+        if approved_only:
+            query = query.filter(Track.approved == True)
+
+    tracks = query.order_by(Track.created_at.desc()).all()
+
+    for t in tracks:
+        _resolve_quality_score(t, db, persist=True)
+    db.commit()
+
+    return [serialize_track(t, db, viewer=current_user) for t in tracks]
+
+@router.post("/{id}/stream/ticket")
+def issue_stream_ticket(
+    id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    track = db.query(Track).filter(Track.id == id).first()
+    if not track or not track.original_file_path:
+        raise HTTPException(status_code=404, detail="Track master not available")
+
+    is_owner = False
+    if current_user.role == "admin":
+        is_owner = True
+    else:
+        artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+        is_owner = bool(artist and track.artist_id == artist.id)
+
+    if not is_owner and not user_has_premium(current_user):
+        raise HTTPException(status_code=403, detail="Premium subscription required")
+
+    ticket = create_stream_ticket(current_user.id, id)
+    return {"ticket": ticket, "expires_in": 300}
+
+
+@router.get("/{id}/stream/master")
+def stream_master(
+    id: int,
+    request: Request,
+    ticket: Optional[str] = Query(None),
+    access_token: Optional[str] = Query(None),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(stream_auth),
+    db: Session = Depends(get_db),
+):
+    """Stream the original studio master with HTTP Range support (premium only)."""
+    current_user = _resolve_stream_user(ticket, access_token, credentials, db, id)
+
+    track = db.query(Track).filter(Track.id == id).first()
+    if not track or not track.original_file_path:
+        raise HTTPException(status_code=404, detail="Track master not available")
+
+    is_owner = False
+    if current_user.role == "admin":
+        is_owner = True
+    else:
+        artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+        is_owner = bool(artist and track.artist_id == artist.id)
+
+    if not is_owner and not user_has_premium(current_user):
+        raise HTTPException(status_code=403, detail="Premium subscription required")
+
+    if not track.approved and not is_owner and current_user.role != "admin":
+        raise HTTPException(status_code=404, detail="Track master not available")
+
+    if track.artist and not track.artist.is_active and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Track is currently unavailable")
+
+    try:
+        file_size = get_object_size(track.original_file_path)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Track master not found") from exc
+
+    range_header = request.headers.get("range")
+    try:
+        start, end = _parse_byte_range(range_header, file_size)
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=416, detail="Invalid range") from exc
+
+    try:
+        obj = open_object_stream(track.original_file_path, start, end)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Track master not found") from exc
+
+    content_type = guess_content_type(track.original_file_path)
+    content_length = end - start + 1
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(content_length),
+        "Content-Type": content_type,
+        "Cache-Control": "private, max-age=3600",
+    }
+    status_code = status.HTTP_200_OK
+    if range_header:
+        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+        status_code = status.HTTP_206_PARTIAL_CONTENT
+
+    def iter_body():
+        body = obj["Body"]
+        try:
+            while True:
+                chunk = body.read(1024 * 256)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            body.close()
+
+    return StreamingResponse(iter_body(), status_code=status_code, headers=headers)
 
 @router.get("/{id}", response_model=TrackResponse)
 def get_track(
@@ -594,16 +737,27 @@ def get_track(
     db: Session = Depends(get_db),
     current_user = Depends(get_optional_current_user)
 ):
-    if current_user and current_user.role == "radio_admin":
+    if _radio_admin_blocked_from_music(current_user):
         raise HTTPException(status_code=403, detail="Radio admins are not allowed to play music or search tracks.")
     track = db.query(Track).filter(Track.id == id).first()
     if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    is_owner_or_admin = False
+    if current_user:
+        if current_user.role == "admin":
+            is_owner_or_admin = True
+        else:
+            artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+            is_owner_or_admin = bool(artist and track.artist_id == artist.id)
+
+    if not track.approved and not is_owner_or_admin:
         raise HTTPException(status_code=404, detail="Track not found")
         
     if track.artist and not track.artist.is_active and (not current_user or current_user.role != "admin"):
         raise HTTPException(status_code=403, detail="Track is currently unavailable (Studio is disabled)")
         
-    return serialize_track(track, db)
+    return serialize_track(track, db, viewer=current_user)
 
 @router.delete("/{id}", status_code=status.HTTP_200_OK)
 def delete_track(
@@ -632,25 +786,64 @@ def delete_track(
         delete_file(track.aac_128_path)
     # Note: deleting the entire HLS folder structure key prefixes
     if track.hls_playlist_path:
-        prefix = f"hls/{track.id}/"
+        delete_prefix(f"hls/{track.id}/")
         delete_file(track.hls_playlist_path)
-        # Boto3 simple file delete handles one file. For deep folder recursive clean up, normally you run list and delete.
         
     db.delete(track)
     db.commit()
     return {"message": "Track successfully deleted"}
 
-@router.get("/{id}/quality", response_model=AudioAnalysisReportResponse)
-def get_quality_report(id: int, db: Session = Depends(get_db)):
+@router.get("/{id}/quality", response_model=QualityReportDetailResponse)
+def get_quality_report(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_studio_admin),
+):
+    track = db.query(Track).filter(Track.id == id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+    if not _user_can_manage_track(current_user, track, db):
+        raise HTTPException(status_code=403, detail="Not authorized to view this quality report")
+
     report = db.query(AudioAnalysisReport).filter(AudioAnalysisReport.track_id == id).first()
     if not report:
         raise HTTPException(status_code=404, detail="Audio analysis report not found for this track")
-        
-    # Pre-sign spectrogram image URL
-    if report.spectrogram_path:
-        report.spectrogram_path = generate_presigned_url(report.spectrogram_path)
-        
-    return report
+
+    spectrogram_path = report.spectrogram_path
+    if spectrogram_path:
+        spectrogram_path = generate_presigned_url(spectrogram_path)
+
+    metadata = {
+        "sample_rate": track.sample_rate or 0,
+        "bit_depth": track.bit_depth or 0,
+        "codec": (track.file_format or "").lower(),
+    }
+    spectral = {
+        "cutoff_frequency": report.cutoff_frequency or 0,
+        "max_frequency": report.max_frequency or 0,
+    }
+    breakdown, computed_score = build_score_breakdown(metadata, spectral)
+    quality = calculate_quality_score(metadata, spectral)
+
+    _resolve_quality_score(track, db, persist=True)
+    db.commit()
+    computed_score, quality_level = _resolve_quality_score(track, db)
+
+    return QualityReportDetailResponse(
+        id=report.id,
+        track_id=report.track_id,
+        max_frequency=report.max_frequency,
+        cutoff_frequency=report.cutoff_frequency,
+        high_frequency_energy=report.high_frequency_energy,
+        spectrogram_path=spectrogram_path,
+        created_at=report.created_at,
+        base_score=100,
+        final_score=computed_score,
+        quality_level=quality_level or track.quality_level,
+        score_breakdown=[ScoreBreakdownItem(**item) for item in breakdown],
+        rejection_reasons=quality["rejection_reasons"],
+        quality_tiers=[QualityScoreTier(**tier) for tier in QUALITY_SCORE_TIERS],
+    )
 
 @router.post("/{id}/approve", response_model=TrackResponse)
 def manually_approve_track(
@@ -679,6 +872,7 @@ def manually_approve_track(
 @router.post("/{id}/play", status_code=status.HTTP_200_OK)
 def log_track_play(
     id: int,
+    bytes_streamed: Optional[int] = Query(None),
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
@@ -688,14 +882,21 @@ def log_track_play(
     track = db.query(Track).filter(Track.id == id).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
+
+    if not track.approved:
+        raise HTTPException(status_code=403, detail="Track is not approved for playback")
         
     # 1. Log play history
     history = ListeningHistory(user_id=current_user.id, track_id=track.id)
     db.add(history)
     
-    # 2. Estimate average bandwidth based on a 3-minute 256kbps HLS stream
-    bytes_streamed = int((track.duration or 180.0) * (256000 / 8))
-    log = StreamingLog(user_id=current_user.id, track_id=track.id, bytes_streamed=bytes_streamed)
+    if bytes_streamed is not None and bytes_streamed > 0:
+        streamed = bytes_streamed
+    elif track.bitrate and track.duration:
+        streamed = int(track.duration * (track.bitrate / 8))
+    else:
+        streamed = int((track.duration or 180.0) * (256000 / 8))
+    log = StreamingLog(user_id=current_user.id, track_id=track.id, bytes_streamed=streamed)
     db.add(log)
     
     db.commit()
@@ -707,30 +908,17 @@ async def websocket_tracks_status(
     websocket: WebSocket,
     token: Optional[str] = None
 ):
-    await websocket.accept()
-    
-    # Authenticate user from query parameter token
-    user = None
-    if token:
-        from jose import jwt, JWTError
-        from app.core.config import settings
-        from app.models import User
-        
-        db = SessionLocal()
-        try:
-            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
-            user_id = payload.get("sub")
-            if user_id:
-                user = db.query(User).filter(User.id == int(user_id)).first()
-        except JWTError:
-            pass
-        finally:
-            db.close()
-            
+    resolved_token = extract_ws_token(websocket, token)
+    user = resolve_ws_user(resolved_token)
     if not user:
-        await websocket.send_json({"type": "error", "message": "Unauthorized"})
-        await websocket.close(code=1008)
+        await websocket.close(code=1008, reason="Unauthorized")
         return
+
+    if user.role not in ("admin", "studio_admin"):
+        await websocket.close(code=1008, reason="Forbidden")
+        return
+
+    await websocket.accept()
         
     monitored_ids = set()
     last_states = {} # track_id -> status
@@ -804,8 +992,27 @@ async def websocket_tracks_status(
 
 
 @router.websocket("/ws/analysis/{track_id}")
-async def websocket_analysis(websocket: WebSocket, track_id: int):
+async def websocket_analysis(websocket: WebSocket, track_id: int, token: Optional[str] = None):
+    resolved_token = extract_ws_token(websocket, token)
+    user = resolve_ws_user(resolved_token)
+    if not user or user.role not in ("admin", "studio_admin"):
+        await websocket.close(code=1008, reason="Unauthorized")
+        return
+
+    db = SessionLocal()
+    try:
+        track = db.query(Track).filter(Track.id == track_id).first()
+        if not track:
+            await websocket.close(code=1008, reason="Track not found")
+            return
+        if not _user_can_manage_track(user, track, db):
+            await websocket.close(code=1008, reason="Forbidden")
+            return
+    finally:
+        db.close()
+
     await websocket.accept()
+
     try:
         while True:
             # Query in a short-lived session to avoid SQLAlchemy caching
@@ -950,10 +1157,8 @@ async def update_track(
                 track.genres.append(g_model)
             
     if cover_image is not None and cover_image.filename:
-        ext = os.path.splitext(cover_image.filename)[1].lower()
-        if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
-            raise HTTPException(status_code=400, detail="Invalid cover image format. Allowed: JPG, PNG, WEBP")
-            
+        ext = await validate_cover_upload(cover_image)
+        
         cover_key = f"covers/{track.id}{ext}"
         file_bytes = cover_image.file.read()
         upload_file(file_bytes, cover_key, content_type=cover_image.content_type)

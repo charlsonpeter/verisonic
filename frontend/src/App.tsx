@@ -20,33 +20,38 @@ import { AudioPlayer } from './components/player/AudioPlayer';
 
 // Shared UI
 import { PremiumModal } from './components/shared/PremiumModal';
+import { BannerHost } from './components/shared/BannerHost';
 import { TrackRow } from './components/shared/TrackRow';
 import { LyricsModal } from './components/shared/LyricsModal';
+import { AcousticScoreBreakdown } from './components/shared/AcousticScoreBreakdown';
 
 // Page components
 import { LandingPage } from './pages/LandingPage';
 import { Home } from './pages/Home';
-import { Discover } from './pages/Discover';
 import { Radio as RadioPage } from './pages/Radio';
 import { Search as SearchPage } from './pages/Search';
 import { Artist as ArtistPage } from './pages/Artist';
 import { Playlist as PlaylistPage } from './pages/Playlist';
 import { MusicDetails } from './pages/MusicDetails';
 import { UserProfile } from './pages/UserProfile';
+import { Favorites } from './pages/Favorites';
 import { StationProfile } from './pages/StationProfile';
 import { StudioProfile } from './pages/StudioProfile';
 import { Settings } from './pages/Settings';
 import { AuthPage } from './pages/AuthPage';
+import { ForceAdminPasswordReset } from './pages/ForceAdminPasswordReset';
 import { UsersManagement } from './pages/UsersManagement';
 import { TracksManagement } from './pages/TracksManagement';
+import { StudioTrackList } from './pages/StudioTrackList';
 import { Contact } from './pages/Contact';
 import { BroadcasterDownload } from './pages/BroadcasterDownload';
+import { AdminAnalytics } from './pages/AdminAnalytics';
 
 const API_URL = '/api';
 
 // Headless UI Router Core
 function DashboardContent() {
-  const { currentUser, token, hasRadioStation } = useAuth();
+  const { currentUser, token, hasRadioStation, hasStudioProfileComplete, mustResetPassword, canAccessPlatformSettings, canAccessStationProfile, userMode } = useAuth();
   const { playTrack, playQueue, addToQueue, favorites } = useAudio();
 
   // Route/Tab Switcher state
@@ -54,7 +59,7 @@ function DashboardContent() {
     const hashTab = window.location.hash.replace('#', '');
     if (hashTab) return hashTab;
     const savedTab = localStorage.getItem('activeTab');
-    const hasToken = localStorage.getItem('token');
+    const hasToken = sessionStorage.getItem('token') || localStorage.getItem('token');
     if (hasToken) {
       return savedTab && savedTab !== 'landing' ? savedTab : 'home';
     }
@@ -75,6 +80,12 @@ function DashboardContent() {
   // Listen for hash changes (browser back/forward button clicks)
   useEffect(() => {
     const handleHashChange = () => {
+      if (mustResetPassword) {
+        if (activeTab !== 'admin-password-reset') {
+          setActiveTab('admin-password-reset');
+        }
+        return;
+      }
       const hashTab = window.location.hash.replace('#', '');
       if (hashTab && hashTab !== activeTab) {
         setActiveTab(hashTab);
@@ -82,7 +93,7 @@ function DashboardContent() {
     };
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [activeTab]);
+  }, [activeTab, mustResetPassword]);
 
   // Handle logout redirect or invalid session redirect
   useEffect(() => {
@@ -92,14 +103,79 @@ function DashboardContent() {
     }
   }, [token, activeTab]);
 
-  // Route protection redirect for Radio Admins who do NOT have a station yet
+  // Force super admin to reset default password before using the app
   useEffect(() => {
-    if (currentUser && currentUser.role === 'radio_admin' && !hasRadioStation) {
+    if (mustResetPassword && activeTab !== 'admin-password-reset') {
+      setActiveTab('admin-password-reset');
+    }
+  }, [mustResetPassword, activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'settings' && !canAccessPlatformSettings) {
+      const role = currentUser?.real_role || currentUser?.role;
+      setActiveTab(role === 'radio_admin' ? 'radio' : 'home');
+    }
+  }, [activeTab, canAccessPlatformSettings, currentUser]);
+
+  useEffect(() => {
+    if (activeTab === 'station-profile' && !canAccessStationProfile) {
+      setActiveTab('settings');
+    }
+  }, [activeTab, canAccessStationProfile]);
+
+  // Hide studio admin manage menus in listen mode
+  useEffect(() => {
+    const role = currentUser?.real_role || currentUser?.role;
+    if (currentUser && role === 'studio_admin' && userMode === 'listener') {
+      if (activeTab === 'tracks' || activeTab === 'studio-profile') {
+        setActiveTab('home');
+      }
+    }
+  }, [currentUser, activeTab, userMode]);
+
+  // Route protection redirect for Radio Admins who do NOT have a station yet (admin mode only)
+  useEffect(() => {
+    const role = currentUser?.real_role || currentUser?.role;
+    if (currentUser && role === 'radio_admin' && !hasRadioStation && userMode === 'admin') {
       if (activeTab !== 'radio' && activeTab !== 'contact' && activeTab !== 'settings' && activeTab !== 'profile' && activeTab !== 'station-profile' && activeTab !== 'studio-profile' && activeTab !== 'broadcaster-download') {
         setActiveTab('radio');
       }
     }
-  }, [currentUser, activeTab, hasRadioStation]);
+  }, [currentUser, activeTab, hasRadioStation, userMode]);
+
+  // Restrict studio admin admin mode to tracks list, contact, and account-menu pages
+  useEffect(() => {
+    const role = currentUser?.real_role || currentUser?.role;
+    if (currentUser && role === 'studio_admin' && userMode === 'admin') {
+      const onboardingAllowed = new Set([
+        'studio-profile',
+        'contact',
+        'profile',
+        'settings',
+        'admin-password-reset',
+      ]);
+      const allowed = hasStudioProfileComplete
+        ? new Set([
+            'track-list',
+            'contact',
+            'profile',
+            'studio-profile',
+            'tracks',
+            'reports',
+            'admin-password-reset',
+          ])
+        : onboardingAllowed;
+      if (!allowed.has(activeTab)) {
+        setActiveTab(hasStudioProfileComplete ? 'track-list' : 'studio-profile');
+      }
+    }
+  }, [currentUser, activeTab, userMode, hasStudioProfileComplete]);
+
+  useEffect(() => {
+    if (activeTab === 'discover') {
+      setActiveTab('home');
+    }
+  }, [activeTab]);
 
   // Scroll main view container to top on tab change
   const mainRef = useRef<HTMLElement>(null);
@@ -131,18 +207,8 @@ function DashboardContent() {
         setAnalyticsData(data);
       }
     } catch (e) {
-      console.warn("Backend offline: Simulated dashboard payload deployed.");
-      setAnalyticsData({
-        total_plays: 1450,
-        total_listeners: 320,
-        total_tracks: 14,
-        bandwidth_gb: 42.6,
-        quality_distribution: { studio: 8, good: 4, average: 2, poor: 0 },
-        popular_tracks: [
-          { id: 2, title: "Midnight Piano Sonata", artist_name: "Clara Schumann Ensembles", play_count: 320 },
-          { id: 1, title: "Acoustic Forest Resonance", artist_name: "Nature Synthesis", play_count: 240 }
-        ]
-      });
+      console.warn("Failed to fetch analytics:", e);
+      setAnalyticsData(null);
     }
   };
 
@@ -156,21 +222,21 @@ function DashboardContent() {
     setSelectedReportTrack(track);
     setActiveTab('reports');
     try {
-      const res = await fetch(`${API_URL}/music/${track.id}/quality`);
+      const res = await fetch(`${API_URL}/music/${track.id}/quality`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
       if (res.ok) {
         const data = await res.json();
         setActiveReport(data);
+        setSelectedReportTrack((prev: any) =>
+          prev ? { ...prev, quality_score: data.final_score, quality_level: data.quality_level } : prev
+        );
       } else {
         throw new Error();
       }
     } catch (e) {
-      // Mock quality report when offline
-      setActiveReport({
-        max_frequency: 24000,
-        cutoff_frequency: track.quality_score && track.quality_score >= 86 ? 22000 : 16000,
-        high_frequency_energy: track.quality_score && track.quality_score >= 86 ? 0.082 : 0.003,
-        spectrogram_path: "https://images.unsplash.com/photo-1507838153414-b4b713384a76?auto=format&fit=crop&q=80&w=600"
-      });
+      console.warn('Failed to load quality report:', e);
+      setActiveReport(null);
     }
   };
 
@@ -231,28 +297,25 @@ function DashboardContent() {
       case 'landing':
         return <LandingPage onNavigate={setActiveTab} />;
       case 'home':
-        return <Home onNavigate={setActiveTab} onViewReport={viewQualityReport} onViewDetails={handleDetailsView} />;
-      case 'discover':
-        return <Discover onNavigate={setActiveTab} />;
+        return <Home onNavigate={setActiveTab} onViewDetails={handleDetailsView} />;
       case 'radio':
         return <RadioPage />;
       case 'search':
         return (
           <SearchPage 
-            onViewReport={viewQualityReport} 
             onViewDetails={handleDetailsView}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
           />
         );
       case 'favorites':
-        return <UserProfile onViewReport={viewQualityReport} onViewDetails={handleDetailsView} />;
+        return <Favorites onViewDetails={handleDetailsView} />;
       case 'playlists':
-        return <PlaylistPage onViewReport={viewQualityReport} onViewDetails={handleDetailsView} />;
+        return <PlaylistPage onViewDetails={handleDetailsView} />;
       case 'details':
         return <MusicDetails track={selectedDetailsTrack} onNavigate={setActiveTab} />;
       case 'profile':
-        return <UserProfile onViewReport={viewQualityReport} onViewDetails={handleDetailsView} />;
+        return <UserProfile />;
       case 'station-profile':
         return <StationProfile onNavigate={setActiveTab} />;
       case 'studio-profile':
@@ -263,12 +326,18 @@ function DashboardContent() {
         return <UsersManagement />;
       case 'tracks':
         return <TracksManagement onViewReport={viewQualityReport} />;
+      case 'track-list':
+        return <StudioTrackList />;
       case 'contact':
         return <Contact />;
       case 'broadcaster-download':
         return <BroadcasterDownload />;
       case 'auth':
         return <AuthPage onSuccess={() => setActiveTab('home')} />;
+      case 'admin-password-reset':
+        return (
+          <ForceAdminPasswordReset onSuccess={() => setActiveTab('home')} />
+        );
       
 
 
@@ -276,7 +345,7 @@ function DashboardContent() {
       case 'reports':
         return (
           <div className="space-y-6 font-sans">
-            <div>
+            <div className="hidden md:block">
               <h2 className="text-3xl font-extrabold tracking-tight text-white mb-1">Acoustic Reports</h2>
               <p className="text-sm text-slate-400">Cutoff ranges, spectral signatures, and upscaling warning results.</p>
             </div>
@@ -294,22 +363,45 @@ function DashboardContent() {
                 {/* Left Column - Score Gauge & Spectrogram FFT Graph */}
                 <div className="lg:col-span-5 space-y-6">
                   {/* Score panel */}
-                  <div className="bg-gradient-to-b from-slate-900/80 to-slate-950/90 border border-white/10 rounded-3xl p-8 flex flex-col items-center justify-center shadow-2xl relative overflow-hidden group hover:border-slate-700/60 transition duration-500">
+                  <div className="bg-gradient-to-b from-slate-900/80 to-slate-950/90 border border-white/10 rounded-3xl p-6 md:p-8 shadow-2xl relative overflow-hidden group hover:border-slate-700/60 transition duration-500">
                     <div className="absolute -top-16 -left-16 w-36 h-36 bg-rose-600/10 rounded-full blur-3xl pointer-events-none group-hover:bg-rose-600/15 transition-all duration-700" />
-                    <h3 className="text-[10px] font-black text-rose-400 uppercase tracking-widest mb-6 font-sans">Acoustic Score Gauge</h3>
-                    
-                    {renderCircularProgress(selectedReportTrack.quality_score || 0)}
-                    
-                    <div className="mt-6 text-center space-y-1">
-                      <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block">Quality Certification</span>
-                      <span className={`px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider border shadow-md inline-block ${
-                        selectedReportTrack.quality_level === 'Studio Quality' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-emerald-950/20' :
-                        selectedReportTrack.quality_level === 'Good' ? 'bg-cyan-500/10 border-cyan-500/20 text-cyan-400 shadow-cyan-950/20' :
-                        selectedReportTrack.quality_level === 'Average' ? 'bg-amber-500/10 border-amber-500/20 text-amber-405 shadow-amber-950/20' :
-                        'bg-rose-500/10 border-rose-500/20 text-rose-455 shadow-rose-950/20'
-                      }`}>
-                        {selectedReportTrack.quality_level || 'Checking...'}
-                      </span>
+                    <h3 className="text-[10px] font-black text-rose-400 uppercase tracking-widest mb-5 font-sans">Acoustic Score Gauge</h3>
+
+                    <div className="flex flex-col sm:flex-row gap-6 sm:gap-8 items-center sm:items-start">
+                      {(() => {
+                        const breakdownTotal = activeReport?.score_breakdown?.reduce(
+                          (sum: number, item: { points_achieved?: number }) => sum + (item.points_achieved ?? 0),
+                          0,
+                        ) ?? 0;
+                        const reportScore =
+                          breakdownTotal > 0
+                            ? breakdownTotal
+                            : (activeReport?.final_score ?? selectedReportTrack.quality_score) || 0;
+                        return (
+                          <>
+                            <div className="flex flex-col items-center shrink-0 sm:pt-1">
+                              {renderCircularProgress(reportScore)}
+                              <div className="mt-4 text-center space-y-1">
+                                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block">Quality Certification</span>
+                                <span className={`px-4 py-1.5 rounded-full text-xs font-black uppercase tracking-wider border shadow-md inline-block ${
+                                  selectedReportTrack.quality_level === 'Studio Quality' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 shadow-emerald-950/20' :
+                                  selectedReportTrack.quality_level === 'Good' ? 'bg-cyan-500/10 border-cyan-500/20 text-cyan-400 shadow-cyan-950/20' :
+                                  selectedReportTrack.quality_level === 'Average' ? 'bg-amber-500/10 border-amber-500/20 text-amber-405 shadow-amber-950/20' :
+                                  'bg-rose-500/10 border-rose-500/20 text-rose-455 shadow-rose-950/20'
+                                }`}>
+                                  {selectedReportTrack.quality_level || 'Checking...'}
+                                </span>
+                              </div>
+                            </div>
+                            {activeReport?.score_breakdown?.length > 0 && (
+                              <AcousticScoreBreakdown
+                                finalScore={reportScore}
+                                breakdown={activeReport.score_breakdown}
+                              />
+                            )}
+                          </>
+                        );
+                      })()}
                     </div>
                   </div>
 
@@ -522,103 +614,64 @@ function DashboardContent() {
 
       // Admin Analytics Dashboard
       case 'analytics':
-        return (
-          <div className="space-y-6 font-sans">
-            <div>
-              <h2 className="text-3xl font-extrabold tracking-tight text-white mb-1">System Metrics</h2>
-              <p className="text-sm text-slate-400">Acoustic check stats, unique listener counts, and bandwidth loads.</p>
-            </div>
-
-            {!analyticsData ? (
-              <button onClick={fetchAnalytics} className="px-4 py-2 bg-rose-600 text-white rounded-xl text-xs font-bold">Load Stats</button>
-            ) : (
-              <div className="space-y-6">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-                  {[
-                    { label: "Plays Count", val: analyticsData.total_plays },
-                    { label: "Unique Users", val: analyticsData.total_listeners },
-                    { label: "Library Songs", val: analyticsData.total_tracks },
-                    { label: "Bandwidth Used", val: `${analyticsData.bandwidth_gb} GB` }
-                  ].map((s, idx) => (
-                    <div key={idx} className="glass-card rounded-2xl p-5 border-white/5 shadow-inner">
-                      <span className="text-[10px] text-rose-400 font-extrabold uppercase block mb-1">{s.label}</span>
-                      <span className="text-2xl font-extrabold text-white">{s.val}</span>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
-                  {/* Quality Level Distribution */}
-                  <div className="glass-card rounded-3xl p-6 border-white/5">
-                    <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest mb-5">Verified Acoustic Spread</h3>
-                    <div className="space-y-4">
-                      <div>
-                        <div className="flex justify-between mb-1 font-semibold text-slate-350">
-                          <span>Studio (&gt;85 score)</span>
-                          <span>{analyticsData.quality_distribution.studio} tracks</span>
-                        </div>
-                        <div className="h-1.5 bg-slate-950 border border-white/3 rounded-full overflow-hidden">
-                          <div className="h-full bg-emerald-500" style={{ width: `${(analyticsData.quality_distribution.studio / analyticsData.total_tracks) * 100}%` }} />
-                        </div>
-                      </div>
-                      <div>
-                        <div className="flex justify-between mb-1 font-semibold text-slate-350">
-                          <span>Good (71-85 score)</span>
-                          <span>{analyticsData.quality_distribution.good} tracks</span>
-                        </div>
-                        <div className="h-1.5 bg-slate-950 border border-white/3 rounded-full overflow-hidden">
-                          <div className="h-full bg-cyan-500" style={{ width: `${(analyticsData.quality_distribution.good / analyticsData.total_tracks) * 100}%` }} />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Top Tracks */}
-                  <div className="glass-card rounded-3xl p-6 border-white/5">
-                    <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest mb-5">Broadcast Plays Leaderboard</h3>
-                    <div className="space-y-3">
-                      {analyticsData.popular_tracks.map((t: any, idx: number) => (
-                        <div key={idx} className="flex justify-between items-center bg-slate-950/45 p-3 rounded-xl border border-white/3">
-                          <span className="font-extrabold text-rose-400 text-[10px]">#0{idx + 1}</span>
-                          <span className="font-bold text-slate-200 truncate max-w-[150px]">{t.title}</span>
-                          <span className="bg-rose-500/10 text-rose-300 font-bold px-2 py-0.5 rounded-full text-[8.5px] border border-rose-500/15">{t.play_count} plays</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        );
+        return <AdminAnalytics analyticsData={analyticsData} onLoad={fetchAnalytics} />;
 
       default:
         return <LandingPage onNavigate={setActiveTab} />;
     }
   };
 
+  const isPasswordResetGate = mustResetPassword || activeTab === 'admin-password-reset';
+  const hideAppChrome = activeTab === 'landing' || activeTab === 'auth' || isPasswordResetGate;
+
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-100 overflow-hidden font-sans select-none relative w-full">
+    <div className="flex flex-1 min-h-0 h-[100dvh] max-h-[100dvh] w-full box-border pt-[env(safe-area-inset-top,0px)] bg-slate-950 text-slate-100 overflow-hidden font-sans select-none relative">
       {/* Background Blobs */}
       <div className="absolute top-10 left-10 w-96 h-96 bg-rose-600/5 rounded-full blur-[110px] pointer-events-none animate-blob-1" />
       <div className="absolute top-1/3 right-1/4 w-[35rem] h-[35rem] bg-pink-600/5 rounded-full blur-[130px] pointer-events-none animate-blob-2" />
       
       {/* 2. Main content viewport */}
-      <div className="flex-1 flex flex-col min-w-0 relative">
-        {activeTab !== 'landing' && (
+      <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden">
+        {!hideAppChrome && (
           <Header 
             searchQuery={searchQuery} 
             setSearchQuery={setSearchQuery} 
             activeTab={activeTab} 
-            setActiveTab={setActiveTab} 
+            setActiveTab={setActiveTab}
+            pageTitleOverride={
+              activeTab === 'details' ? selectedDetailsTrack?.title ?? 'Track Details' : undefined
+            }
           />
         )}
         
-        <main ref={mainRef} className={`flex-1 overflow-y-auto pb-36 ${activeTab === 'landing' ? 'px-0 py-0' : 'px-6 md:px-8 py-8'}`}>
+        <main
+          ref={mainRef}
+          className={`flex-1 min-h-0 overflow-y-auto overscroll-y-contain ${hideAppChrome ? '' : 'md:pb-36'} ${
+            activeTab === 'landing' || activeTab === 'auth'
+              ? 'px-0 py-0'
+              : 'px-6 md:px-8 max-md:py-3'
+          }`}
+        >
           <div key={activeTab} className="animate-page-entry w-full">
             {renderTabContent()}
           </div>
         </main>
+
+        {/* Mobile bottom chrome — in document flow so content never scrolls behind */}
+        <div className="md:hidden flex-shrink-0 pb-[env(safe-area-inset-bottom,0px)] bg-slate-950">
+          {!hideAppChrome && (
+            <>
+              <AudioPlayer 
+                onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
+                isQueueOpen={isQueueOpen} 
+                onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
+                isLyricsOpen={isLyricsOpen}
+                activeTab={activeTab} 
+              />
+              <MobileNav activeTab={activeTab} setActiveTab={setActiveTab} />
+            </>
+          )}
+        </div>
       </div>
 
       {/* 3. Right Queue Drawer */}
@@ -627,22 +680,25 @@ function DashboardContent() {
       {/* 3.5. Center Lyrics Modal */}
       <LyricsModal isOpen={isLyricsOpen} onClose={() => setIsLyricsOpen(false)} />
 
-      {/* 4. Bottom Fixed Audio Player Controls */}
-      <AudioPlayer 
-        onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
-        isQueueOpen={isQueueOpen} 
-        onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
-        isLyricsOpen={isLyricsOpen}
-        activeTab={activeTab} 
-      />
+      {/* 4. Desktop audio player (fixed overlay) */}
+      <div className="hidden md:block">
+        {!hideAppChrome && (
+          <AudioPlayer 
+            onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
+            isQueueOpen={isQueueOpen} 
+            onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
+            isLyricsOpen={isLyricsOpen}
+            activeTab={activeTab} 
+          />
+        )}
+      </div>
 
-      {/* 5. Mobile Navigation Sticky Tabs */}
-      {activeTab !== 'landing' && (
-        <MobileNav activeTab={activeTab} setActiveTab={setActiveTab} />
-      )}
+      {/* 5. Mobile nav moved into viewport column above */}
 
       {/* 6. VIP Upgrade Modal Overlay */}
       <PremiumModal onNavigate={setActiveTab} />
+
+      <BannerHost />
     </div>
   );
 }

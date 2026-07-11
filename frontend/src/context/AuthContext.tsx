@@ -1,4 +1,13 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { getTrialDaysLeft, hasPaidSubscription } from '../utils/accountTier';
+import {
+  clearAuthTokens,
+  getAccessToken,
+  setAuthTokens,
+  refreshAccessToken,
+} from '../utils/authTokens';
+import type { QualityLevelSetting } from '../utils/streamQuality';
+import { saveUserStreamQuality } from '../utils/userSettings';
 
 export interface User {
   id: number;
@@ -8,7 +17,14 @@ export interface User {
   real_role?: 'listener' | 'studio_admin' | 'radio_admin' | 'admin';
   subscription: 'free' | 'premium' | 'unlimited';
   subscription_cycle: 'monthly' | 'yearly' | null;
+  subscription_expires_at?: string | null;
+  subscription_activated_at?: string | null;
+  must_reset_password?: boolean;
   created_at?: string;
+  stream_quality?: QualityLevelSetting | null;
+  pending_plan_id?: string | null;
+  pending_plan_paid?: boolean;
+  subscription_cancel_at_period_end?: boolean;
   artist_profile?: {
     id: number;
     user_id: number;
@@ -18,6 +34,20 @@ export interface User {
     disabled_reason?: string | null;
     reactivation_reason?: string | null;
     reactivation_requested?: boolean;
+    profile_complete?: boolean;
+    category?: string | null;
+    licence?: string | null;
+    street_address?: string | null;
+    city?: string | null;
+    state_province?: string | null;
+    postal_code?: string | null;
+    country?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    website?: string | null;
+    languages?: string | null;
+    social_twitter?: string | null;
+    social_instagram?: string | null;
   } | null;
 }
 
@@ -27,24 +57,31 @@ interface AuthContextType {
   isLoading: boolean;
   authError: string | null;
   isPremium: boolean;
+  canConfigureStreamQuality: boolean;
+  canAccessPlatformSettings: boolean;
+  canAccessStationProfile: boolean;
   userMode: 'admin' | 'listener';
+  canUsePlaylists: boolean;
+  isStaffInAdminMode: boolean;
+  mustResetPassword: boolean;
   switchUserMode: (mode: 'admin' | 'listener') => void;
   login: (email: string, password: string) => Promise<boolean>;
-  register: (email: string, password: string, fullName: string, role: 'listener' | 'studio_admin' | 'radio_admin' | 'admin') => Promise<boolean>;
+  register: (email: string, password: string, fullName: string) => Promise<boolean>;
   logout: () => void;
   socialLogin: (provider: 'google' | 'apple') => Promise<boolean>;
   clearError: () => void;
   fetchCurrentUser: () => Promise<void>;
+  updateStreamQuality: (quality: QualityLevelSetting) => Promise<boolean>;
   hasRadioStation: boolean;
+  hasStudioProfileComplete: boolean;
   checkRadioStationStatus: (user?: User | null) => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
 const API_URL = '/api';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [token, setToken] = useState<string | null>(getAccessToken());
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -53,18 +90,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   });
   const [hasRadioStation, setHasRadioStation] = useState<boolean>(false);
 
-  const switchUserMode = (mode: 'admin' | 'listener') => {
+  const switchUserMode = async (mode: 'admin' | 'listener') => {
     localStorage.setItem('userMode', mode);
     setUserMode(mode);
+    if (!token) return;
+    try {
+      await fetch(`${API_URL}/auth/switch-mode`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        credentials: 'include',
+        body: JSON.stringify({ mode }),
+      });
+      await fetchCurrentUser();
+    } catch {
+      // Keep local mode even if server sync fails in dev without Redis
+    }
   };
 
   useEffect(() => {
-    if (token) {
-      fetchCurrentUser();
-    } else {
-      setCurrentUser(null);
-      setIsLoading(false);
-    }
+    const bootstrap = async () => {
+      if (!getAccessToken()) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+          setToken(getAccessToken());
+          return;
+        }
+        setIsLoading(false);
+        return;
+      }
+      if (token) {
+        fetchCurrentUser();
+      } else {
+        setCurrentUser(null);
+        setIsLoading(false);
+      }
+    };
+    bootstrap();
   }, [token, userMode]);
 
   const fetchCurrentUser = async () => {
@@ -75,11 +139,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       });
       if (res.ok) {
         const data = await res.json();
-        // Check if role is admin -> set premium. Else default premium checking or custom mock.
         const userWithSub: User = {
           ...data,
-          subscription: data.role === 'admin' ? 'premium' : (data.subscription || 'free'),
-          subscription_cycle: data.subscription_cycle || null
+          subscription: data.subscription || 'free',
+          subscription_cycle: data.subscription_cycle || null,
+          subscription_expires_at: data.subscription_expires_at || null,
+          subscription_activated_at: data.subscription_activated_at || null,
+          must_reset_password: data.must_reset_password ?? false,
         };
         setCurrentUser(userWithSub);
         if (userWithSub.role === 'admin') {
@@ -92,26 +158,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } else {
         logout();
       }
-    } catch (e) {
-      console.warn("Backend offline. Fallback to mock session validation.");
-      // Fallback: decode basic JWT-like token or load mock user
-      if (token === 'mock_admin_token') {
-        setCurrentUser({ id: 1, email: 'admin@verisonic.com', full_name: 'Platform Administrator', role: 'admin', subscription: 'unlimited', subscription_cycle: null });
-        localStorage.setItem('userMode', 'admin');
-        setUserMode('admin');
-      } else if (token === 'mock_radio_admin_token') {
-        const mockUser: User = { id: 4, email: 'radio_admin@verisonic.com', full_name: 'Radio Administrator', role: 'radio_admin', real_role: 'radio_admin', subscription: 'premium', subscription_cycle: 'yearly' };
-        setCurrentUser(mockUser);
-        checkRadioStationStatus(mockUser);
-      } else if (token === 'mock_studio_admin_token') {
-        setCurrentUser({ id: 5, email: 'studio_admin@verisonic.com', full_name: 'Studio Administrator', role: 'studio_admin', real_role: 'studio_admin', subscription: 'premium', subscription_cycle: 'yearly' });
-      } else if (token === 'mock_listener_token') {
-        setCurrentUser({ id: 2, email: 'listener@verisonic.com', full_name: 'Audiophile User', role: 'listener', subscription: 'premium', subscription_cycle: 'monthly' });
-      } else if (token === 'mock_guest_token') {
-        setCurrentUser({ id: 3, email: 'guest@verisonic.com', full_name: 'Free Listener', role: 'listener', subscription: 'free', subscription_cycle: null });
-      } else {
-        console.error("Network error during session validation. Preserving token.");
-      }
+    } catch {
+      setAuthError('Could not reach the authentication service.');
+      logout();
     } finally {
       setIsLoading(false);
     }
@@ -126,77 +175,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await fetch(`${API_URL}/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ email: cleanedEmail, password: cleanedPassword })
       });
-      
       const data = await res.json();
       if (res.ok && data.access_token) {
-        localStorage.setItem('token', data.access_token);
+        setAuthTokens(data.access_token, data.refresh_token);
         setToken(data.access_token);
         return true;
-      } else {
-        setAuthError(data.detail || "Invalid credentials.");
-        return false;
       }
-    } catch (e) {
-      // Mock log-in for development/offline
-      if (cleanedEmail === 'admin@verisonic.com' && cleanedPassword === 'admin12345') {
-        const mockToken = 'mock_admin_token';
-        localStorage.setItem('token', mockToken);
-        setToken(mockToken);
-        return true;
-      } else if (cleanedEmail === 'radio_admin@verisonic.com' && cleanedPassword === 'radio12345') {
-        const mockToken = 'mock_radio_admin_token';
-        localStorage.setItem('token', mockToken);
-        setToken(mockToken);
-        return true;
-      } else if (cleanedEmail === 'studio_admin@verisonic.com' && cleanedPassword === 'studio12345') {
-        const mockToken = 'mock_studio_admin_token';
-        localStorage.setItem('token', mockToken);
-        setToken(mockToken);
-        return true;
-      } else if (cleanedEmail === 'premium@verisonic.com') {
-        const mockToken = 'mock_listener_token';
-        localStorage.setItem('token', mockToken);
-        setToken(mockToken);
-        return true;
-      } else if (cleanedEmail === 'free@verisonic.com') {
-        const mockToken = 'mock_guest_token';
-        localStorage.setItem('token', mockToken);
-        setToken(mockToken);
-        return true;
-      }
-      setAuthError("Could not connect to auth service.");
+      setAuthError(data.detail || 'Invalid credentials.');
+      return false;
+    } catch {
+      setAuthError('Could not connect to auth service.');
       return false;
     } finally {
       setIsLoading(false);
     }
   };
 
-  const register = async (email: string, password: string, fullName: string, role: 'listener' | 'studio_admin' | 'radio_admin' | 'admin'): Promise<boolean> => {
+  const register = async (email: string, password: string, fullName: string): Promise<boolean> => {
     setAuthError(null);
     setIsLoading(true);
-    const cleanedEmail = email.trim().toLowerCase();
-    const cleanedPassword = password.trim();
-    const cleanedFullName = fullName.trim();
     try {
       const res = await fetch(`${API_URL}/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: cleanedEmail, password: cleanedPassword, role, full_name: cleanedFullName })
+        body: JSON.stringify({
+          email: email.trim().toLowerCase(),
+          password: password.trim(),
+          full_name: fullName.trim(),
+        })
       });
       const data = await res.json();
       if (res.ok) {
-        setAuthError("Registration successful! You can now log in.");
+        setAuthError('Registration successful! You can now log in.');
         return true;
-      } else {
-        setAuthError(data.detail || "Registration failed.");
-        return false;
       }
-    } catch (e) {
-      // Offline fallback
-      setAuthError("Offline: Simulated account registered! Please log in.");
-      return true;
+      setAuthError(data.detail || 'Registration failed.');
+      return false;
+    } catch {
+      setAuthError('Could not connect to auth service.');
+      return false;
     } finally {
       setIsLoading(false);
     }
@@ -208,24 +228,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const email = `${provider}.user@verisonic.com`;
       const name = `${provider.charAt(0).toUpperCase() + provider.slice(1)} User`;
-      const res = await fetch(`${API_URL}/auth/google`, { // Google mock endpoint
+      const res = await fetch(`${API_URL}/auth/google`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ email, name })
       });
       const data = await res.json();
       if (res.ok && data.access_token) {
-        localStorage.setItem('token', data.access_token);
+        setAuthTokens(data.access_token, data.refresh_token);
         setToken(data.access_token);
         return true;
       }
-      throw new Error();
-    } catch (e) {
-      // Offline social mock
-      const mockToken = provider === 'google' ? 'mock_listener_token' : 'mock_guest_token';
-      localStorage.setItem('token', mockToken);
-      setToken(mockToken);
-      return true;
+      setAuthError('Social login failed.');
+      return false;
+    } catch {
+      setAuthError('Could not connect to auth service.');
+      return false;
     } finally {
       setIsLoading(false);
     }
@@ -238,47 +257,78 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return false;
     }
     try {
-      const res = await fetch(`${API_URL}/radio`);
+      const res = await fetch(`${API_URL}/radio`, {
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
       if (res.ok) {
         const data = await res.json();
-        const ownsStation = data.some((s: any) => s.owner_id === activeUser.id);
+        const ownsStation = data.some((s: { owner_id: number }) => s.owner_id === activeUser.id);
         setHasRadioStation(ownsStation);
         return ownsStation;
       }
     } catch (e) {
-      console.warn("Failed to check radio station status:", e);
-    }
-    // Fallback for mock simulation token
-    if (activeUser.id === 4) {
-      setHasRadioStation(true);
-      return true;
+      console.warn('Failed to check radio station status:', e);
     }
     setHasRadioStation(false);
     return false;
   };
 
-  const logout = () => {
-    localStorage.removeItem('token');
+  const logout = async () => {
+    const accessToken = getAccessToken();
+    clearAuthTokens();
     setToken(null);
     setCurrentUser(null);
     setAuthError(null);
     setHasRadioStation(false);
+
+    if (accessToken) {
+      try {
+        await fetch(`${API_URL}/auth/logout`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${accessToken}` },
+          credentials: 'include',
+        });
+      } catch {
+        // Best-effort server-side refresh token revocation
+      }
+    }
   };
 
   const clearError = () => setAuthError(null);
 
-  const isTrialActive = () => {
-    if (!currentUser?.created_at) return false;
-    const createdAt = new Date(currentUser.created_at);
-    const now = new Date();
-    const diffDays = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24);
-    return diffDays >= 0 && diffDays <= 7;
-  };
+  const updateStreamQuality = useCallback(async (quality: QualityLevelSetting): Promise<boolean> => {
+    const ok = await saveUserStreamQuality(quality);
+    if (ok) {
+      setCurrentUser((prev) => (prev ? { ...prev, stream_quality: quality } : prev));
+    }
+    return ok;
+  }, []);
 
-  const isPremium = ['premium', 'unlimited'].includes(currentUser?.subscription || '') || 
-                    currentUser?.role === 'admin' || 
-                    currentUser?.role === 'studio_admin' ||
-                    (currentUser?.subscription === 'free' && isTrialActive());
+  const isTrialActive = () => getTrialDaysLeft(currentUser) > 0;
+
+  const userRole = currentUser?.real_role || currentUser?.role;
+
+  const isPremium =
+    hasPaidSubscription(currentUser) ||
+    userRole === 'admin' ||
+    userRole === 'studio_admin' ||
+    userRole === 'radio_admin' ||
+    (currentUser?.subscription === 'free' && isTrialActive());
+
+  const canConfigureStreamQuality = hasPaidSubscription(currentUser);
+  const isStaffInAdminMode =
+    (userRole === 'radio_admin' || userRole === 'studio_admin') && userMode === 'admin';
+  const canAccessPlatformSettings =
+    !!currentUser &&
+    (userRole === 'admin' || userRole === 'listener' || userMode === 'listener');
+  const canAccessStationProfile =
+    !!currentUser &&
+    (userRole === 'admin' || (userRole === 'radio_admin' && userMode === 'admin'));
+  const canUsePlaylists = !!token && !isStaffInAdminMode;
+  const mustResetPassword = !!(
+    currentUser?.role === 'admin' && currentUser?.must_reset_password
+  );
+  const hasStudioProfileComplete = !!currentUser?.artist_profile?.profile_complete;
 
   return (
     <AuthContext.Provider value={{
@@ -287,8 +337,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isLoading,
       authError,
       isPremium,
+      canConfigureStreamQuality,
+      canAccessPlatformSettings,
+      canAccessStationProfile,
       userMode,
+      canUsePlaylists,
+      isStaffInAdminMode,
+      mustResetPassword,
       hasRadioStation,
+      hasStudioProfileComplete,
       switchUserMode,
       login,
       register,
@@ -296,6 +353,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       socialLogin,
       clearError,
       fetchCurrentUser,
+      updateStreamQuality,
       checkRadioStationStatus
     }}>
       {children}

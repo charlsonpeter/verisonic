@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float, Table
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float, Table, UniqueConstraint
 from sqlalchemy.orm import relationship
 from app.db.base_class import Base
 
@@ -20,8 +20,15 @@ class User(Base):
     role = Column(String, default="listener") # admin, artist, listener
     subscription = Column(String, default="free") # free, premium, unlimited
     subscription_cycle = Column(String, nullable=True) # monthly, yearly, null
+    subscription_expires_at = Column(DateTime, nullable=True)
+    subscription_activated_at = Column(DateTime, nullable=True)
     is_active = Column(Boolean, default=True)
+    must_reset_password = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    stream_quality = Column(String, nullable=True)  # normal, high, hires, lossless
+    pending_plan_id = Column(String, nullable=True)
+    pending_plan_paid = Column(Boolean, default=False)
+    subscription_cancel_at_period_end = Column(Boolean, default=False)
 
     @property
     def real_role(self) -> str:
@@ -33,6 +40,22 @@ class User(Base):
     playlists = relationship("Playlist", back_populates="user")
     favorites = relationship("Favorite", back_populates="user")
     listening_history = relationship("ListeningHistory", back_populates="user")
+    subscription_payments = relationship("SubscriptionPayment", back_populates="user")
+
+class SubscriptionPayment(Base):
+    __tablename__ = "subscription_payments"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    plan_id = Column(String, nullable=False)
+    amount_paise = Column(Integer, nullable=False)
+    currency = Column(String, default="INR", nullable=False)
+    razorpay_order_id = Column(String, unique=True, index=True, nullable=False)
+    razorpay_payment_id = Column(String, unique=True, index=True, nullable=True)
+    status = Column(String, default="created")  # created, paid, failed
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    paid_at = Column(DateTime, nullable=True)
+
+    user = relationship("User", back_populates="subscription_payments")
 
 class Artist(Base):
     __tablename__ = "artists"
@@ -44,6 +67,22 @@ class Artist(Base):
     disabled_reason = Column(String, nullable=True)
     reactivation_reason = Column(String, nullable=True)
     reactivation_requested = Column(Boolean, default=False)
+    profile_complete = Column(Boolean, default=False)
+
+    # Detailed profile metadata
+    category = Column(String, nullable=True)
+    licence = Column(String, nullable=True)
+    street_address = Column(String, nullable=True)
+    city = Column(String, nullable=True)
+    state_province = Column(String, nullable=True)
+    postal_code = Column(String, nullable=True)
+    country = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    website = Column(String, nullable=True)
+    languages = Column(String, nullable=True)
+    social_twitter = Column(String, nullable=True)
+    social_instagram = Column(String, nullable=True)
 
     user = relationship("User", back_populates="artist_profile")
     tracks = relationship("Track", back_populates="artist")
@@ -116,7 +155,7 @@ class Playlist(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
-    is_public = Column(Boolean, default=True)
+    is_public = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     user = relationship("User", back_populates="playlists")
@@ -124,6 +163,9 @@ class Playlist(Base):
 
 class PlaylistTrack(Base):
     __tablename__ = "playlist_tracks"
+    __table_args__ = (
+        UniqueConstraint("playlist_id", "track_id", name="uq_playlist_tracks_playlist_track"),
+    )
     id = Column(Integer, primary_key=True, index=True)
     playlist_id = Column(Integer, ForeignKey("playlists.id", ondelete="CASCADE"), nullable=False)
     track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False)
@@ -198,6 +240,9 @@ class ListeningHistory(Base):
 
 class Favorite(Base):
     __tablename__ = "favorites"
+    __table_args__ = (
+        UniqueConstraint("user_id", "track_id", name="uq_favorites_user_track"),
+    )
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False)
