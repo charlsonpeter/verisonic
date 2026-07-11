@@ -754,7 +754,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       : getStreamCandidatesForQuality(
           trackToPlay,
           getEffectiveQuality(qualityLevelSettingRef.current, canConfigureStreamQualityRef.current),
-          isPremiumRef.current
+          isPremiumRef.current,
+          resumePosition,
         );
 
     if (!isRadio && candidates.length === 0) {
@@ -920,15 +921,14 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       if (streamUrl.includes('.m3u8')) {
         if (Hls.isSupported()) {
-          const hlsOptions =
-            shouldRestorePosition
-              ? { startPosition: seekAfterLoad as number }
-              : undefined;
-          const hls = new Hls(hlsOptions);
+          const hls = new Hls();
           hlsRef.current = hls;
           hls.loadSource(streamUrl);
           hls.attachMedia(audioRef.current);
           hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            if (shouldRestorePosition && seekAfterLoad !== null) {
+              hls.startLoad(seekAfterLoad);
+            }
             onStreamReady(true);
           });
           hls.on(Hls.Events.ERROR, (_event, data) => {

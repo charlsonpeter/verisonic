@@ -70,10 +70,25 @@ function uniquePaths(paths: Array<string | undefined | null>): string[] {
   return result;
 }
 
+function isHlsPath(path: string): boolean {
+  const lower = path.toLowerCase();
+  return lower.includes('.m3u8') || lower.includes('/hls/');
+}
+
+function reorderForResume(paths: string[], resumeAt: number | null): string[] {
+  const shouldPreferProgressive =
+    resumeAt !== null && Number.isFinite(resumeAt) && resumeAt > 0.25;
+  if (!shouldPreferProgressive) return paths;
+  const progressive = paths.filter((path) => !isHlsPath(path));
+  const hls = paths.filter((path) => isHlsPath(path));
+  return uniquePaths([...progressive, ...hls]);
+}
+
 export function getStreamCandidatesForQuality(
   track: StreamQualityTrack,
   quality: QualityLevelSetting,
-  isPremium: boolean
+  isPremium: boolean,
+  resumeAt: number | null = null,
 ): string[] {
   if (!isPremium) {
     return track.aac_128_path ? [track.aac_128_path] : [];
@@ -82,44 +97,59 @@ export function getStreamCandidatesForQuality(
   switch (quality) {
     case 'lossless':
       // Original masters are not served publicly via /storage; prefer public HLS/transcodes.
-      return uniquePaths([
-        track.hls_playlist_path,
-        track.mp3_320_path,
-        track.aac_256_path,
-        track.aac_128_path,
-        track.stream_url,
-        track.original_file_path,
-      ]);
+      return reorderForResume(
+        uniquePaths([
+          track.hls_playlist_path,
+          track.mp3_320_path,
+          track.aac_256_path,
+          track.aac_128_path,
+          track.stream_url,
+          track.original_file_path,
+        ]),
+        resumeAt,
+      );
     case 'hires':
-      return uniquePaths([
-        track.hls_playlist_path,
-        track.original_file_path,
-        track.aac_256_path,
-        track.mp3_320_path,
-        track.aac_128_path,
-        track.stream_url,
-      ]);
+      return reorderForResume(
+        uniquePaths([
+          track.hls_playlist_path,
+          track.aac_256_path,
+          track.mp3_320_path,
+          track.aac_128_path,
+          track.stream_url,
+          track.original_file_path,
+        ]),
+        resumeAt,
+      );
     case 'high':
-      return uniquePaths([
-        track.mp3_320_path,
-        track.aac_256_path,
-        track.hls_playlist_path,
-        track.aac_128_path,
-        track.stream_url,
-      ]);
+      return reorderForResume(
+        uniquePaths([
+          track.mp3_320_path,
+          track.aac_256_path,
+          track.hls_playlist_path,
+          track.aac_128_path,
+          track.stream_url,
+        ]),
+        resumeAt,
+      );
     case 'normal':
-      return uniquePaths([
-        track.aac_128_path,
-        track.mp3_320_path,
-        track.stream_url,
-      ]);
+      return reorderForResume(
+        uniquePaths([
+          track.aac_128_path,
+          track.mp3_320_path,
+          track.stream_url,
+        ]),
+        resumeAt,
+      );
     default:
-      return uniquePaths([
-        track.hls_playlist_path,
-        track.mp3_320_path,
-        track.aac_128_path,
-        track.stream_url,
-      ]);
+      return reorderForResume(
+        uniquePaths([
+          track.hls_playlist_path,
+          track.mp3_320_path,
+          track.aac_128_path,
+          track.stream_url,
+        ]),
+        resumeAt,
+      );
   }
 }
 
