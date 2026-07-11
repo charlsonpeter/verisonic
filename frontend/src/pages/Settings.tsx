@@ -60,7 +60,7 @@ export const Settings: React.FC = () => {
     return (
       <div className="max-w-xl mx-auto py-16 text-center space-y-4">
         <SettingsIcon className="w-12 h-12 text-slate-600 mx-auto" />
-        <h2 className="text-lg font-bold text-white">Platform Settings</h2>
+        <h2 className="text-lg font-bold text-white">Settings</h2>
         <p className="text-sm text-slate-400">
           Switch to Listen mode to access stream quality and subscription settings.
         </p>
@@ -121,7 +121,7 @@ export const Settings: React.FC = () => {
     <div className="space-y-10 w-full max-w-4xl pb-10">
       <div className="hidden md:block">
         <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
-          <SettingsIcon className="w-8 h-8 text-rose-400" /> Platform Settings
+          <SettingsIcon className="w-8 h-8 text-rose-400" /> Settings
         </h2>
       </div>
 

@@ -30,7 +30,7 @@ export function getPageTitle(activeTab: string, ctx: PageTitleContext = {}): str
     case 'studio-profile':
       return role === 'admin' ? 'Music Studios' : 'Studio Profile';
     case 'settings':
-      return 'Platform Settings';
+      return 'Settings';
     case 'users':
       return 'User Management';
     case 'tracks':

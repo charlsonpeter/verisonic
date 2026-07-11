@@ -319,27 +319,14 @@ export const Header: React.FC<HeaderProps> = ({
                   </button>
                 )}
 
-                {currentUser && canAccessPlatformSettings && (
-                  <button 
-                    onClick={() => handleDropdownSelect('settings')}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
-                  >
-                    <Settings className="w-4 h-4 text-slate-450" />
-                    Platform Settings
-                  </button>
-                )}
-
-                {/* Artist/Admin actions */}
                 {(currentUser.role === 'studio_admin' || currentUser.role === 'admin') && (
-                  <>
-                    <button 
-                      onClick={() => handleDropdownSelect('tracks')}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-455 hover:bg-slate-800 hover:text-white transition"
-                    >
-                      <UploadCloud className="w-4 h-4 text-slate-455" />
-                      Upload & Manage Tracks
-                    </button>
-                  </>
+                  <button 
+                    onClick={() => handleDropdownSelect('tracks')}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-455 hover:bg-slate-800 hover:text-white transition"
+                  >
+                    <UploadCloud className="w-4 h-4 text-slate-455" />
+                    Upload & Manage Tracks
+                  </button>
                 )}
 
                 {currentUser.role === 'admin' && (
@@ -359,6 +346,16 @@ export const Header: React.FC<HeaderProps> = ({
                       Manage Users
                     </button>
                   </>
+                )}
+
+                {currentUser && canAccessPlatformSettings && (
+                  <button 
+                    onClick={() => handleDropdownSelect('settings')}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
+                  >
+                    <Settings className="w-4 h-4 text-slate-450" />
+                    Settings
+                  </button>
                 )}
 
                 <div className="border-t border-white/3 my-1.5" />

@@ -33,7 +33,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
 
   const settingsItems = [
     { id: 'profile', label: 'User Profile', icon: User },
-    { id: 'settings', label: 'Platform Settings', icon: Settings },
+    { id: 'settings', label: 'Settings', icon: Settings },
   ];
 
   const renderNavButton = (item: { id: string; label: string; icon: any }) => {
