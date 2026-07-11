@@ -154,32 +154,34 @@ export const Settings: React.FC = () => {
             <Crown className="w-4 h-4 text-amber-400" /> VIP Subscription Details
           </h3>
 
-          <div className="space-y-4 max-w-xl">
-            <div>
-              <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Current Account Tier</span>
-              <span className="text-base font-extrabold text-white mt-1 block">
-                {getAccountTierLabel(currentUser)}
-              </span>
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+              <div>
+                <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Current Account Tier</span>
+                <span className="text-base font-extrabold text-white mt-1 block">
+                  {getAccountTierLabel(currentUser)}
+                </span>
+              </div>
+
+              {hasPaidSubscription(currentUser) && (
+                <SubscriptionDates
+                  activatedAt={currentUser?.subscription_activated_at}
+                  expiresAt={currentUser?.subscription_expires_at}
+                  inline
+                />
+              )}
+
+              {currentUser?.subscription === 'unlimited' && currentUser.subscription_activated_at && (
+                <SubscriptionDates
+                  activatedAt={currentUser.subscription_activated_at}
+                  inline
+                />
+              )}
             </div>
 
-            <p className="text-[11px] text-slate-400 leading-relaxed font-semibold">
+            <p className="text-[11px] text-slate-400 leading-relaxed font-semibold max-w-xl">
               {getSubscriptionMessage()}
             </p>
-
-            {hasPaidSubscription(currentUser) && (
-              <SubscriptionDates
-                activatedAt={currentUser?.subscription_activated_at}
-                expiresAt={currentUser?.subscription_expires_at}
-                compact
-              />
-            )}
-
-            {currentUser?.subscription === 'unlimited' && currentUser.subscription_activated_at && (
-              <SubscriptionDates
-                activatedAt={currentUser.subscription_activated_at}
-                compact
-              />
-            )}
 
             {currentUser?.subscription !== 'unlimited' && (
               <div id="subscription-plans" className="pt-2">
