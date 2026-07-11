@@ -67,6 +67,7 @@ class UserResponse(BaseModel):
     subscription: str
     subscription_cycle: Optional[str] = None
     subscription_expires_at: Optional[datetime] = None
+    subscription_activated_at: Optional[datetime] = None
     real_role: Optional[str] = None
     is_active: bool
     must_reset_password: bool = False

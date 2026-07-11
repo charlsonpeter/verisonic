@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { SubscriptionDates } from '../components/subscription/SubscriptionDates';
 import { Users, Trash2, Shield, Eye, Pencil, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { showConfirm } from '../utils/swal';
@@ -406,6 +407,23 @@ export const UsersManagement: React.FC = () => {
                           ? `premium (${selectedUser.subscription_cycle})`
                           : (selectedUser.subscription || 'free')}
                       </span>
+                      {selectedUser.subscription === 'premium' && (
+                        <div className="mt-3">
+                          <SubscriptionDates
+                            activatedAt={selectedUser.subscription_activated_at}
+                            expiresAt={selectedUser.subscription_expires_at}
+                            compact
+                          />
+                        </div>
+                      )}
+                      {selectedUser.subscription === 'unlimited' && selectedUser.subscription_activated_at && (
+                        <div className="mt-3">
+                          <SubscriptionDates
+                            activatedAt={selectedUser.subscription_activated_at}
+                            compact
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
 

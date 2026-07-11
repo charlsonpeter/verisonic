@@ -31,6 +31,7 @@ export interface SubscriptionStatus {
   subscription: string;
   subscription_cycle: 'monthly' | 'yearly' | null;
   subscription_expires_at: string | null;
+  subscription_activated_at: string | null;
   is_active: boolean;
   current_plan_id: string | null;
   pending_plan_id: string | null;
@@ -250,6 +251,43 @@ export async function openSubscriptionCheckout(options: {
 
     rzp.open();
   });
+}
+
+import type { User } from '../context/AuthContext';
+import { hasPaidSubscription } from './accountTier';
+
+export function resolveSubscriptionStatus(
+  status: SubscriptionStatus | null,
+  currentUser: User | null | undefined,
+): SubscriptionStatus | null {
+  if (status?.is_active) {
+    return {
+      ...status,
+      subscription_expires_at:
+        status.subscription_expires_at ?? currentUser?.subscription_expires_at ?? null,
+      subscription_activated_at:
+        status.subscription_activated_at ?? currentUser?.subscription_activated_at ?? null,
+    };
+  }
+
+  if (!currentUser || !hasPaidSubscription(currentUser) || currentUser.subscription !== 'premium') {
+    return status;
+  }
+
+  const cycle = currentUser.subscription_cycle === 'yearly' ? 'yearly' : 'monthly';
+
+  return {
+    subscription: currentUser.subscription,
+    subscription_cycle: cycle,
+    subscription_expires_at: currentUser.subscription_expires_at ?? null,
+    subscription_activated_at: currentUser.subscription_activated_at ?? null,
+    is_active: true,
+    current_plan_id: planIdForCycle(cycle),
+    pending_plan_id: currentUser.pending_plan_id ?? null,
+    pending_plan_label: null,
+    pending_plan_paid: Boolean(currentUser.pending_plan_paid),
+    cancel_at_period_end: Boolean(currentUser.subscription_cancel_at_period_end),
+  };
 }
 
 export function planIdForCycle(cycle: 'monthly' | 'yearly' | null | undefined): string | null {

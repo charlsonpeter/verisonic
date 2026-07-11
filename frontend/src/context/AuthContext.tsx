@@ -17,6 +17,7 @@ export interface User {
   subscription: 'free' | 'premium' | 'unlimited';
   subscription_cycle: 'monthly' | 'yearly' | null;
   subscription_expires_at?: string | null;
+  subscription_activated_at?: string | null;
   must_reset_password?: boolean;
   created_at?: string;
   stream_quality?: QualityLevelSetting | null;
@@ -100,6 +101,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           subscription: data.subscription || 'free',
           subscription_cycle: data.subscription_cycle || null,
           subscription_expires_at: data.subscription_expires_at || null,
+          subscription_activated_at: data.subscription_activated_at || null,
           must_reset_password: data.must_reset_password ?? false,
         };
         setCurrentUser(userWithSub);

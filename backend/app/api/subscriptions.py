@@ -77,6 +77,7 @@ class SubscriptionStatusResponse(BaseModel):
     subscription: str
     subscription_cycle: Optional[str] = None
     subscription_expires_at: Optional[datetime.datetime] = None
+    subscription_activated_at: Optional[datetime.datetime] = None
     is_active: bool
     current_plan_id: Optional[str] = None
     pending_plan_id: Optional[str] = None
@@ -116,6 +117,7 @@ def get_subscription_status(
         subscription=current_user.subscription,
         subscription_cycle=current_user.subscription_cycle,
         subscription_expires_at=current_user.subscription_expires_at,
+        subscription_activated_at=current_user.subscription_activated_at,
         is_active=premium_is_active(current_user),
         current_plan_id=current_plan_id(current_user),
         pending_plan_id=current_user.pending_plan_id,

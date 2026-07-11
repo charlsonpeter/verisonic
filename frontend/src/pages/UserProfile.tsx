@@ -8,6 +8,7 @@ import {
   hasPaidSubscription,
   isOnFreeTrial,
 } from '../utils/accountTier';
+import { SubscriptionDates } from '../components/subscription/SubscriptionDates';
 
 export const UserProfile: React.FC = () => {
   const { currentUser, fetchCurrentUser } = useAuth();
@@ -163,6 +164,15 @@ export const UserProfile: React.FC = () => {
             </span>
           </div>
           <p className="text-xs text-slate-400 font-semibold">{currentUser?.email || 'unregistered@verisonic.com'}</p>
+          {hasPaidSubscription(currentUser) && (
+            <div className="pt-1 max-w-md mx-auto md:mx-0">
+              <SubscriptionDates
+                activatedAt={currentUser?.subscription_activated_at}
+                expiresAt={currentUser?.subscription_expires_at}
+                compact
+              />
+            </div>
+          )}
         </div>
       </section>
 

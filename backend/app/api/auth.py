@@ -12,6 +12,7 @@ from app.core.config import settings
 from app.core.password_policy import validate_password
 from app.core.rate_limit import enforce_rate_limit, REFRESH_LIMIT, REFRESH_WINDOW_SEC
 from app.core.premium import paid_subscription_is_active
+from app.services.subscription_service import apply_admin_subscription
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -391,16 +392,8 @@ def update_user_subscription_admin(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-        
-    user.subscription = subscription
-    if subscription == "unlimited":
-        user.subscription_cycle = None
-        user.subscription_expires_at = None
-    elif subscription == "free":
-        user.subscription_cycle = None
-        user.subscription_expires_at = None
-    else:
-        user.subscription_cycle = subscription_cycle
+
+    apply_admin_subscription(user, subscription, subscription_cycle)
     db.commit()
     db.refresh(user)
     return user

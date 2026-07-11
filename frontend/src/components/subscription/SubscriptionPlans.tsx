@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Crown, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import {
+  cancelSubscription,
+  clearScheduledChange,
   createSubscriptionOrder,
   fetchSubscriptionPlans,
   fetchSubscriptionStatus,
@@ -9,11 +11,14 @@ import {
   formatInr,
   openSubscriptionCheckout,
   planIdForCycle,
+  reactivateSubscription,
+  resolveSubscriptionStatus,
   scheduleSubscriptionChange,
   type SubscriptionPlan,
   type SubscriptionStatus,
 } from '../../utils/subscriptionCheckout';
 import { showConfirm, showError, showSuccess } from '../../utils/swal';
+import { SubscriptionDates } from './SubscriptionDates';
 
 interface SubscriptionPlansProps {
   compact?: boolean;
@@ -32,14 +37,29 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
   const [status, setStatus] = useState<SubscriptionStatus | null>(null);
   const [loadingPlanId, setLoadingPlanId] = useState<string | null>(null);
+  const [mgmtBusy, setMgmtBusy] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  const effectiveStatus = resolveSubscriptionStatus(status, currentUser);
+  const activatedAt =
+    currentUser?.subscription_activated_at ??
+    effectiveStatus?.subscription_activated_at ??
+    null;
+  const expiresAt =
+    currentUser?.subscription_expires_at ??
+    effectiveStatus?.subscription_expires_at ??
+    null;
 
   const reload = async () => {
     const planList = await fetchSubscriptionPlans();
     setPlans(planList);
     if (token) {
-      const subStatus = await fetchSubscriptionStatus(token);
-      setStatus(subStatus);
+      try {
+        const subStatus = await fetchSubscriptionStatus(token);
+        setStatus(subStatus);
+      } catch {
+        setStatus(null);
+      }
     } else {
       setStatus(null);
     }
@@ -47,30 +67,33 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
 
   useEffect(() => {
     reload().catch((err: Error) => setLoadError(err.message));
-  }, [token]);
+  }, [token, currentUser?.subscription, currentUser?.subscription_cycle]);
 
   const getPlanAction = (plan: SubscriptionPlan): {
     label: string;
-    mode: 'subscribe' | 'upgrade' | 'prepay-switch' | 'schedule-switch' | 'current' | 'scheduled';
+    mode: 'subscribe' | 'upgrade' | 'schedule-switch' | 'current' | 'scheduled';
     disabled: boolean;
   } => {
-    if (!status?.is_active) {
+    if (!effectiveStatus?.is_active) {
       return { label: `Subscribe · ${formatInr(plan.amount_rupees)}`, mode: 'subscribe', disabled: false };
     }
 
-    if (status.current_plan_id === plan.id) {
+    const currentId =
+      effectiveStatus.current_plan_id || planIdForCycle(effectiveStatus.subscription_cycle);
+
+    if (currentId === plan.id) {
       return { label: 'Current plan', mode: 'current', disabled: true };
     }
 
-    if (status.pending_plan_id === plan.id) {
+    if (effectiveStatus.pending_plan_id === plan.id) {
       return {
-        label: status.pending_plan_paid ? 'Scheduled & paid' : 'Scheduled at renewal',
+        label: effectiveStatus.pending_plan_paid ? 'Scheduled & paid' : 'Scheduled at renewal',
         mode: 'scheduled',
         disabled: true,
       };
     }
 
-    if (status.subscription_cycle === 'monthly' && plan.cycle === 'yearly') {
+    if (effectiveStatus.subscription_cycle === 'monthly' && plan.cycle === 'yearly') {
       return {
         label: `Upgrade · ${formatInr(plan.amount_rupees)}`,
         mode: 'upgrade',
@@ -78,7 +101,7 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
       };
     }
 
-    if (status.subscription_cycle === 'yearly' && plan.cycle === 'monthly') {
+    if (effectiveStatus.subscription_cycle === 'yearly' && plan.cycle === 'monthly') {
       return {
         label: 'Switch at renewal',
         mode: 'schedule-switch',
@@ -125,12 +148,13 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
     }
 
     const action = getPlanAction(plan);
+    if (action.disabled) return;
 
     if (action.mode === 'schedule-switch') {
-      const expiry = formatExpiryDate(status?.subscription_expires_at);
+      const expiry = formatExpiryDate(effectiveStatus?.subscription_expires_at);
       const confirmed = await showConfirm(
         'Switch to Monthly',
-        `Your yearly plan stays active until ${expiry}. After that, you'll move to Monthly. You can prepay Monthly anytime to avoid interruption.`,
+        `Your yearly plan stays active until ${expiry || 'the end of your billing period'}. After that, you'll move to Monthly. You can prepay Monthly anytime to avoid interruption.`,
         'Schedule switch',
       );
       if (!confirmed) return;
@@ -151,10 +175,10 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
     }
 
     if (action.mode === 'upgrade') {
-      const expiry = formatExpiryDate(status?.subscription_expires_at);
+      const expiry = formatExpiryDate(effectiveStatus?.subscription_expires_at);
       const confirmed = await showConfirm(
         'Upgrade to Yearly',
-        `Pay ${formatInr(plan.amount_rupees)} now. Your yearly plan starts when your current monthly plan ends on ${expiry}.`,
+        `Pay ${formatInr(plan.amount_rupees)} now. Your yearly plan starts when your current monthly plan ends${expiry ? ` on ${expiry}` : ''}.`,
         'Continue to checkout',
       );
       if (!confirmed) return;
@@ -166,15 +190,77 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
   };
 
   const handlePrepayMonthly = async (plan: SubscriptionPlan) => {
-    if (!token || status?.subscription_cycle !== 'yearly' || plan.cycle !== 'monthly') return;
-    const expiry = formatExpiryDate(status.subscription_expires_at);
+    if (!token || effectiveStatus?.subscription_cycle !== 'yearly' || plan.cycle !== 'monthly') return;
+    const expiry = formatExpiryDate(effectiveStatus.subscription_expires_at);
     const confirmed = await showConfirm(
       'Prepay Monthly',
-      `Pay ${formatInr(plan.amount_rupees)} now. Monthly billing starts automatically when your yearly plan ends on ${expiry}.`,
+      `Pay ${formatInr(plan.amount_rupees)} now. Monthly billing starts automatically when your yearly plan ends${expiry ? ` on ${expiry}` : ''}.`,
       'Continue to checkout',
     );
     if (!confirmed) return;
     await runCheckout(plan);
+  };
+
+  const handleCancel = async () => {
+    if (!token || !effectiveStatus?.is_active) return;
+    const expiry = formatExpiryDate(effectiveStatus.subscription_expires_at);
+    const confirmed = await showConfirm(
+      'Cancel subscription',
+      `Premium access continues${expiry ? ` until ${expiry}` : ' for the rest of your billing period'}. After that, your account returns to Free Preview.`,
+      'Cancel at period end',
+    );
+    if (!confirmed) return;
+
+    setMgmtBusy(true);
+    try {
+      const result = await cancelSubscription(token);
+      await fetchCurrentUser();
+      await reload();
+      showSuccess('Cancellation scheduled', result.message);
+      onSuccess?.();
+    } catch (err) {
+      showError('Could not cancel', err instanceof Error ? err.message : 'Try again.');
+    } finally {
+      setMgmtBusy(false);
+    }
+  };
+
+  const handleReactivate = async () => {
+    if (!token) return;
+    setMgmtBusy(true);
+    try {
+      const result = await reactivateSubscription(token);
+      await fetchCurrentUser();
+      await reload();
+      showSuccess('Subscription kept active', result.message);
+      onSuccess?.();
+    } catch (err) {
+      showError('Could not reactivate', err instanceof Error ? err.message : 'Try again.');
+    } finally {
+      setMgmtBusy(false);
+    }
+  };
+
+  const handleClearSchedule = async () => {
+    if (!token) return;
+    const confirmed = await showConfirm(
+      'Remove scheduled change',
+      'Your subscription will stay on the current plan when the period ends.',
+      'Remove schedule',
+    );
+    if (!confirmed) return;
+
+    setMgmtBusy(true);
+    try {
+      const result = await clearScheduledChange(token);
+      await fetchCurrentUser();
+      await reload();
+      showSuccess('Schedule removed', result.message);
+    } catch (err) {
+      showError('Could not remove schedule', err instanceof Error ? err.message : 'Try again.');
+    } finally {
+      setMgmtBusy(false);
+    }
   };
 
   if (loadError) {
@@ -193,34 +279,34 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
     );
   }
 
-  const currentPlanId = status?.is_active
-    ? status.current_plan_id || planIdForCycle(status.subscription_cycle)
+  const currentPlanId = effectiveStatus?.is_active
+    ? effectiveStatus.current_plan_id || planIdForCycle(effectiveStatus.subscription_cycle)
     : null;
 
   return (
     <div className="space-y-4">
-      {status?.is_active && (
-        <div className="rounded-2xl border border-white/5 bg-slate-950/40 p-4 space-y-2">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Your subscription</p>
+      {effectiveStatus?.is_active && (
+        <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 space-y-2">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-400/80">Current plan</p>
           <p className="text-sm font-bold text-white">
-            {status.subscription_cycle === 'yearly' ? 'Premium Yearly' : 'Premium Monthly'}
-            {status.subscription_expires_at && (
-              <span className="text-slate-400 font-semibold text-xs block mt-1">
-                Active until {formatExpiryDate(status.subscription_expires_at)}
-              </span>
-            )}
+            {effectiveStatus.subscription_cycle === 'yearly' ? 'Premium Yearly' : 'Premium Monthly'}
           </p>
-          {status.cancel_at_period_end && (
+          <SubscriptionDates
+            activatedAt={activatedAt}
+            expiresAt={expiresAt}
+            compact
+          />
+          {effectiveStatus.cancel_at_period_end && (
             <p className="text-[10px] text-amber-400 font-semibold">
               Cancels at end of current period — no renewal scheduled.
             </p>
           )}
-          {status.pending_plan_id && !status.cancel_at_period_end && (
+          {effectiveStatus.pending_plan_id && !effectiveStatus.cancel_at_period_end && (
             <p className="text-[10px] text-emerald-400/90 font-semibold">
-              {status.pending_plan_label} scheduled
-              {status.pending_plan_paid ? ' (paid)' : ''} at renewal
-              {status.subscription_expires_at
-                ? ` on ${formatExpiryDate(status.subscription_expires_at)}`
+              {(effectiveStatus.pending_plan_label || 'Plan change')} scheduled
+              {effectiveStatus.pending_plan_paid ? ' (paid)' : ''} at renewal
+              {effectiveStatus.subscription_expires_at
+                ? ` on ${formatExpiryDate(effectiveStatus.subscription_expires_at)}`
                 : ''}.
             </p>
           )}
@@ -231,14 +317,14 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
         modal || compact ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1 md:grid-cols-2'
       }`}>
         {plans.map((plan) => {
-          const isYearly = plan.cycle === 'yearly';
           const isLoading = loadingPlanId === plan.id;
           const action = getPlanAction(plan);
           const isCurrent = currentPlanId === plan.id;
+          const isUpgrade = action.mode === 'upgrade';
           const showPrepayMonthly =
-            status?.subscription_cycle === 'yearly' &&
+            effectiveStatus?.subscription_cycle === 'yearly' &&
             plan.cycle === 'monthly' &&
-            status.pending_plan_id !== plan.id;
+            effectiveStatus.pending_plan_id !== plan.id;
 
           return (
             <div
@@ -247,25 +333,23 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
                 modal ? 'p-4' : 'p-5'
               } ${
                 isCurrent
-                  ? 'bg-emerald-500/5 border-emerald-500/25'
-                  : isYearly
-                    ? 'bg-rose-600/10 border-rose-500/30 shadow-md shadow-rose-500/5'
-                    : 'bg-slate-950/40 border-white/5'
+                  ? 'bg-emerald-500/5 border-emerald-500/30 ring-1 ring-emerald-500/20'
+                  : 'bg-slate-950/40 border-white/5'
               }`}
             >
-              {isYearly && !isCurrent && (
+              {isCurrent && (
+                <span className="absolute top-3 right-3 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/25 text-[8px] font-extrabold uppercase tracking-wider text-emerald-400">
+                  Current plan
+                </span>
+              )}
+              {!isCurrent && plan.cycle === 'yearly' && (
                 <span className="absolute top-3 right-3 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/25 text-[8px] font-extrabold uppercase tracking-wider text-amber-400">
                   <Crown className="w-3 h-3" />
                   Best value
                 </span>
               )}
-              {isCurrent && (
-                <span className="absolute top-3 right-3 inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/25 text-[8px] font-extrabold uppercase tracking-wider text-emerald-400">
-                  Current
-                </span>
-              )}
               <div>
-                <h4 className={`text-sm font-bold ${isYearly ? 'text-rose-400' : 'text-white'}`}>
+                <h4 className={`text-sm font-bold ${isCurrent ? 'text-emerald-400' : 'text-white'}`}>
                   {plan.label}
                 </h4>
                 <p className={`font-extrabold text-white ${modal ? 'text-xl mt-1' : 'text-2xl mt-2'}`}>
@@ -295,12 +379,14 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
               <div className={modal ? 'mt-3 space-y-2' : 'mt-5 space-y-2'}>
                 <button
                   type="button"
-                  disabled={!!loadingPlanId || action.disabled}
+                  disabled={!!loadingPlanId || action.disabled || mgmtBusy}
                   onClick={() => handlePlanClick(plan)}
                   className={`w-full py-2.5 text-xs font-bold rounded-xl uppercase tracking-wider transition disabled:opacity-60 ${
-                    isYearly && !action.disabled
+                    isUpgrade
                       ? 'bg-gradient-to-r from-rose-600 to-rose-500 text-white hover:scale-[1.01]'
-                      : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-white/5'
+                      : isCurrent
+                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/25 cursor-default'
+                        : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border border-white/5'
                   }`}
                 >
                   {isLoading ? 'Processing…' : action.label}
@@ -308,7 +394,7 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
                 {showPrepayMonthly && (
                   <button
                     type="button"
-                    disabled={!!loadingPlanId}
+                    disabled={!!loadingPlanId || mgmtBusy}
                     onClick={() => handlePrepayMonthly(plan)}
                     className="w-full py-2 text-[10px] font-bold rounded-xl uppercase tracking-wider text-rose-400 border border-rose-500/20 hover:bg-rose-500/5 transition disabled:opacity-60"
                   >
@@ -320,6 +406,40 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
           );
         })}
       </div>
+
+      {effectiveStatus?.is_active && token && (
+        <div className="pt-2 border-t border-white/5 flex flex-wrap gap-2">
+          {effectiveStatus.cancel_at_period_end ? (
+            <button
+              type="button"
+              disabled={mgmtBusy || !!loadingPlanId}
+              onClick={handleReactivate}
+              className="px-4 py-2.5 text-xs font-bold rounded-xl uppercase tracking-wider bg-emerald-600/20 text-emerald-400 border border-emerald-500/25 hover:bg-emerald-600/30 transition disabled:opacity-60"
+            >
+              Keep subscription active
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={mgmtBusy || !!loadingPlanId}
+              onClick={handleCancel}
+              className="px-4 py-2.5 text-xs font-bold rounded-xl uppercase tracking-wider bg-slate-900 text-slate-400 border border-white/5 hover:text-rose-400 hover:border-rose-500/20 transition disabled:opacity-60"
+            >
+              Cancel subscription
+            </button>
+          )}
+          {effectiveStatus.pending_plan_id && !effectiveStatus.pending_plan_paid && !effectiveStatus.cancel_at_period_end && (
+            <button
+              type="button"
+              disabled={mgmtBusy || !!loadingPlanId}
+              onClick={handleClearSchedule}
+              className="px-4 py-2.5 text-xs font-bold rounded-xl uppercase tracking-wider text-slate-400 border border-white/5 hover:text-white transition disabled:opacity-60"
+            >
+              Remove scheduled change
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 };

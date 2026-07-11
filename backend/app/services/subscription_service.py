@@ -16,7 +16,7 @@ def premium_is_active(user: User, *, at: Optional[datetime.datetime] = None) -> 
     if user.subscription != "premium":
         return False
     if user.subscription_expires_at is None:
-        return False
+        return True
     return user.subscription_expires_at > (at or utcnow())
 
 
@@ -28,16 +28,49 @@ def current_plan_id(user: User) -> Optional[str]:
 
 def apply_plan_immediately(user: User, plan: SubscriptionPlan) -> None:
     now = utcnow()
-    if premium_is_active(user):
+    was_active = premium_is_active(user)
+    if was_active and user.subscription_expires_at:
         base = user.subscription_expires_at
     else:
         base = now
+        user.subscription_activated_at = now
     user.subscription = plan.subscription
     user.subscription_cycle = plan.cycle
     user.subscription_expires_at = base + datetime.timedelta(days=plan.duration_days)
     user.pending_plan_id = None
     user.pending_plan_paid = False
     user.subscription_cancel_at_period_end = False
+
+
+def apply_admin_subscription(user: User, subscription: str, subscription_cycle: Optional[str]) -> None:
+    """Apply subscription tier from super-admin user management."""
+    now = utcnow()
+    user.pending_plan_id = None
+    user.pending_plan_paid = False
+    user.subscription_cancel_at_period_end = False
+
+    if subscription == "unlimited":
+        user.subscription = "unlimited"
+        user.subscription_cycle = None
+        user.subscription_activated_at = now
+        user.subscription_expires_at = None
+        return
+
+    if subscription == "free":
+        user.subscription = "free"
+        user.subscription_cycle = None
+        user.subscription_activated_at = None
+        user.subscription_expires_at = None
+        return
+
+    plan_id = plan_id_for_cycle(subscription_cycle or "")
+    plan = get_plan(plan_id) if plan_id else None
+    duration_days = plan.duration_days if plan else 30
+
+    user.subscription = "premium"
+    user.subscription_cycle = subscription_cycle
+    user.subscription_activated_at = now
+    user.subscription_expires_at = now + datetime.timedelta(days=duration_days)
 
 
 def queue_plan_change(user: User, plan: SubscriptionPlan, *, prepaid: bool) -> None:
@@ -69,6 +102,7 @@ def apply_pending_subscription_if_due(user: User, db: Session) -> bool:
         user.subscription = "free"
         user.subscription_cycle = None
         user.subscription_expires_at = None
+        user.subscription_activated_at = None
         user.pending_plan_id = None
         user.pending_plan_paid = False
         user.subscription_cancel_at_period_end = False
@@ -79,6 +113,7 @@ def apply_pending_subscription_if_due(user: User, db: Session) -> bool:
     if pending and user.pending_plan_paid:
         user.subscription = pending.subscription
         user.subscription_cycle = pending.cycle
+        user.subscription_activated_at = period_end
         user.subscription_expires_at = period_end + datetime.timedelta(days=pending.duration_days)
         user.pending_plan_id = None
         user.pending_plan_paid = False
@@ -89,6 +124,7 @@ def apply_pending_subscription_if_due(user: User, db: Session) -> bool:
     user.subscription = "free"
     user.subscription_cycle = None
     user.subscription_expires_at = None
+    user.subscription_activated_at = None
     user.pending_plan_id = None
     user.pending_plan_paid = False
     user.subscription_cancel_at_period_end = False

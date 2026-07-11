@@ -12,7 +12,7 @@ import {
   type QualityLevelSetting,
 } from '../utils/streamQuality';
 import { SubscriptionPlans } from '../components/subscription/SubscriptionPlans';
-import { SubscriptionManagement } from '../components/subscription/SubscriptionManagement';
+import { SubscriptionDates } from '../components/subscription/SubscriptionDates';
 import {
   getAccountTierLabel,
   getTrialDaysLeft,
@@ -20,7 +20,7 @@ import {
 } from '../utils/accountTier';
 
 export const Settings: React.FC = () => {
-  const { currentUser, token, isPremium, canConfigureStreamQuality, canAccessPlatformSettings, switchUserMode, fetchCurrentUser } = useAuth();
+  const { currentUser, isPremium, canConfigureStreamQuality, canAccessPlatformSettings, switchUserMode } = useAuth();
   const { qualityLevelSetting, setQualityLevelSetting, activeStreamLabel } = useAudio();
   const activeQuality = canConfigureStreamQuality ? qualityLevelSetting : 'normal';
 
@@ -49,15 +49,7 @@ export const Settings: React.FC = () => {
       return 'You have unlimited platform access assigned by the super admin.';
     }
     if (hasPaidSubscription(currentUser)) {
-      if (currentUser.subscription_expires_at) {
-        const expiry = new Date(currentUser.subscription_expires_at).toLocaleDateString('en-IN', {
-          day: 'numeric',
-          month: 'short',
-          year: 'numeric',
-        });
-        return `Your subscription is active until ${expiry}. Thank you for supporting authentic lossless music and radio artists.`;
-      }
-      return 'Your subscription is active. Thank you for supporting authentic lossless music and radio artists.';
+      return 'Thank you for supporting authentic lossless music and radio artists.';
     }
     const trialDays = getTrialDaysLeft(currentUser);
     if (trialDays > 0) {
@@ -174,16 +166,24 @@ export const Settings: React.FC = () => {
               {getSubscriptionMessage()}
             </p>
 
-            {!hasPaidSubscription(currentUser) && currentUser?.subscription !== 'unlimited' && (
-              <div id="subscription-plans" className="pt-2">
-                <SubscriptionPlans compact onRequireAuth={() => undefined} />
-              </div>
+            {hasPaidSubscription(currentUser) && (
+              <SubscriptionDates
+                activatedAt={currentUser?.subscription_activated_at}
+                expiresAt={currentUser?.subscription_expires_at}
+                compact
+              />
             )}
 
-            {hasPaidSubscription(currentUser) && currentUser?.subscription !== 'unlimited' && token && (
-              <div id="subscription-plans" className="pt-2 space-y-4">
+            {currentUser?.subscription === 'unlimited' && currentUser.subscription_activated_at && (
+              <SubscriptionDates
+                activatedAt={currentUser.subscription_activated_at}
+                compact
+              />
+            )}
+
+            {currentUser?.subscription !== 'unlimited' && (
+              <div id="subscription-plans" className="pt-2">
                 <SubscriptionPlans compact onRequireAuth={() => undefined} />
-                <SubscriptionManagement token={token} onUpdated={fetchCurrentUser} />
               </div>
             )}
           </div>

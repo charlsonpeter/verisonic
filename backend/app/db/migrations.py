@@ -87,6 +87,9 @@ MIGRATIONS = [
         ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_plan_paid BOOLEAN DEFAULT FALSE;
         ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_cancel_at_period_end BOOLEAN DEFAULT FALSE;
     """),
+    ("012_users_subscription_activated_at", """
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_activated_at TIMESTAMP;
+    """),
 ]
 
 
