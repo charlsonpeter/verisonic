@@ -1,103 +1,266 @@
-# Implementation Plan - VeriSonic Live Broadcaster System
+# VeriSonic — Implementation Plan & Technical Spec
 
-This plan details the implementation of a real-time live broadcasting system for VeriSonic, consisting of a Python desktop broadcaster application, backend streaming ingestion over WebSockets, and frontend radio station controls.
+Living document describing what is **implemented today**, how the system works, and known gaps. Last aligned with the codebase: July 2026.
 
 ---
 
-## Technical Design & Recommended Connection Option
+## 1. Product overview
 
-### Why WebSockets over Webhooks?
-* **Webhooks** are unidirectional HTTP POST callbacks designed for sending event notifications (e.g., webhook triggered when a user registers). They are stateless and completely unsuitable for sending continuous, real-time binary audio data.
-* **WebSockets** are bi-directional, full-duplex, persistent TCP connections with minimal overhead. By using WebSockets, the desktop broadcaster can capture audio from any local input device, encode it, and stream continuous binary audio frames with sub-second latency. The server then distributes these frames to active listeners instantly.
+VeriSonic is a full-stack audio platform:
 
-### Architecture Overview
+1. **Music catalog** — lossless uploads, automated quality analysis, multi-bitrate transcoding, HLS VOD playback
+2. **Live radio** — desktop broadcaster ingest, real-time listener delivery, station profiles and program schedules
+3. **Consumer experience** — web player with queue, lyrics, favorites, playlists, search, mobile-first navigation
+4. **Administration** — user/role management, studio & station moderation, analytics
+
+---
+
+## 2. Architecture
+
+### 2.1 Why WebSockets for live broadcast (not webhooks)
+
+Webhooks are stateless HTTP callbacks suited for discrete events. Live audio requires a **persistent, low-overhead, bidirectional** channel. The desktop broadcaster streams continuous MP3 frames over WebSocket; the server fans them out to listener queues.
+
 ```mermaid
-graph TD
-    DesktopApp[Desktop Broadcaster GUI] -- "1. Connect over WebSocket with Stream Key" --> FastAPI[FastAPI Server]
-    DesktopApp -- "2. Stream MP3 Audio Chunks" --> FastAPI
-    FastAPI -- "3. Ingest chunk into LiveStreamManager" --> LSM[LiveStreamManager]
-    LSM -- "4. Distribute to listener queues" --> ListenerQueue[Listener Queues]
-    WebClient[Web Browser Client] -- "5. Play URL /api/radio/{id}/live" --> LiveEndpoint[Live Stream Endpoint]
-    LiveEndpoint -- "6. Read chunks from Queue" --> WebClient
+sequenceDiagram
+    participant B as Desktop Broadcaster
+    participant API as FastAPI
+    participant LSM as LiveStreamManager
+    participant W as Web Client
+
+    B->>API: WS /api/radio/stream/ws (stream_key or JWT)
+    B->>API: MP3 binary chunks
+    API->>LSM: ingest(chunk)
+    W->>API: GET /api/radio/{id}/live
+    LSM->>W: chunked audio/mpeg stream
 ```
 
-1. **Database Schema Update**: Add a `stream_key` column to `RadioStation` to act as a unique connection credential.
-2. **WebSocket Ingestion (`/api/radio/stream/ws`)**: A persistent endpoint that receives audio chunks from the authenticated desktop broadcaster and sends them to the `LiveStreamManager`.
-3. **Live Stream Manager**: An in-memory broker inside the FastAPI server that routes incoming audio packets to client request streams.
-4. **Live Playing Endpoint (`/api/radio/{id}/live`)**: An HTTP endpoint that uses FastAPI's `StreamingResponse(media_type="audio/mpeg")` so browsers can play the stream natively using the standard HTML5 `<audio>` player.
-5. **Web Control Interface**: An updated Radio dashboard on the React frontend displaying the custom Stream URL and Stream Key with copy/regenerate controls.
-6. **Desktop Broadcaster (Tkinter Python App)**: A lightweight, user-friendly desktop application to select audio input devices, configure server settings/keys, encode PCM audio to MP3 using LAME, and stream directly.
+### 2.2 Music processing pipeline
+
+```mermaid
+graph LR
+    Upload[POST /api/music/upload] --> Analyze[Celery analyze_audio_task]
+    Analyze --> Score[Quality score + spectrogram]
+    Score -->|approved| Transcode[Celery transcode_audio_task]
+    Transcode --> S3[(MinIO S3)]
+    S3 --> Play[HLS / MP3 / AAC URLs]
+```
+
+### 2.3 Frontend shell
+
+- Hash-based tab routing (`#home`, `#radio`, …) in `App.tsx` — no React Router
+- Global state: `AuthContext` (user, role, admin/listener mode), `AudioContext` (player, queue, favorites)
+- Layout: `Header` (desktop nav + mobile app bar), `MobileNav` (bottom tabs), `AudioPlayer`, `OptionalPanel` (queue/programs)
 
 ---
 
-## User Review Required
+## 3. Backend — implemented
 
-> [!IMPORTANT]
-> The desktop application requires standard Python audio capture dependencies: `sounddevice`, `numpy`, `lameenc` (for MP3 encoding), and `websocket-client`. Fallback instructions will be provided in case `lameenc` or other C-based libraries are missing.
+### 3.1 Stack
+
+| Component | Technology |
+|-----------|------------|
+| API | FastAPI, Uvicorn |
+| ORM | SQLAlchemy + PostgreSQL |
+| Tasks | Celery + Redis |
+| Storage | MinIO (S3-compatible) |
+| Live audio | WebSocket ingest, HTTP chunked MP3, WebRTC (aiortc) |
+| Auth | JWT + Redis refresh tokens, bcrypt |
+
+### 3.2 Database models (13 tables)
+
+`User`, `Artist`, `Album`, `Genre`, `Track`, `Playlist`, `PlaylistTrack`, `RadioStation`, `RadioSchedule`, `ListeningHistory`, `Favorite`, `AudioAnalysisReport`, `StreamingLog`
+
+Migrations: custom runner in `backend/app/db/migrations.py` (001–007).
+
+### 3.3 API modules
+
+| Prefix | Module | Status |
+|--------|--------|--------|
+| `/api/auth` | Registration, login, refresh, profile, admin user/studio management | ✅ |
+| `/api/music` | Upload, CRUD, search, quality, approve, play logging, transcribe, WS status | ✅ |
+| `/api/radio` | Stations CRUD, live ingest/playback, stream key, WebRTC, schedule add | ✅ partial schedule |
+| `/api/playlist` | CRUD, add/remove/reorder tracks | ✅ |
+| `/api/favorites` | List, add, remove | ✅ |
+| `/api/analytics` | Admin dashboard metrics | ✅ |
+
+### 3.4 Live streaming (implemented)
+
+| Endpoint | Purpose |
+|----------|---------|
+| `WS /api/radio/stream/ws` | Broadcaster ingest (MP3 chunks) |
+| `GET /api/radio/{id}/live` | HTTP listener stream (`audio/mpeg`) |
+| `WS /api/radio/{id}/stream/ws/listener` | WebSocket listener |
+| `POST /api/radio/{id}/webrtc/listener` | WebRTC relay |
+| `POST /api/radio/{id}/regenerate-key` | Rotate stream key (5-minute validity) |
+
+`LiveStreamManager` (`app/services/live_stream.py`):
+- In-memory listener queues + chunk ring buffer
+- Optional Redis pub/sub for multi-instance fan-out
+- Listener count aggregation
+- Dynamic program/RJ from `programs_list` JSON + station timezone
+
+**Intentional behavior:** No Auto-DJ / scheduled track playback when broadcaster is offline. External `stream_url` can still mark a station online.
+
+### 3.5 Auth & access control
+
+- Roles: `listener`, `studio_admin`, `radio_admin`, `admin`
+- Header `X-User-Mode: listener` for staff browsing as listener
+- Rate limit: login/register 10 req/min per IP
+- Password policy: 8+ chars, letter + number
+- Premium gating: preview limits, quality tier restrictions
+
+### 3.6 Celery tasks
+
+1. **`analyze_audio_task`** — FFprobe metadata, librosa spectral analysis, spectrogram PNG, quality scoring, auto-reject rules
+2. **`transcode_audio_task`** — MP3 320, AAC 256/128, HLS VOD segments → S3
+
+### 3.7 Tests (CI)
+
+- `tests/test_api_health.py`
+- `tests/test_audio_quality.py`
+- `tests/test_live_stream_manager.py`
 
 ---
 
-## Proposed Changes
+## 4. Frontend — implemented
 
-### Database & Backend Configurations
+### 4.1 Pages (tab routes)
 
-#### [MODIFY] [models.py](file:///Users/charlsonpeter/Documents/Projects/My_Projects/verisonic/backend/app/models.py)
-* Add `stream_key` field to the `RadioStation` database model:
-  ```python
-  stream_key = Column(String, unique=True, index=True, nullable=True)
-  ```
+| Tab | Page | Notes |
+|-----|------|-------|
+| `landing` | LandingPage | Marketing, pricing, featured content |
+| `home` | Home | Feed with mobile tiles & horizontal scroll |
+| `radio` | Radio | Listener tiles; admin dashboard & registration |
+| `search` | Search | Debounced search, filters, recent/trending |
+| `favorites` | Favorites | API-backed favorites list |
+| `playlists` | Playlist | CRUD, drag-reorder, mobile drill-down |
+| `details` | MusicDetails | Track detail, lyrics, share |
+| `profile` | UserProfile | Profile & password |
+| `station-profile` | StationProfile | Radio station management |
+| `studio-profile` | StudioProfile | Studio management |
+| `settings` | Settings | Quality, VIP UI, stream key (radio admin) |
+| `tracks` | TracksManagement | Upload queue, approval, acoustic reports |
+| `users` | UsersManagement | Admin user CRUD |
+| `analytics` | AdminAnalytics | Metrics dashboard |
+| `reports` | Inline in App | Acoustic report viewer |
+| `contact` | Contact | Support & upgrade requests |
+| `broadcaster-download` | BroadcasterDownload | Desktop app download guide |
+| `auth` | AuthPage | Login / register / social stub |
 
-#### [MODIFY] [schemas.py](file:///Users/charlsonpeter/Documents/Projects/My_Projects/verisonic/backend/app/schemas.py)
-* Add `stream_key` field to `RadioStationResponse` to make it accessible to radio administrators.
+**Not wired:** `Artist.tsx`, `Sidebar.tsx` (legacy; navigation uses Header + MobileNav).
 
-#### [MODIFY] [main.py](file:///Users/charlsonpeter/Documents/Projects/My_Projects/verisonic/backend/app/main.py)
-* Add an automatic database migration inside the `startup_seeder` function to create the `stream_key` column if it is missing on startup.
+### 4.2 Audio player
+
+| Feature | Desktop | Mobile |
+|---------|---------|--------|
+| Mini player bar | Fixed bottom overlay | In-flow above bottom nav |
+| Expanded player | — | Full-screen deck, browser back to dismiss |
+| Queue / Programs panel | Right drawer | Full-screen bottom sheet |
+| Lyrics | Modal | Tap cover → overlay in expanded player |
+| Speed control | Select dropdown | Chevrons + tap speed to reset 1× |
+| Visualizer | Canvas spectrum (Equalizer) | — |
+| Live radio sync | 24h seek bar, edge sync | Same |
+
+### 4.3 Mobile UI patterns
+
+- **Header:** compact circular logo (left), centered page title, circular avatar (right)
+- **Bottom nav:** Home, Radio, Search, Favorites, Playlists (role-aware)
+- **Home feed:** horizontal scroll strips; trending 3×3 paged grids
+- **Radio (listener):** compact tiles — name + frequency row, location below
+- **Notifications:** banner toasts for errors/info/success; Swal retained for confirmations only
+- **Track lists:** full-width `TrackRow` (matches playlist layout)
+
+### 4.4 Route guards
+
+- Unauthenticated → `landing`
+- `radio_admin` without station → restricted tabs until station registered
+- Admin mode → playlists disabled; library playback stopped; radio admin cannot play other stations
 
 ---
 
-### Backend API Endpoints
+## 5. Desktop broadcaster — implemented
 
-#### [MODIFY] [radio.py](file:///Users/charlsonpeter/Documents/Projects/My_Projects/verisonic/backend/app/api/radio.py)
-* Implement `LiveStreamManager` broker to handle real-time audio distribution to listeners.
-* Implement a WebSocket endpoint `/api/radio/stream/ws` that accepts `stream_key` as a query parameter, authenticates, and ingests audio chunks.
-* Implement HTTP streaming endpoint `/api/radio/{id}/live` that reads audio chunks from the stream manager queue and returns them with headers configured for live MP3 playback.
-* Add `POST /api/radio/{id}/regenerate-key` endpoint to allow owners to regenerate their station's stream key.
-* Update `get_station_stream_sync` and `serialize_station` to detect when a station is live-broadcasting and automatically return the internal `/api/radio/{id}/live` stream URL.
+**Location:** `broadcaster/verisonic_broadcaster.py` (PyQt5 primary UI, Tkinter fallback)
 
----
-
-### React Frontend Interface
-
-#### [MODIFY] [Radio.tsx](file:///Users/charlsonpeter/Documents/Projects/My_Projects/verisonic/frontend/src/pages/Radio.tsx)
-* Enhance the Radio Admin panel view for owners:
-  * Show a dedicated **Broadcaster Connection Panel** with the Stream URL (`ws://localhost:8000/api/radio/stream/ws`) and the unique Stream Key (obfuscated with a show/hide button).
-  * Add a "Copy Stream Key" helper button.
-  * Add a "Regenerate Stream Key" action button.
-  * Dynamically update station status to "Live Broadcasting" when the stream is active.
+| Feature | Status |
+|---------|--------|
+| Audio device selection | ✅ |
+| WebSocket MP3 streaming | ✅ |
+| Stream key / JWT auth | ✅ |
+| VU meter, status, duration | ✅ |
+| Radio-admin-only login | ✅ |
+| PyInstaller CI builds (macOS, Linux, Windows) | ✅ `.github/workflows/build-broadcaster.yml` |
 
 ---
 
-### Desktop Broadcaster Application
+## 6. Known gaps & future work
 
-#### [NEW] [verisonic_broadcaster.py](file:///Users/charlsonpeter/Documents/Projects/My_Projects/verisonic/verisonic_broadcaster.py)
-Create a Python desktop application using Python's standard `tkinter` package for native GUI components:
-* **Audio Input Selection**: Query audio devices via `sounddevice` and present them in a dropdown.
-* **Server Connection Fields**: Text inputs for the Stream URL and unique Stream Key.
-* **Live Recording & Encoding**: Record audio on a background thread, compress/encode the samples using `lameenc` (or fall back to raw PCM if needed), and send them over WebSockets.
-* **Premium Status Indicators**: Displays a digital peak-amplitude volume meter, stream duration, bytes sent, and real-time status (Disconnected, Connecting, Live, Error).
+| Area | Gap |
+|------|-----|
+| Radio schedule | Add-only API; no list/delete/reorder; no automated scheduled playback |
+| Playlists | `is_public` stored but no public discovery endpoint |
+| Artists | `Artist.tsx` page exists but not routed; search “artists” filter has no dedicated view |
+| Listening history | Written on play; no user-facing history API/page |
+| Google OAuth | Mock endpoint only; no real token verification |
+| Station reactivation | Model fields exist; studio has appeal API; radio station appeal endpoint incomplete |
+| Payments | VIP upgrade UI only; no payment provider integration |
+| Track comments | Client-side mock on MusicDetails; not persisted |
+| Album/genre CRUD | Models exist; no standalone management APIs |
 
 ---
 
-## Verification Plan
+## 7. Verification checklist
 
-### Automated Tests
-* We can run the FastAPI app and test WebSocket ingestion using a test script.
+### Live broadcast
+1. Start stack: `docker compose up --build`
+2. Log in as radio admin, register a station
+3. Open Connection Settings → copy stream key
+4. Run `python broadcaster/verisonic_broadcaster.py`, authenticate, start broadcast
+5. Confirm station shows **Live** in dashboard; play station in web player
 
-### Manual Verification
-1. Start the backend (`uvicorn app.main:app --reload`) and frontend dev servers.
-2. Open the React frontend, log in as a radio admin, and navigate to the **Live Radio Dashboard**.
-3. Create a radio station and observe the newly generated Stream URL and Stream Key.
-4. Run the desktop broadcaster app `python verisonic_broadcaster.py`.
-5. Select a microphone or audio input device, paste the Stream Key, and click **Start Broadcast**.
-6. Verify the status changes to **LIVE** and the volume meter visualizes the audio capture.
-7. Return to the React app and click **Play** on the radio station card. Listen to confirm the real-time audio is streaming.
+### Music upload
+1. Promote user to studio admin
+2. Upload lossless file via Tracks Management
+3. Wait for Celery analysis + transcode
+4. Approve track (admin) if not auto-approved
+5. Play from Home or Search
+
+### Mobile smoke test
+1. Open portal on narrow viewport
+2. Verify bottom nav, expanded player, queue full-screen sheet
+3. Verify banner on offline station tap (not blocking Swal modal)
+4. Verify Home trending 3×3 scroll and Radio tile strip
+
+### Automated
+```bash
+cd backend && pytest tests/ -v
+```
+
+---
+
+## 8. Default seed data
+
+| Item | Value |
+|------|-------|
+| Admin email | `admin@verisonic.com` |
+| Admin password | `admin12345` |
+| Genres | Rock, Electronic, Classical, Jazz, Hip-Hop, Ambient |
+
+---
+
+## 9. File reference (key paths)
+
+| Area | Path |
+|------|------|
+| API entry | `backend/app/main.py` |
+| Radio + live stream | `backend/app/api/radio.py`, `backend/app/services/live_stream.py` |
+| Music + upload | `backend/app/api/music.py`, `backend/app/tasks/tasks.py` |
+| Migrations | `backend/app/db/migrations.py` |
+| App router | `frontend/src/App.tsx` |
+| Player | `frontend/src/components/player/AudioPlayer.tsx` |
+| Audio state | `frontend/src/context/AudioContext.tsx` |
+| Auth state | `frontend/src/context/AuthContext.tsx` |
+| Banner notifications | `frontend/src/components/shared/BannerHost.tsx`, `frontend/src/utils/banner.ts` |
+| Confirm dialogs | `frontend/src/utils/swal.ts` |
+| Broadcaster | `broadcaster/verisonic_broadcaster.py` |
