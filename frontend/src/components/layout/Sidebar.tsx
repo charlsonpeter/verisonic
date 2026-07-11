@@ -11,7 +11,7 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
-  const { currentUser, logout, token, canUsePlaylists } = useAuth();
+  const { currentUser, logout, token, canUsePlaylists, canAccessPlatformSettings } = useAuth();
 
   const navItems = [
     { id: 'landing', label: 'Overview', icon: Disc },
@@ -106,7 +106,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => 
           <div>
             <p className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Configuration</p>
             <div className="space-y-1">
-              {settingsItems.map(renderNavButton)}
+              {settingsItems
+                .filter((item) => item.id !== 'settings' || canAccessPlatformSettings)
+                .map(renderNavButton)}
             </div>
           </div>
         </div>

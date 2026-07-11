@@ -49,7 +49,7 @@ const API_URL = '/api';
 
 // Headless UI Router Core
 function DashboardContent() {
-  const { currentUser, token, hasRadioStation, mustResetPassword } = useAuth();
+  const { currentUser, token, hasRadioStation, mustResetPassword, canAccessPlatformSettings } = useAuth();
   const { playTrack, playQueue, addToQueue, favorites } = useAudio();
 
   // Route/Tab Switcher state
@@ -107,6 +107,13 @@ function DashboardContent() {
       setActiveTab('admin-password-reset');
     }
   }, [mustResetPassword, activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'settings' && !canAccessPlatformSettings) {
+      const role = currentUser?.real_role || currentUser?.role;
+      setActiveTab(role === 'radio_admin' ? 'radio' : 'home');
+    }
+  }, [activeTab, canAccessPlatformSettings, currentUser]);
 
   // Route protection redirect for Radio Admins who do NOT have a station yet
   useEffect(() => {
