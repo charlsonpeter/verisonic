@@ -1,18 +1,22 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Request, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import set_committed_value
 from jose import jwt, JWTError
 from typing import List, Optional
 
 from app.db.session import get_db
 from app.models import User, Artist
 from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, UserSettingsUpdate, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, StudioProfileUpdate, RequestReactivationSchema
-from app.core.security import verify_password, get_password_hash, create_access_token, create_refresh_token, validate_refresh_token, revoke_refresh_token, ALGORITHM
+from app.core.security import (
+    verify_password, get_password_hash, create_access_token, create_refresh_token,
+    validate_refresh_token, revoke_refresh_token, ALGORITHM, REFRESH_COOKIE_NAME,
+    REFRESH_TOKEN_TTL_DAYS,
+)
 from app.core.config import settings
 from app.core.password_policy import validate_password
 from app.core.rate_limit import enforce_rate_limit, REFRESH_LIMIT, REFRESH_WINDOW_SEC
 from app.core.premium import paid_subscription_is_active
+from app.core.user_mode import apply_user_mode, set_user_mode
 from app.services.subscription_service import apply_admin_subscription
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -71,6 +75,7 @@ def _reject_default_admin_password(password: str) -> None:
 @router.post("/login-form", response_model=Token)
 def login_oauth2(
     request: Request,
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
@@ -86,23 +91,53 @@ def login_oauth2(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Inactive user"
         )
+    return _issue_token_response(user, response)
+
+def _apply_user_mode(user: User, x_user_mode: Optional[str]) -> None:
+    apply_user_mode(user)
+
+
+def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value=refresh_token,
+        httponly=True,
+        secure=settings.is_production,
+        samesite="lax",
+        max_age=REFRESH_TOKEN_TTL_DAYS * 86400,
+        path="/api/auth",
+    )
+
+
+def _clear_refresh_cookie(response: Response) -> None:
+    response.delete_cookie(key=REFRESH_COOKIE_NAME, path="/api/auth")
+
+
+def _issue_token_response(user: User, response: Response) -> dict:
+    refresh_token = create_refresh_token(subject=user.id)
+    _set_refresh_cookie(response, refresh_token)
     return {
         "access_token": create_access_token(subject=user.id),
         "token_type": "bearer",
-        "refresh_token": create_refresh_token(subject=user.id)
+        "refresh_token": refresh_token,
     }
 
-def _apply_user_mode(user: User, x_user_mode: Optional[str]) -> None:
-    user._real_role = user.role
-    if x_user_mode == "listener" and user.role in ("radio_admin", "studio_admin"):
-        set_committed_value(user, "role", "listener")
+
+def get_current_user_allow_reset(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User:
+    return _resolve_authenticated_user(token, db, enforce_password_reset=False)
 
 
 def get_current_user(
     token: str = Depends(oauth2_scheme),
-    x_user_mode: Optional[str] = Header(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ) -> User:
+    return _resolve_authenticated_user(token, db, enforce_password_reset=True)
+
+
+def _resolve_authenticated_user(token: str, db: Session, *, enforce_password_reset: bool) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -116,17 +151,18 @@ def get_current_user(
         token_data = TokenPayload(sub=int(user_id))
     except JWTError:
         raise credentials_exception
-        
+
     user = db.query(User).filter(User.id == token_data.sub).first()
-    if user is None:
+    if user is None or not user.is_active:
         raise credentials_exception
 
-    _apply_user_mode(user, x_user_mode)
+    _apply_user_mode(user, None)
+    if enforce_password_reset:
+        _ensure_password_reset_not_required(user)
     return user
 
 def get_optional_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-    x_user_mode: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ) -> Optional[User]:
     if not credentials:
@@ -138,8 +174,9 @@ def get_optional_current_user(
         if user_id is None:
             return None
         user = db.query(User).filter(User.id == int(user_id)).first()
-        if user:
-            _apply_user_mode(user, x_user_mode)
+        if user is None or not user.is_active:
+            return None
+        _apply_user_mode(user, None)
         return user
     except Exception:
         return None
@@ -206,7 +243,7 @@ def register_user(user_in: UserCreate, request: Request, db: Session = Depends(g
 
 
 @router.post("/login", response_model=Token)
-def login(user_in: UserLogin, request: Request, db: Session = Depends(get_db)):
+def login(user_in: UserLogin, request: Request, response: Response, db: Session = Depends(get_db)):
     """
     Log in with email and password to receive access token.
     """
@@ -226,17 +263,14 @@ def login(user_in: UserLogin, request: Request, db: Session = Depends(get_db)):
             detail="Inactive user"
         )
         
-    return {
-        "access_token": create_access_token(subject=user.id),
-        "token_type": "bearer",
-        "refresh_token": create_refresh_token(subject=user.id)
-    }
+    return _issue_token_response(user, response)
 
 @router.post("/google", response_model=Token)
-def login_google(body: dict, db: Session = Depends(get_db)):
+def login_google(body: dict, request: Request, response: Response, db: Session = Depends(get_db)):
     """
     Log in using Google Sign-In. Mocks backend OAuth verification for simple integration.
     """
+    enforce_rate_limit(request, "google")
     # Accept user info sent directly or decoded from mock id token
     email = body.get("email")
     name = body.get("name", "Google User")
@@ -263,15 +297,11 @@ def login_google(body: dict, db: Session = Depends(get_db)):
             detail="Inactive user"
         )
         
-    return {
-        "access_token": create_access_token(subject=user.id),
-        "token_type": "bearer",
-        "refresh_token": create_refresh_token(subject=user.id)
-    }
+    return _issue_token_response(user, response)
 
 @router.get("/me", response_model=UserResponse)
 def read_current_user(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_allow_reset),
     db: Session = Depends(get_db),
 ):
     from app.services.subscription_service import apply_pending_subscription_if_due
@@ -309,9 +339,31 @@ def update_user_settings(
 
 
 @router.post("/logout")
-def logout(current_user: User = Depends(get_current_user)):
+def logout(
+    response: Response,
+    current_user: User = Depends(get_current_user_allow_reset),
+):
     revoke_refresh_token(current_user.id)
+    _clear_refresh_cookie(response)
     return {"detail": "Logged out successfully"}
+
+
+@router.post("/switch-mode", response_model=UserResponse)
+def switch_user_mode(
+    body: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    mode = (body.get("mode") or "").strip().lower()
+    if mode not in ("admin", "listener"):
+        raise HTTPException(status_code=400, detail="Mode must be 'admin' or 'listener'")
+    db_user = db.query(User).filter(User.id == current_user.id).first()
+    if not db_user or db_user.role not in ("radio_admin", "studio_admin"):
+        raise HTTPException(status_code=400, detail="Mode switching is not available for this account")
+    set_user_mode(db_user.id, mode)
+    db.refresh(db_user)
+    apply_user_mode(db_user)
+    return db_user
 
 
 @router.post("/request-artist", response_model=UserResponse)
@@ -529,8 +581,8 @@ def update_profile(
 @router.put("/change-password")
 def change_password(
     pw_in: ChangePasswordRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user_allow_reset),
+    db: Session = Depends(get_db),
 ):
     if not verify_password(pw_in.old_password, current_user.hashed_password):
         raise HTTPException(status_code=400, detail="Incorrect old password")
@@ -549,7 +601,7 @@ def change_password(
 @router.post("/reset-initial-password")
 def reset_initial_password(
     body: ResetInitialPasswordRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_allow_reset),
     db: Session = Depends(get_db),
 ):
     """
@@ -584,11 +636,12 @@ def reset_initial_password(
 @router.post("/refresh", response_model=Token)
 def refresh_token(
     request: Request,
+    response: Response,
     body: dict,
     db: Session = Depends(get_db)
 ):
     enforce_rate_limit(request, "refresh", limit=REFRESH_LIMIT, window_sec=REFRESH_WINDOW_SEC)
-    refresh_token_value = body.get("refresh_token")
+    refresh_token_value = body.get("refresh_token") or request.cookies.get(REFRESH_COOKIE_NAME)
     if not refresh_token_value:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -609,11 +662,7 @@ def refresh_token(
         raise credentials_exception
 
     revoke_refresh_token(user.id)
-    return {
-        "access_token": create_access_token(subject=user.id),
-        "token_type": "bearer",
-        "refresh_token": create_refresh_token(subject=user.id)
-    }
+    return _issue_token_response(user, response)
 
 @router.get("/admin/studios", response_model=List[ArtistResponse])
 def get_studios_admin(

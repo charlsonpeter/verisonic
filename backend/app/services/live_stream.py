@@ -10,6 +10,7 @@ from app.core.redis_client import get_redis
 HISTORY_MAXLEN = 100
 REDIS_HISTORY_MAXLEN = 100
 LIVE_BROADCAST_TTL = 86400
+MAX_LISTENERS_PER_STATION = 500
 
 
 class LiveStreamManager:
@@ -76,12 +77,18 @@ class LiveStreamManager:
             return bool(self._redis.exists(f"live:broadcast:{station_id}"))
         return False
 
+    def listener_count(self, station_id: int) -> int:
+        return len(self.listeners.get(station_id, set()))
+
     def register_listener(self, station_id: int, skip_history: bool = False) -> asyncio.Queue:
         if isinstance(skip_history, str):
             skip_history = skip_history.lower() == "true"
 
         q: asyncio.Queue = asyncio.Queue(maxsize=10)
-        self.listeners.setdefault(station_id, set()).add(q)
+        listeners = self.listeners.setdefault(station_id, set())
+        if len(listeners) >= MAX_LISTENERS_PER_STATION:
+            raise RuntimeError("Listener capacity reached for this station")
+        listeners.add(q)
 
         if not skip_history:
             history_data = b""

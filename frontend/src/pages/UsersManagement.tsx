@@ -212,7 +212,7 @@ export const UsersManagement: React.FC = () => {
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
+      <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
         {isLoading ? (
           <p className="p-8 text-xs text-slate-500 text-center">Loading platform users...</p>
         ) : users.length === 0 ? (
@@ -292,6 +292,68 @@ export const UsersManagement: React.FC = () => {
               ))}
             </tbody>
           </table>
+        )}
+      </div>
+
+      {/* Mobile card list */}
+      <div className="md:hidden space-y-3">
+        {isLoading ? (
+          <p className="p-8 text-xs text-slate-500 text-center">Loading platform users...</p>
+        ) : users.length === 0 ? (
+          <p className="p-8 text-xs text-slate-500 text-center font-bold">No users found.</p>
+        ) : (
+          users.map((u) => (
+            <div
+              key={u.id}
+              className="rounded-2xl border border-white/5 bg-slate-900/20 p-4 space-y-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="font-bold text-slate-200 truncate">{u.full_name || 'No Display Name'}</div>
+                  <div className="text-[10px] text-slate-455 truncate mt-0.5">{u.email}</div>
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <button
+                    onClick={() => handleOpenModal(u)}
+                    className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 active:text-emerald-450 transition cursor-pointer"
+                    title="View & Edit User"
+                  >
+                    <Eye className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => handleDeleteUser(u.id)}
+                    disabled={u.id === currentUser?.id}
+                    className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-500 active:text-rose-500 disabled:opacity-50 disabled:cursor-not-allowed transition cursor-pointer"
+                    title="Delete User"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${roleBadgeClass(u.role)}`}>
+                  {formatRoleLabel(u.role)}
+                </span>
+                <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${subscriptionBadgeClass(u.subscription || 'free')}`}>
+                  {formatSubscriptionLabel(u.subscription, u.subscription_cycle)}
+                </span>
+              </div>
+
+              {u.artist_profile ? (
+                <div className="bg-slate-950/45 p-3 border border-white/3 rounded-xl space-y-1">
+                  <div className="font-bold text-slate-200 text-[10px] uppercase font-sans">
+                    Stage: {u.artist_profile.stage_name}
+                  </div>
+                  <div className="text-[10px] text-slate-455 italic line-clamp-2">
+                    Bio: {u.artist_profile.bio || 'No bio submitted.'}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-[10px] text-slate-650 italic">No artist request</p>
+              )}
+            </div>
+          ))
         )}
       </div>
 

@@ -8,6 +8,8 @@ from app.core.redis_client import get_redis
 
 ALGORITHM = "HS256"
 REFRESH_TOKEN_TTL_DAYS = 30
+STREAM_TICKET_EXPIRE_MINUTES = 5
+REFRESH_COOKIE_NAME = "verisonic_refresh"
 
 
 def create_access_token(subject: Union[str, Any], expires_delta: timedelta = None) -> str:
@@ -28,6 +30,29 @@ def create_refresh_token(subject: Union[str, Any]) -> str:
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
     _store_refresh_jti(int(subject), jti)
     return encoded_jwt
+
+
+def create_stream_ticket(user_id: int, track_id: int) -> str:
+    expire = datetime.utcnow() + timedelta(minutes=STREAM_TICKET_EXPIRE_MINUTES)
+    to_encode = {
+        "exp": expire,
+        "sub": str(user_id),
+        "type": "stream",
+        "track_id": track_id,
+    }
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
+
+
+def validate_stream_ticket(ticket: str, track_id: int) -> int:
+    payload = jwt.decode(ticket, settings.SECRET_KEY, algorithms=[ALGORITHM])
+    if payload.get("type") != "stream":
+        raise ValueError("Invalid stream ticket")
+    if int(payload.get("track_id", -1)) != track_id:
+        raise ValueError("Stream ticket track mismatch")
+    user_id = payload.get("sub")
+    if user_id is None:
+        raise ValueError("Invalid stream ticket subject")
+    return int(user_id)
 
 
 def _refresh_key(user_id: int) -> str:

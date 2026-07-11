@@ -59,7 +59,7 @@ function DashboardContent() {
     const hashTab = window.location.hash.replace('#', '');
     if (hashTab) return hashTab;
     const savedTab = localStorage.getItem('activeTab');
-    const hasToken = localStorage.getItem('token');
+    const hasToken = sessionStorage.getItem('token') || localStorage.getItem('token');
     if (hasToken) {
       return savedTab && savedTab !== 'landing' ? savedTab : 'home';
     }

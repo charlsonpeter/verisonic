@@ -26,7 +26,9 @@ from app.services.audio import build_score_breakdown, QUALITY_SCORE_TIERS, calcu
 from app.tasks.tasks import analyze_audio_task
 from app.core.premium import user_has_premium
 from app.core.config import settings
-from app.core.security import ALGORITHM
+from app.core.security import ALGORITHM, create_stream_ticket, validate_stream_ticket
+from app.core.upload_validation import validate_audio_upload, validate_cover_upload
+from app.core.ws_auth import extract_ws_token, resolve_ws_user
 from app.models import User
 
 router = APIRouter(prefix="/music", tags=["music"])
@@ -113,10 +115,22 @@ def _resolve_quality_score(
 
 
 def _resolve_stream_user(
+    ticket: Optional[str],
     access_token: Optional[str],
     credentials: Optional[HTTPAuthorizationCredentials],
     db: Session,
+    track_id: int,
 ) -> User:
+    if ticket:
+        try:
+            user_id = validate_stream_ticket(ticket, track_id)
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid stream ticket") from exc
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None or not user.is_active:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        return user
+
     token = credentials.credentials if credentials else access_token
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
@@ -126,7 +140,7 @@ def _resolve_stream_user(
         if user_id is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
         user = db.query(User).filter(User.id == int(user_id)).first()
-        if user is None:
+        if user is None or not user.is_active:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
         return user
     except JWTError as exc:
@@ -311,7 +325,7 @@ async def upload_music(
     Validates extension and schedules async spectral check & transcoding.
     """
     filename = file.filename
-    ext = os.path.splitext(filename)[1].lower()
+    ext = await validate_audio_upload(file)
     
     # Supported and Restricted audio extensions
     allowed_exts = [".flac", ".wav", ".aiff", ".alac"]
@@ -554,6 +568,10 @@ def list_tracks(
 ):
     if _radio_admin_blocked_from_music(current_user):
         raise HTTPException(status_code=403, detail="Radio admins are not allowed to play music or search tracks.")
+    if not approved_only:
+        real_role = getattr(current_user, "_real_role", None) or (current_user.role if current_user else None)
+        if not current_user or real_role not in ("admin", "studio_admin"):
+            approved_only = True
     """
     List audio tracks with search filter (Title, Artist Name, Album Title, Genre).
     Uses full text pattern matching.
@@ -613,16 +631,41 @@ def manage_tracks(
 
     return [serialize_track(t, db, viewer=current_user) for t in tracks]
 
+@router.post("/{id}/stream/ticket")
+def issue_stream_ticket(
+    id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    track = db.query(Track).filter(Track.id == id).first()
+    if not track or not track.original_file_path:
+        raise HTTPException(status_code=404, detail="Track master not available")
+
+    is_owner = False
+    if current_user.role == "admin":
+        is_owner = True
+    else:
+        artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+        is_owner = bool(artist and track.artist_id == artist.id)
+
+    if not is_owner and not user_has_premium(current_user):
+        raise HTTPException(status_code=403, detail="Premium subscription required")
+
+    ticket = create_stream_ticket(current_user.id, id)
+    return {"ticket": ticket, "expires_in": 300}
+
+
 @router.get("/{id}/stream/master")
 def stream_master(
     id: int,
     request: Request,
+    ticket: Optional[str] = Query(None),
     access_token: Optional[str] = Query(None),
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(stream_auth),
     db: Session = Depends(get_db),
 ):
     """Stream the original studio master with HTTP Range support (premium only)."""
-    current_user = _resolve_stream_user(access_token, credentials, db)
+    current_user = _resolve_stream_user(ticket, access_token, credentials, db, id)
 
     track = db.query(Track).filter(Track.id == id).first()
     if not track or not track.original_file_path:
@@ -865,35 +908,17 @@ async def websocket_tracks_status(
     websocket: WebSocket,
     token: Optional[str] = None
 ):
-    await websocket.accept()
-    
-    # Authenticate user from query parameter token
-    user = None
-    if token:
-        from jose import jwt, JWTError
-        from app.core.config import settings
-        from app.models import User
-        
-        db = SessionLocal()
-        try:
-            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
-            user_id = payload.get("sub")
-            if user_id:
-                user = db.query(User).filter(User.id == int(user_id)).first()
-        except JWTError:
-            pass
-        finally:
-            db.close()
-            
+    resolved_token = extract_ws_token(websocket, token)
+    user = resolve_ws_user(resolved_token)
     if not user:
-        await websocket.send_json({"type": "error", "message": "Unauthorized"})
-        await websocket.close(code=1008)
+        await websocket.close(code=1008, reason="Unauthorized")
         return
 
     if user.role not in ("admin", "studio_admin"):
-        await websocket.send_json({"type": "error", "message": "Forbidden"})
-        await websocket.close(code=1008)
+        await websocket.close(code=1008, reason="Forbidden")
         return
+
+    await websocket.accept()
         
     monitored_ids = set()
     last_states = {} # track_id -> status
@@ -968,43 +993,25 @@ async def websocket_tracks_status(
 
 @router.websocket("/ws/analysis/{track_id}")
 async def websocket_analysis(websocket: WebSocket, track_id: int, token: Optional[str] = None):
-    await websocket.accept()
-
-    user = None
-    if token:
-        from jose import jwt, JWTError
-        from app.core.config import settings
-        from app.models import User
-
-        db = SessionLocal()
-        try:
-            payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
-            user_id = payload.get("sub")
-            if user_id:
-                user = db.query(User).filter(User.id == int(user_id)).first()
-        except JWTError:
-            pass
-        finally:
-            db.close()
-
+    resolved_token = extract_ws_token(websocket, token)
+    user = resolve_ws_user(resolved_token)
     if not user or user.role not in ("admin", "studio_admin"):
-        await websocket.send_json({"status": "error", "message": "Unauthorized"})
-        await websocket.close(code=1008)
+        await websocket.close(code=1008, reason="Unauthorized")
         return
 
     db = SessionLocal()
     try:
         track = db.query(Track).filter(Track.id == track_id).first()
         if not track:
-            await websocket.send_json({"status": "error", "message": "Track not found"})
-            await websocket.close(code=1008)
+            await websocket.close(code=1008, reason="Track not found")
             return
         if not _user_can_manage_track(user, track, db):
-            await websocket.send_json({"status": "error", "message": "Forbidden"})
-            await websocket.close(code=1008)
+            await websocket.close(code=1008, reason="Forbidden")
             return
     finally:
         db.close()
+
+    await websocket.accept()
 
     try:
         while True:
@@ -1150,10 +1157,8 @@ async def update_track(
                 track.genres.append(g_model)
             
     if cover_image is not None and cover_image.filename:
-        ext = os.path.splitext(cover_image.filename)[1].lower()
-        if ext not in [".jpg", ".jpeg", ".png", ".webp"]:
-            raise HTTPException(status_code=400, detail="Invalid cover image format. Allowed: JPG, PNG, WEBP")
-            
+        ext = await validate_cover_upload(cover_image)
+        
         cover_key = f"covers/{track.id}{ext}"
         file_bytes = cover_image.file.read()
         upload_file(file_bytes, cover_key, content_type=cover_image.content_type)
