@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Search, Crown, Signal, User, ShieldAlert, ChevronDown, 
+  Search, Crown, Signal, User, ChevronDown, 
   Compass, Radio, Heart, FolderHeart, UploadCloud,
   ShieldCheck, BarChart2, Settings, LogOut, Disc, Mail, Laptop
 } from 'lucide-react';
@@ -378,18 +378,10 @@ export const Header: React.FC<HeaderProps> = ({
             <button 
               type="button"
               onClick={() => setActiveTab('auth')}
-              className="md:hidden w-9 h-9 rounded-full bg-slate-900/70 border border-white/8 flex items-center justify-center active:scale-95 transition-transform"
+              className="w-9 h-9 rounded-full bg-slate-900/70 border border-white/8 flex items-center justify-center active:scale-95 transition-transform md:hidden"
               aria-label="Sign in"
             >
               <User className="w-[18px] h-[18px] text-slate-400" />
-            </button>
-            <button 
-              type="button"
-              onClick={() => setActiveTab('auth')}
-              className="hidden md:flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl shadow transition"
-            >
-              <ShieldAlert className="w-3.5 h-3.5 text-white" />
-              Enter Platform
             </button>
           </>
         )}

@@ -85,12 +85,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
           >
             Log In
           </button>
-          <button 
-            onClick={() => onNavigate('home')} 
-            className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-md shadow-rose-600/10 transition"
-          >
-            Start Listening
-          </button>
         </div>
       </header>
 
@@ -172,12 +166,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
           </div>
 
           <div className="flex flex-col sm:flex-row gap-4 justify-center pt-4">
-            <button
-              onClick={() => onNavigate('home')}
-              className="px-8 py-4 bg-gradient-to-r from-rose-600 to-rose-500 text-white font-extrabold text-sm rounded-2xl hover:scale-[1.02] hover:shadow-xl hover:shadow-rose-600/30 transition-all duration-300 glow-rose-strong"
-            >
-              Start Listening Free
-            </button>
             <button
               onClick={() => onNavigate('auth')}
               className="px-8 py-4 bg-slate-900 hover:bg-slate-800 text-slate-200 font-bold text-sm rounded-2xl border border-white/5 transition"
