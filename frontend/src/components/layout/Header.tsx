@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { getPageTitle } from '../../utils/pageTitles';
+import { getAccountTierLabel, hasPaidSubscription, isOnFreeTrial } from '../../utils/accountTier';
 
 interface HeaderProps {
   searchQuery: string;
@@ -18,7 +19,7 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({ 
   searchQuery, setSearchQuery, activeTab, setActiveTab, pageTitleOverride
 }) => {
-  const { currentUser, isPremium, logout, token, userMode, switchUserMode, canUsePlaylists } = useAuth();
+  const { currentUser, logout, token, userMode, switchUserMode, canUsePlaylists } = useAuth();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -37,6 +38,10 @@ export const Header: React.FC<HeaderProps> = ({
     !!currentUser &&
     (currentUser.real_role || currentUser.role) === 'radio_admin' &&
     userMode === 'admin';
+
+  const isPaidSubscriber = hasPaidSubscription(currentUser);
+  const isOnTrial = isOnFreeTrial(currentUser);
+  const tierLabel = getAccountTierLabel(currentUser);
 
   const navItems = isRadioAdminInAdminMode
     ? [
@@ -148,7 +153,17 @@ export const Header: React.FC<HeaderProps> = ({
         )}
         {/* VIP badge */}
         {currentUser && userMode !== 'admin' && (
-          !isPremium ? (
+          isPaidSubscriber ? (
+            <span className="hidden sm:flex items-center gap-1 px-2.5 py-1 bg-rose-500/10 border border-rose-500/20 rounded-full text-[9px] text-rose-400 font-extrabold uppercase">
+              <Crown className="w-3.5 h-3.5 fill-current text-rose-400" />
+              {tierLabel}
+            </span>
+          ) : isOnTrial ? (
+            <span className="hidden sm:flex items-center gap-1 px-2.5 py-1 bg-amber-500/10 border border-amber-500/20 rounded-full text-[9px] text-amber-400 font-extrabold uppercase">
+              <Crown className="w-3.5 h-3.5 fill-current text-amber-400" />
+              {tierLabel}
+            </span>
+          ) : (
             <button 
               onClick={() => setActiveTab('settings')}
               className="hidden sm:flex items-center gap-1 px-3 py-1.5 bg-gradient-to-r from-amber-500 to-yellow-600 hover:from-amber-450 hover:to-yellow-500 text-slate-950 text-[10px] font-extrabold rounded-xl transition shadow-md shadow-amber-500/10 uppercase tracking-wide cursor-pointer"
@@ -156,11 +171,6 @@ export const Header: React.FC<HeaderProps> = ({
               <Crown className="w-3.5 h-3.5 fill-current" />
               Go VIP
             </button>
-          ) : (
-            <span className="hidden sm:flex items-center gap-1 px-2.5 py-1 bg-rose-500/10 border border-rose-500/20 rounded-full text-[9px] text-rose-400 font-extrabold uppercase">
-              <Crown className="w-3.5 h-3.5 fill-current text-rose-400" />
-              VIP Master
-            </span>
           )
         )}
 

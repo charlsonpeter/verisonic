@@ -12,45 +12,21 @@ import {
   QUALITY_LABELS,
   type QualityLevelSetting,
 } from '../utils/streamQuality';
+import {
+  getAccountTierLabel,
+  getTrialDaysLeft,
+} from '../utils/accountTier';
 
 export const Settings: React.FC = () => {
   const { currentUser, isPremium, canConfigureStreamQuality, token, fetchCurrentUser, userMode } = useAuth();
   const { qualityLevelSetting, setQualityLevelSetting, activeStreamLabel } = useAudio();
 
-  const getTrialDaysLeft = () => {
-    if (!currentUser?.created_at) return 0;
-    const createdAt = new Date(currentUser.created_at);
-    const now = new Date();
-    const diffDays = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24);
-    return Math.max(0, Math.ceil(7 - diffDays));
-  };
-
-  const userRole = currentUser?.real_role || currentUser?.role;
-
-  const getAccountTierLabel = () => {
-    if (!currentUser) return 'Not signed in';
-    if (userRole === 'admin' || userRole === 'studio_admin') return 'Studio Master VIP (Active)';
-    if (userRole === 'radio_admin') return 'Radio Broadcaster VIP (Active)';
-    if (currentUser.subscription === 'unlimited') return 'Super Master Unlimited (Active)';
-    if (currentUser.subscription === 'premium') {
-      return currentUser.subscription_cycle === 'yearly'
-        ? 'Premium - Yearly Subscription (Active)'
-        : 'Premium - Monthly Subscription (Active)';
-    }
-    const trialDays = getTrialDaysLeft();
-    if (trialDays > 0) return `Free Trial (Active - ${trialDays} Days Left)`;
-    return 'Free Preview Tier';
-  };
-
   const getSubscriptionMessage = () => {
     if (!currentUser) return '';
-    if (userRole === 'admin' || userRole === 'studio_admin' || userRole === 'radio_admin') {
-      return 'You have full platform access through your staff account.';
-    }
     if (currentUser.subscription === 'premium' || currentUser.subscription === 'unlimited') {
       return 'Your subscription is active. Thank you for supporting authentic lossless music and radio artists.';
     }
-    const trialDays = getTrialDaysLeft();
+    const trialDays = getTrialDaysLeft(currentUser);
     if (trialDays > 0) {
       return `Your free trial includes premium features for ${trialDays} more day${trialDays === 1 ? '' : 's'}.`;
     }
@@ -385,7 +361,7 @@ export const Settings: React.FC = () => {
               <div>
                 <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Current Account Tier</span>
                 <span className="text-base font-extrabold text-white mt-1 block">
-                  {getAccountTierLabel()}
+                  {getAccountTierLabel(currentUser)}
                 </span>
               </div>
 

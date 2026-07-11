@@ -3,9 +3,14 @@ import { createPortal } from 'react-dom';
 import { User as UserIcon, Activity, Key, X, Settings } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
+import {
+  getAccountTierLabel,
+  hasPaidSubscription,
+  isOnFreeTrial,
+} from '../utils/accountTier';
 
 export const UserProfile: React.FC = () => {
-  const { currentUser, isPremium, fetchCurrentUser } = useAuth();
+  const { currentUser, fetchCurrentUser } = useAuth();
   const { favorites } = useAudio();
 
   // Profile details update states
@@ -129,7 +134,9 @@ export const UserProfile: React.FC = () => {
     averageBitrate: favorites.length > 0 ? "1,411 kbps (FLAC CD)" : "N/A"
   };
 
-
+  const tierBadge = getAccountTierLabel(currentUser);
+  const isPaidSubscriber = hasPaidSubscription(currentUser);
+  const isOnTrial = isOnFreeTrial(currentUser);
 
   return (
     <div className="space-y-10 w-full">
@@ -146,9 +153,13 @@ export const UserProfile: React.FC = () => {
           <div className="flex flex-col md:flex-row items-center gap-2">
             <h2 className="text-2xl font-extrabold text-white tracking-tight">{currentUser?.full_name || 'Guest User'}</h2>
             <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${
-              isPremium ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' : 'bg-slate-900 border-white/3 text-slate-500'
+              isPaidSubscriber
+                ? 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                : isOnTrial
+                  ? 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                  : 'bg-slate-900 border-white/3 text-slate-500'
             }`}>
-              {isPremium ? 'Studio VIP Premium' : 'Free Preview Account'}
+              {tierBadge}
             </span>
           </div>
           <p className="text-xs text-slate-400 font-semibold">{currentUser?.email || 'unregistered@verisonic.com'}</p>

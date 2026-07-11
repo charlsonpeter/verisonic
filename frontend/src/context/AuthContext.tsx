@@ -253,10 +253,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     (currentUser?.subscription === 'free' && isTrialActive());
 
   const canConfigureStreamQuality =
-    ['premium', 'unlimited'].includes(currentUser?.subscription || '') ||
-    userRole === 'admin' ||
-    userRole === 'studio_admin' ||
-    userRole === 'radio_admin';
+    ['premium', 'unlimited'].includes(currentUser?.subscription || '');
   const isStaffInAdminMode =
     (userRole === 'radio_admin' || userRole === 'studio_admin') && userMode === 'admin';
   const canUsePlaylists = !!token && !isStaffInAdminMode;
