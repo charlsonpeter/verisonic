@@ -283,12 +283,14 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     }
   };
 
+  const isPlatformAdmin = currentUser?.role === 'admin';
+
   useEffect(() => {
-    if (token && isStaffInAdminMode) {
+    if (token && (isStaffInAdminMode || isPlatformAdmin)) {
       fetchTracks();
       fetchSuggestions();
     }
-  }, [token, isStaffInAdminMode]);
+  }, [token, isStaffInAdminMode, isPlatformAdmin]);
 
   useEffect(() => {
     if (!message) return;
