@@ -1,38 +1,44 @@
 # VeriSonic
 
-VeriSonic is a high-fidelity audio platform for **lossless music streaming**, **live radio broadcasting**, and **studio-grade catalog management**. It combines a React web portal, a FastAPI backend with Celery processing, Razorpay subscription checkout, and a PyQt5 desktop broadcaster for real-time station ingest.
+VeriSonic is a high-fidelity audio platform for **lossless music streaming**, **live radio broadcasting**, **studio-grade catalog management**, and **owner revenue sharing**. It combines a React web portal, a FastAPI backend with Celery processing, Razorpay subscription checkout, owner wallets, and a PyQt5 desktop broadcaster for real-time station ingest.
 
 ---
 
 ## Features
 
 ### Listeners
-- **Home Feed** — recently played, trending tracks, popular artists (mobile tile/scroll layouts)
-- **Radio Stations** — browse live and external stations; compact mobile tiles with location and frequency
-- **Search** — tracks and radio with filters, recent searches, and trending queries
+- **Home Feed** — recently played, trending tracks, popular artists (click artist → search)
+- **Radio Stations** — browse live and external stations; tiles with cover art, frequency, location
+- **Search** — header dropdown preview + full search page (tracks, albums, radio, artists, playlists); detail views and Play All
 - **Favorites & Playlists** — sync favorites to the API; create playlists with drag-reorder
 - **Global audio player** — queue, lyrics, shuffle/repeat, playback speed, quality tiers, MediaSession
 - **Mobile-first UI** — bottom navigation, expanded full-screen player, banner notifications
 
 ### Studio admins
 - Studio profile onboarding (`profile_complete` gate before track management)
+- **Studio cover image** and licence document upload
 - Upload lossless audio (FLAC/WAV/AIFF/ALAC) with automatic metadata extraction
 - Celery pipeline: spectral analysis, quality scoring, spectrogram, FFmpeg transcoding (MP3/AAC/HLS)
 - Track management, approval workflow, OpenAI Whisper lyrics transcription (optional)
-- Studio profile and reactivation appeals
+- Reactivation appeals when profile is disabled
+- **My Wallet** — earnings from billable track plays, withdrawals
 
 ### Radio admins
 - Register and manage radio station nodes (profile, location, frequency, programs)
+- **Station cover image** and licence document upload (shown in radio listings & search)
 - **Live broadcast** via desktop broadcaster (WebSocket MP3 ingest → HTTP/WebRTC listeners)
 - Stream key generation/regeneration (time-limited OTP-style keys)
 - Program schedule editor with timezone-aware active program detection
+- **My Wallet** — earnings from radio listen sessions, withdrawals
 - Admin/listener mode toggle
 
 ### Platform admins
 - User management (roles, subscriptions)
-- Studio and station moderation (enable/disable, reactivation)
+- **Studios Management** and **Radio Stations Management** — moderation, licence doc review
 - Analytics dashboard (plays, bandwidth, quality distribution)
 - Acoustic quality reports with admin approve/reject
+- **Revenue settings** — premium pricing, revenue split, listen thresholds
+- Withdrawal processing with UTR reference
 - Mandatory password reset gate for seeded admin account
 
 ### Subscriptions
@@ -42,6 +48,10 @@ VeriSonic is a high-fidelity audio platform for **lossless music streaming**, **
   - Plan changes can be queued for end of billing period; cancel-at-period-end supported
 - **Unlimited** — admin-assigned only (no checkout)
 - Checkout UI: Landing page pricing, Settings, and in-player Premium modal
+
+### Account & profiles
+- **My Profile** — display name, email, password; hover initials circle → upload display picture
+- Initials avatar derived from display name when no photo is set
 
 ---
 
@@ -79,11 +89,13 @@ graph TD
     Worker --> MinIO
 ```
 
-**Live radio path:** Broadcaster → `WS /api/radio/stream/ws` → `LiveStreamManager` (in-memory + optional Redis fan-out) → listeners via `GET /api/radio/{id}/live` or WebRTC.
+**Live radio path:** Broadcaster → `WS /api/radio/stream/ws` → `LiveStreamManager` → listeners via `GET /api/radio/{id}/live` or WebRTC.
 
-**Music path:** Upload → Celery analyze → quality score → transcode → S3 → HLS/MP3/AAC playback in browser. Lossless master streams use short-lived tickets.
+**Music path:** Upload → Celery analyze → quality score → transcode → S3 → HLS/MP3/AAC playback. Lossless master streams use short-lived tickets.
 
-**Subscription path:** Client → `POST /api/subscriptions/create-order` → Razorpay Checkout → `POST /api/subscriptions/verify` → plan activated.
+**Revenue path:** Premium listens → billable track plays / radio sessions → owner wallet → withdrawal requests → admin payout.
+
+**Subscription path:** Client → Razorpay Checkout → `POST /api/subscriptions/verify` → plan activated.
 
 ---
 
@@ -93,18 +105,19 @@ graph TD
 verisonic/
 ├── backend/                 # FastAPI API, WebSockets, Celery tasks, services
 │   ├── app/
-│   │   ├── api/             # auth, music, radio, playlist, favorites, analytics, subscriptions
-│   │   ├── core/            # config, premium gating, subscription plans, security
-│   │   ├── db/              # migrations runner
-│   │   ├── services/        # storage, live_stream, audio, razorpay, subscription
+│   │   ├── api/             # auth, music, radio, playlist, favorites, analytics,
+│   │   │                    # subscriptions, wallet, revenue_admin
+│   │   ├── core/            # config, premium gating, subscription plans, security, upload validation
+│   │   ├── db/              # migrations runner (001–020)
+│   │   ├── services/        # storage, live_stream, wallet, razorpay, cover/licence uploads
 │   │   └── tasks/           # Celery analyze + transcode
 │   └── tests/
 ├── frontend/                # Vite + React + TypeScript + Tailwind
 │   └── src/
-│       ├── pages/           # Home, Radio, Search, Playlists, admin pages, …
-│       ├── components/      # player, layout, subscription, shared UI
+│       ├── pages/           # Home, Radio, Search, Wallet, admin pages, profiles, …
+│       ├── components/      # player, layout (HeaderSearch), wallet, subscription, shared UI
 │       ├── context/         # AuthContext, AudioContext
-│       └── utils/           # subscriptionCheckout, streamQuality, accountTier
+│       └── utils/           # searchMatch, subscriptionCheckout, streamQuality, wallet
 ├── broadcaster/             # PyQt5 desktop live broadcaster
 ├── .github/workflows/       # backend-tests.yml, build-broadcaster.yml
 ├── docker-compose.yml
@@ -195,13 +208,14 @@ The Vite dev server proxies `/api` to the backend.
 Key backend settings (see `docker-compose.yml` and `backend/app/core/config.py`):
 
 - `POSTGRES_*`, `REDIS_HOST`, `S3_ENDPOINT_URL`
-- `SECRET_KEY` — required in production (32+ characters); docker-compose sets a dev-only value locally
-- `ENVIRONMENT` — set to `production` in deployed environments (enables stricter checks, hides API docs)
+- `SECRET_KEY` — required in production (32+ characters)
+- `ENVIRONMENT` — set to `production` in deployed environments
 - `CORS_ORIGINS` — comma-separated allowed web origins
 - `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` — enable Premium checkout (INR)
 - `OPENAI_API_KEY` (optional, for lyrics transcription)
+- Email settings (optional, for withdrawal CSV export)
 
-**Production checklist:** set `ENVIRONMENT=production`, a strong `SECRET_KEY`, strong database/MinIO credentials, Razorpay live keys, and restrict service ports to localhost or remove host bindings entirely.
+**Production checklist:** set `ENVIRONMENT=production`, a strong `SECRET_KEY`, strong database/MinIO credentials, Razorpay live keys, and restrict service ports.
 
 ---
 
@@ -210,11 +224,23 @@ Key backend settings (see `docker-compose.yml` and `backend/app/core/config.py`)
 | Role | Capabilities |
 |------|----------------|
 | `listener` | Browse, play, favorites, playlists, search, subscribe |
-| `studio_admin` | Upload/manage tracks, studio profile (onboarding gate) |
-| `radio_admin` | Own station(s), live broadcast, program schedule |
-| `admin` | Full platform management, subscription assignment |
+| `studio_admin` | Upload/manage tracks, studio profile, cover & licence uploads, wallet |
+| `radio_admin` | Own station(s), live broadcast, station cover & licence, program schedule, wallet |
+| `admin` | Full platform management, studios/stations moderation, revenue settings, withdrawals |
 
-Staff roles support **Admin mode** vs **Listen mode** (toggle in header). Playlists and library playback are disabled in admin mode.
+Staff roles support **Admin mode** vs **Listen mode** (toggle in header). Playlists and header search are disabled in admin mode.
+
+---
+
+## Profiles & cover images
+
+| What | Where to update |
+|------|-----------------|
+| Display picture | **My Profile** — hover the initials circle → camera icon → upload |
+| Studio cover | **Studio Profile** → Core Info → Studio Cover (save profile first) |
+| Radio station cover | **Station Profile** → edit station → Station Cover |
+
+Radio station covers appear in browse and search listings automatically.
 
 ---
 
@@ -222,7 +248,8 @@ Staff roles support **Admin mode** vs **Listen mode** (toggle in header). Playli
 
 | Document | Purpose |
 |----------|---------|
-| [implementation_plan.md](implementation_plan.md) | Technical spec, API summary, implementation status, gaps |
+| [implementation_plan.md](implementation_plan.md) | Technical spec, API summary, migrations, implementation status, gaps |
+| [task.md](task.md) | Completed feature checklist and open items |
 | [walkthrough.md](walkthrough.md) | Live broadcaster setup walkthrough |
 | [broadcaster/distributing_broadcaster.md](broadcaster/distributing_broadcaster.md) | Build & distribute desktop broadcaster |
 

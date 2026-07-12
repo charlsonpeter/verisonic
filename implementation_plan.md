@@ -1,6 +1,6 @@
 # VeriSonic — Implementation Plan & Technical Spec
 
-Living document describing what is **implemented today**, how the system works, and known gaps. Last aligned with the codebase: July 2026.
+Living document describing what is **implemented today**, how the system works, and known gaps. Last aligned with the codebase: **July 2026**.
 
 ---
 
@@ -9,10 +9,10 @@ Living document describing what is **implemented today**, how the system works, 
 VeriSonic is a full-stack audio platform:
 
 1. **Music catalog** — lossless uploads, automated quality analysis, multi-bitrate transcoding, HLS VOD playback, ticketed master-stream delivery
-2. **Live radio** — desktop broadcaster ingest, real-time listener delivery, station profiles and program schedules
-3. **Consumer experience** — web player with queue, lyrics, favorites, playlists, search, mobile-first navigation, stream quality tiers
-4. **Monetization** — free trial + preview limits, Razorpay checkout for Premium (INR), admin-assigned Unlimited tier
-5. **Administration** — user/role/subscription management, studio & station moderation, analytics
+2. **Live radio** — desktop broadcaster ingest, real-time listener delivery, station profiles, program schedules, cover art in listings
+3. **Consumer experience** — web player with queue, lyrics, favorites, playlists, unified search (header + full page), mobile-first navigation, stream quality tiers
+4. **Monetization** — free trial + preview limits, Razorpay checkout for Premium (INR), admin-assigned Unlimited tier, **owner wallet & revenue sharing**
+5. **Administration** — user/role/subscription management, studio & station moderation (super-admin views), licence document review, revenue settings, withdrawal processing, analytics
 
 ---
 
@@ -45,6 +45,7 @@ graph LR
     Score -->|approved| Transcode[Celery transcode_audio_task]
     Transcode --> S3[(MinIO S3)]
     S3 --> Play[HLS / MP3 / AAC / master stream URLs]
+    Play --> Credit[POST listen-progress → wallet credit]
 ```
 
 ### 2.3 Subscription checkout
@@ -63,12 +64,29 @@ sequenceDiagram
     API->>API: Apply plan / queue change
 ```
 
-### 2.4 Frontend shell
+### 2.4 Owner wallet & revenue (implemented)
+
+Premium subscription revenue is split between platform and content owners (studios + radio). Owners accrue balance from billable track plays and radio listen sessions; they withdraw to bank accounts after admin processing.
+
+```mermaid
+graph TD
+    Listener[Premium listener] --> Track[Track listen-progress]
+    Listener --> Radio[Radio listen-session heartbeat]
+    Track --> Billable[billable_track_plays]
+    Radio --> Session[radio_listen_sessions]
+    Billable --> Wallet[owner_wallets + ledger]
+    Session --> Wallet
+    Wallet --> Withdraw[withdrawal_requests]
+    Withdraw --> Admin[Admin process + UTR]
+```
+
+### 2.5 Frontend shell
 
 - Hash-based tab routing (`#home`, `#radio`, …) in `App.tsx` — no React Router
-- Global state: `AuthContext` (user, role, admin/listener mode, subscription), `AudioContext` (player, queue, favorites, quality)
-- Layout: `Header` (desktop nav + mobile app bar), `MobileNav` (bottom tabs), `AudioPlayer`, `OptionalPanel` (queue/programs)
+- Global state: `AuthContext` (user, role, admin/listener mode, subscription, route guards), `AudioContext` (player, queue, favorites, quality, radio listen sessions)
+- Layout: `Header` (desktop nav + **HeaderSearch** dropdown), `MobileNav`, `AudioPlayer`, `OptionalPanel` (queue/programs)
 - Subscription UI: `SubscriptionPlans`, `PremiumModal`, `SubscriptionDates`, `SubscriptionQueueNotice`
+- Wallet UI: `Wallet`, `EarningsChart`, `WithdrawModal`, `RevenueSettingsPanel` (admin)
 
 ---
 
@@ -81,34 +99,71 @@ sequenceDiagram
 | API | FastAPI, Uvicorn |
 | ORM | SQLAlchemy + PostgreSQL |
 | Tasks | Celery + Redis |
-| Storage | MinIO (S3-compatible) |
+| Storage | MinIO (S3-compatible); presigned URLs for media & uploads |
 | Live audio | WebSocket ingest, HTTP chunked MP3, WebRTC (aiortc) |
 | Auth | JWT + Redis refresh tokens, bcrypt |
 | Payments | Razorpay Orders API (INR) |
+| Encryption | Field-level encryption for bank account numbers (`field_encryption.py`) |
 
-### 3.2 Database models (14 tables + `schema_migrations`)
+### 3.2 Database models (21 tables + `schema_migrations`)
 
-`User`, `SubscriptionPayment`, `Artist`, `Album`, `Genre`, `Track`, `Playlist`, `PlaylistTrack`, `RadioStation`, `RadioSchedule`, `ListeningHistory`, `Favorite`, `AudioAnalysisReport`, `StreamingLog`
+**Core:** `User`, `SubscriptionPayment`, `Artist`, `Album`, `Genre`, `Track`, `Playlist`, `PlaylistTrack`, `RadioStation`, `RadioSchedule`, `ListeningHistory`, `Favorite`, `AudioAnalysisReport`, `StreamingLog`
+
+**Revenue / wallet:** `PlatformRevenueSettings`, `OwnerWallet`, `WalletLedgerEntry`, `OwnerBankAccount`, `WithdrawalRequest`, `BillableTrackPlay`, `RadioListenSession`
 
 Association table: `track_genres`
 
-Migrations: custom runner in `backend/app/db/migrations.py` (001–013).
+**Migrations:** custom runner in `backend/app/db/migrations.py` (**001–020**).
 
-Notable `User` fields: `subscription`, `subscription_cycle`, `subscription_expires_at`, `subscription_activated_at`, `pending_plan_id`, `pending_plan_paid`, `subscription_cancel_at_period_end`, `stream_quality`, `must_reset_password`.
+| Migration | Summary |
+|-----------|---------|
+| 001 | Track metadata columns (`cover_image_path`, lyrics, composer, etc.) |
+| 002–003 | Radio station core + profile columns |
+| 004–005 | Artist/station moderation (`is_active`, reactivation) |
+| 006–012 | User subscription, stream quality, queue, activation |
+| 013 | Artist profile onboarding fields |
+| 014 | Wallet/revenue tables + billable plays + radio listen sessions |
+| 015–017 | Encrypted bank accounts; withdrawal payout snapshots |
+| 018 | Licence document paths (studio + radio) |
+| 019 | Studio cover images (`artists.cover_image_path`) |
+| 020 | User profile images (`users.profile_image_path`) |
+
+**Notable `User` fields:** `subscription`, `subscription_cycle`, `subscription_expires_at`, `subscription_activated_at`, `pending_plan_id`, `pending_plan_paid`, `subscription_cancel_at_period_end`, `stream_quality`, `must_reset_password`, `profile_image_path`
+
+**Notable `Artist` fields:** `profile_complete`, full address/contact, `licence_document_path`, `cover_image_path`, moderation fields
+
+**Notable `RadioStation` fields:** `cover_art_url` (S3 key), `licence_document_path`, `programs_list`, `timezone`, moderation fields
 
 ### 3.3 API modules
 
 | Prefix | Module | Status |
 |--------|--------|--------|
-| `/api/auth` | Registration, login, refresh, profile, admin user/studio management, mode switch, password reset | ✅ |
-| `/api/music` | Upload, CRUD, search, quality, approve, play logging, transcribe, stream ticket + master stream | ✅ |
-| `/api/radio` | Stations CRUD, live ingest/playback, broadcast key, WebRTC, schedule add, reactivation fields | ✅ partial schedule |
+| `/api/auth` | Registration, login, refresh, profile, avatar, studio profile, licence/cover uploads, admin users/studios, mode switch, reactivation | ✅ |
+| `/api/music` | Upload, CRUD, search, quality, approve, play logging, listen-progress (wallet credit), transcribe, stream ticket + master stream | ✅ |
+| `/api/radio` | Stations CRUD, cover/licence uploads, live ingest/playback, broadcast key, WebRTC, schedule add, listen sessions, reactivation | ✅ partial schedule |
 | `/api/playlist` | CRUD, add/remove/reorder tracks | ✅ |
 | `/api/favorites` | List, add, remove | ✅ |
 | `/api/analytics` | Admin dashboard metrics | ✅ |
 | `/api/subscriptions` | Plans, Razorpay checkout, verify, schedule change, cancel/reactivate | ✅ (requires Razorpay keys) |
+| `/api/wallet` | Summary, ledger, bank account, withdraw, withdrawal export | ✅ |
+| `/api/admin/revenue` | Revenue settings, withdrawal queue, process payouts | ✅ admin only |
 
-### 3.4 Live streaming (implemented)
+### 3.4 Profile & media uploads
+
+| Entity | Upload endpoint | Storage key pattern | Response field |
+|--------|-----------------|---------------------|----------------|
+| User display picture | `POST /api/auth/profile/avatar` | `covers/users/{user_id}{ext}` | `profile_image_url` (presigned) |
+| Studio cover | `POST /api/auth/studio-profile/cover` | `covers/studio/{artist_id}{ext}` | `artist_profile.cover_art_url` |
+| Radio station cover | `POST /api/radio/{id}/cover` | `covers/radio/{station_id}{ext}` | `cover_art_url` on station |
+| Studio licence doc | `POST /api/auth/studio-profile/licence-document` | `licences/studio/...` | `licence_document_url` |
+| Radio licence doc | `POST /api/radio/{id}/licence-document` | `licences/radio/...` | `licence_document_url` |
+| Track cover | `PUT /api/music/{track_id}` (multipart) | `covers/{track_id}{ext}` | `cover_art_url` on track |
+
+Validation: `app/core/upload_validation.py` — images JPG/PNG/WEBP (10 MB); licence docs PDF/images (10 MB).
+
+Serialization: `app/services/cover_images.py` resolves S3 keys to presigned URLs; Unsplash fallback for radio listings when no cover set.
+
+### 3.5 Live streaming (implemented)
 
 | Endpoint | Purpose |
 |----------|---------|
@@ -119,6 +174,9 @@ Notable `User` fields: `subscription`, `subscription_cycle`, `subscription_expir
 | `GET /api/radio/{id}/broadcast-key` | Fetch current broadcast key |
 | `POST /api/radio/{id}/verify-broadcast-key` | Validate key before ingest |
 | `POST /api/radio/{id}/regenerate-key` | Rotate stream key (time-limited) |
+| `POST /api/radio/{id}/listen-session/start` | Start billable radio session (premium) |
+| `POST /api/radio/{id}/listen-session/heartbeat` | Accrue listen time + wallet credit |
+| `POST /api/radio/{id}/listen-session/end` | End session |
 
 `LiveStreamManager` (`app/services/live_stream.py`):
 - In-memory listener queues + chunk ring buffer
@@ -128,7 +186,7 @@ Notable `User` fields: `subscription`, `subscription_cycle`, `subscription_expir
 
 **Intentional behavior:** No Auto-DJ / scheduled track playback when broadcaster is offline. External `stream_url` can still mark a station online.
 
-### 3.5 Auth & access control
+### 3.6 Auth & access control
 
 - Roles: `listener`, `studio_admin`, `radio_admin`, `admin`
 - Header `X-User-Mode: listener` for staff browsing as listener
@@ -141,12 +199,12 @@ Notable `User` fields: `subscription`, `subscription_cycle`, `subscription_expir
   - `free` users get a **7-day trial** from account creation
   - Non-premium: 30s track preview, 60s radio preview, AAC 128 only
 
-### 3.6 Subscriptions (implemented)
+### 3.7 Subscriptions (implemented)
 
-Plans defined in `app/core/subscription_plans.py`:
+Plans defined in `app/core/subscription_plans.py` (amounts also configurable via `PlatformRevenueSettings`):
 
-| Plan ID | Tier | Cycle | Price (INR) |
-|---------|------|-------|-------------|
+| Plan ID | Tier | Cycle | Default price (INR) |
+|---------|------|-------|---------------------|
 | `premium_monthly` | premium | monthly | ₹99 |
 | `premium_yearly` | premium | yearly | ₹999 |
 
@@ -166,14 +224,42 @@ Plans defined in `app/core/subscription_plans.py`:
 
 Admin override: `PUT /api/auth/admin/users/{user_id}/subscription`
 
-Requires `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` in environment; returns `RazorpayNotConfiguredError` when unset.
+Requires `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` in environment.
 
-### 3.7 Celery tasks
+### 3.8 Wallet & revenue (implemented)
+
+**Owner endpoints** (`/api/wallet`):
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /wallet/summary` | Balance, earnings breakdown |
+| `GET /wallet/ledger` | Ledger entries |
+| `GET/PUT/DELETE /wallet/bank-account` | Saved bank details (encrypted at rest) |
+| `POST /wallet/withdraw` | Request withdrawal |
+| `GET /wallet/withdrawals` | Withdrawal history |
+| `GET /wallet/withdrawals/export.csv` | CSV export |
+| `POST /wallet/withdrawals/export/email` | Email CSV export |
+
+**Admin endpoints** (`/api/admin/revenue`):
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET/PUT /admin/revenue/settings` | Premium prices, revenue split BPS, min listen thresholds |
+| `GET /admin/revenue/withdrawals` | Pending/processed withdrawal queue |
+| `POST /admin/revenue/withdrawals/{id}/process` | Approve/reject + UTR reference |
+
+**Crediting:**
+- `POST /api/music/{id}/listen-progress` — billable track play when listened seconds ≥ `min_track_seconds`
+- Radio listen-session heartbeats — billable when session active and premium listener
+
+Services: `wallet_service.py`, `revenue_settings_service.py`, `withdrawal_export_service.py`, `field_encryption.py`
+
+### 3.9 Celery tasks
 
 1. **`analyze_audio_task`** — FFprobe metadata, librosa spectral analysis, spectrogram PNG, quality scoring, auto-reject rules
 2. **`transcode_audio_task`** — MP3 320, AAC 256/128, HLS VOD segments → S3
 
-### 3.8 Tests (CI)
+### 3.10 Tests (CI)
 
 - `tests/test_api_health.py`
 - `tests/test_audio_quality.py`
@@ -188,29 +274,66 @@ Requires `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` in environment; returns `Ra
 | Tab | Page | Notes |
 |-----|------|-------|
 | `landing` | LandingPage | Marketing, pricing (`SubscriptionPlans`), featured content |
-| `home` | Home | Feed with mobile tiles & horizontal scroll |
+| `home` | Home | Feed; **Popular Artists** → Search with artist selected |
 | `radio` | Radio | Listener tiles; admin dashboard & registration |
-| `search` | Search | Debounced search, filters, recent/trending |
+| `search` | Search | Full search: tracks → albums → radio → artists → playlists; detail views + Play All |
 | `favorites` | Favorites | API-backed favorites list |
 | `playlists` | Playlist | CRUD, drag-reorder, mobile drill-down |
 | `details` | MusicDetails | Track detail, lyrics, share |
-| `profile` | UserProfile | Profile, password, subscription dates |
-| `station-profile` | StationProfile | Radio station management |
-| `studio-profile` | StudioProfile | Studio onboarding & profile |
-| `settings` | Settings | Quality, subscription management, stream key (radio admin), audio output |
+| `profile` | UserProfile | Display name, email, password; **hover-to-upload avatar** on initials circle |
+| `station-profile` | StationProfile | Radio admin: station CRUD, cover, licence doc |
+| `studio-profile` | StudioProfile | Studio onboarding, cover, licence doc, reactivation appeals |
+| `settings` | Settings | Quality, subscription, audio output; **RevenueSettingsPanel** for admin |
 | `tracks` | TracksManagement | Upload queue, approval, acoustic reports |
-| `track-list` | StudioTrackList | Studio admin track library (listen mode entry) |
+| `track-list` | StudioTrackList | Studio admin track library |
 | `users` | UsersManagement | Admin user CRUD + subscription assignment |
 | `analytics` | AdminAnalytics | Metrics dashboard |
+| `wallet` | Wallet | Owner earnings, chart, withdraw, bank account |
 | `reports` | Inline in App | Acoustic report viewer |
 | `contact` | Contact | Support & upgrade requests |
 | `broadcaster-download` | BroadcasterDownload | Desktop app download guide |
 | `auth` | AuthPage | Login / register / social stub |
 | `admin-password-reset` | ForceAdminPasswordReset | Mandatory admin password change gate |
 
-**Not wired:** `Artist.tsx` (imported but no `case` in router; mock data), `Sidebar.tsx` (legacy; navigation uses Header + MobileNav).
+**Role-specific profile tabs (same route, different component):**
+- `station-profile` → `RadioStationsManagement` for platform **admin**; `StationProfile` for **radio_admin**
+- `studio-profile` → `StudiosManagement` for platform **admin**; `StudioProfile` for **studio_admin**
 
-### 4.2 Audio player
+**Not wired:** `Artist.tsx` (mock data; no router case). `Sidebar.tsx` (legacy; navigation uses Header + MobileNav).
+
+### 4.2 Search (implemented)
+
+**Shared utilities:** `frontend/src/utils/searchMatch.ts`
+- Token-based scoring with weights, fuzzy subsequence match, diacritic normalization
+- Artists derived from **track metadata** (`artist_name` / `artist_name_override`), not studio `Artist` profiles
+- Album candidates built from track `album_title`
+
+**Header search** (`HeaderSearch.tsx`):
+- Debounced dropdown preview (does not navigate on first keystroke)
+- Flat merged ranking: tracks, albums, radio, artists, playlists (playlists when logged in)
+- “Search all” link → full `#search` page
+- Hidden on `#search` tab and in staff **admin mode**
+
+**Full search page** (`Search.tsx`):
+- Filter chips: All, Tracks, Albums, Radio, Artists, Playlists
+- Result order: tracks → albums → radio → artists → playlists
+- Detail views: artist tracks, album tracks, playlist tracks
+- **Play All** on list rows and detail headers
+- Unified row components: `TrackSearchRow`, `RadioSearchRow` (frequency subtitle, station cover)
+
+**Backend:** `GET /api/music` search includes `Track.artist_name_override`.
+
+### 4.3 Profiles & covers (UI)
+
+| Surface | Component | UX |
+|---------|-----------|-----|
+| My Profile avatar | `ProfileAvatarUpload` | Initials circle; hover → camera icon → upload image |
+| Studio cover | `CoverImageUpload` in `StudioProfile` | Upload/replace in Core Info (after profile saved) |
+| Radio cover | `CoverImageUpload` in `StationProfile` | Upload on station **edit** (save station first on create) |
+| Licence docs | `LicenceDocumentUpload` | Studio + station profile forms |
+| Listings | `RadioCard`, `RadioSearchRow` | `station.cover_art_url` with presigned URL or fallback |
+
+### 4.4 Audio player
 
 | Feature | Desktop | Mobile |
 |---------|---------|--------|
@@ -223,32 +346,36 @@ Requires `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` in environment; returns `Ra
 | Live radio sync | 24h seek bar, edge sync | Same |
 | Stream quality | normal / high / hires / lossless (paid) | Same |
 | Audio output device | Settings picker (where supported) | — |
+| Radio billable sessions | Heartbeat while playing live station | Same |
 
 Lossless/hi-res playback uses short-lived stream tickets (`POST /api/music/{id}/stream/ticket` → `GET /api/music/{id}/stream/master`).
 
-### 4.3 Subscriptions UI
+### 4.5 Subscriptions UI
 
 - **LandingPage** and **Settings** embed `SubscriptionPlans`
 - **PremiumModal** opens Razorpay Checkout inline (via `subscriptionCheckout.ts`)
 - Supports immediate upgrade, queued plan changes, cancel-at-period-end, reactivation
 - **UsersManagement** shows subscription tier and dates; admin can assign tiers
 
-### 4.4 Mobile UI patterns
+### 4.6 Mobile UI patterns
 
-- **Header:** compact circular logo (left), centered page title, circular avatar (right)
+- **Header:** compact logo, centered page title, user menu (generic icon); search when not on search tab
 - **Bottom nav:** Home, Radio, Search, Favorites, Playlists (role-aware)
-- **Home feed:** horizontal scroll strips; trending 3×3 paged grids
-- **Radio (listener):** compact tiles — name + frequency row, location below
-- **Notifications:** banner toasts for errors/info/success; Swal retained for confirmations only
-- **Track lists:** full-width `TrackRow` (matches playlist layout)
+- **Home feed:** horizontal scroll strips; trending grids; clickable popular artists
+- **Radio (listener):** compact tiles — name + frequency, cover art, location
+- **Notifications:** banner toasts; Swal for confirmations
+- **Track lists:** full-width `TrackRow` / `TrackSearchRow`
 
-### 4.5 Route guards
+### 4.7 Route guards
 
 - Unauthenticated → `landing`
 - `must_reset_password` → `admin-password-reset` (blocks all other tabs)
-- `radio_admin` without station → restricted tabs until station registered (admin mode)
-- `studio_admin` in admin mode → onboarding flow until `profile_complete`; then tracks/track-list only
-- Admin mode → playlists disabled; library playback stopped; radio admin cannot play other stations
+- `radio_admin` without station → restricted tabs until station registered (**admin mode**)
+- `studio_admin` in admin mode → onboarding until `profile_complete`; then track-list/tracks/wallet
+- Admin mode → playlists disabled; library playback stopped; header search hidden
+- `settings` → requires listen mode or listener/admin role (`canAccessPlatformSettings`)
+- `station-profile` → admin or radio_admin in admin mode
+- `wallet` → studio_admin / radio_admin in admin mode
 
 ---
 
@@ -273,12 +400,14 @@ Lossless/hi-res playback uses short-lived stream tickets (`POST /api/music/{id}/
 |------|-----|
 | Radio schedule | Add-only API; no list/delete/reorder; no automated scheduled playback |
 | Playlists | `is_public` stored but no public discovery endpoint |
-| Artists | `Artist.tsx` page exists but not routed; search “artists” filter has no dedicated view |
+| Artists page | `Artist.tsx` exists but not routed; artist browse is via Search detail view only |
 | Listening history | Written on play; no user-facing history API/page |
 | Google OAuth | Mock endpoint only; no real token verification |
 | Razorpay | Full flow implemented; disabled until server keys are configured |
 | Track comments | Client-side mock on MusicDetails; not persisted |
 | Album/genre CRUD | Models exist; no standalone management APIs |
+| Studio cover in listings | Stored and returned via API; not yet shown in consumer browse UI |
+| Header avatar | Generic user icon; uploaded profile photo shown on My Profile only |
 
 ---
 
@@ -299,17 +428,29 @@ Lossless/hi-res playback uses short-lived stream tickets (`POST /api/music/{id}/
 5. Approve track (admin) if not auto-approved
 6. Play from Home or Search
 
-### Subscription checkout (requires Razorpay keys)
-1. Set `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` in `docker-compose.yml` or env
-2. Log in as listener, open Settings or Premium modal
-3. Select Premium Monthly or Yearly → complete Razorpay test checkout
-4. Confirm tier badge updates and full playback unlocked
+### Profile & covers
+1. **My Profile** — hover initials → camera → upload display picture
+2. **Studio Profile** — save profile → upload Studio Cover
+3. **Station Profile** — edit station → upload Station Cover
+4. Confirm radio cover appears in Radio browse and Search results
 
-### Mobile smoke test
-1. Open portal on narrow viewport
-2. Verify bottom nav, expanded player, queue full-screen sheet
-3. Verify banner on offline station tap (not blocking Swal modal)
-4. Verify Home trending 3×3 scroll and Radio tile strip
+### Search
+1. Type in header search → dropdown preview without leaving page
+2. Click “Search all” → full search page with filters
+3. Click Popular Artist on Home → search opens with artist detail
+4. Verify Play All on artist/album/playlist detail views
+
+### Wallet (studio/radio admin)
+1. Log in as studio or radio admin (admin mode)
+2. Open **My Wallet** — view balance and earnings chart
+3. Save bank account, request withdrawal
+4. As platform admin: Settings → Revenue settings; process withdrawal in admin revenue API/UI
+
+### Subscription checkout (requires Razorpay keys)
+1. Set `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET`
+2. Log in as listener, open Settings or Premium modal
+3. Complete Razorpay test checkout
+4. Confirm tier badge updates and full playback unlocked
 
 ### Automated
 ```bash
@@ -324,6 +465,7 @@ cd backend && pytest tests/ -v
 |------|-------|
 | Admin email | `admin@verisonic.com` |
 | Admin password | `admin12345` (must reset on first login) |
+| Admin subscription | `unlimited` (auto-applied on seed/sync) |
 | Genres | Rock, Electronic, Classical, Jazz, Hip-Hop, Ambient |
 
 ---
@@ -335,15 +477,22 @@ cd backend && pytest tests/ -v
 | API entry | `backend/app/main.py` |
 | Radio + live stream | `backend/app/api/radio.py`, `backend/app/services/live_stream.py` |
 | Music + upload | `backend/app/api/music.py`, `backend/app/tasks/tasks.py` |
+| Wallet + revenue | `backend/app/api/wallet.py`, `backend/app/api/revenue_admin.py`, `backend/app/services/wallet_service.py` |
 | Subscriptions | `backend/app/api/subscriptions.py`, `backend/app/services/subscription_service.py`, `backend/app/services/razorpay_service.py` |
+| Uploads (cover/licence) | `backend/app/services/cover_images.py`, `backend/app/services/licence_documents.py`, `backend/app/core/upload_validation.py` |
 | Premium gating | `backend/app/core/premium.py`, `backend/app/core/subscription_plans.py` |
 | Migrations | `backend/app/db/migrations.py` |
 | App router | `frontend/src/App.tsx` |
+| Search | `frontend/src/pages/Search.tsx`, `frontend/src/components/layout/HeaderSearch.tsx`, `frontend/src/utils/searchMatch.ts` |
+| Profiles | `frontend/src/pages/UserProfile.tsx`, `StudioProfile.tsx`, `StationProfile.tsx` |
+| Profile avatar upload | `frontend/src/components/shared/ProfileAvatarUpload.tsx` |
+| Cover/licence upload UI | `frontend/src/components/shared/CoverImageUpload.tsx`, `LicenceDocumentUpload.tsx` |
 | Player | `frontend/src/components/player/AudioPlayer.tsx` |
 | Audio state | `frontend/src/context/AudioContext.tsx` |
 | Auth state | `frontend/src/context/AuthContext.tsx` |
+| Wallet UI | `frontend/src/pages/Wallet.tsx`, `frontend/src/utils/wallet.ts` |
+| Revenue admin UI | `frontend/src/pages/RevenueSettings.tsx` |
 | Subscription checkout | `frontend/src/utils/subscriptionCheckout.ts`, `frontend/src/components/subscription/SubscriptionPlans.tsx` |
 | Stream quality | `frontend/src/utils/streamQuality.ts` |
 | Banner notifications | `frontend/src/components/shared/BannerHost.tsx`, `frontend/src/utils/banner.ts` |
-| Confirm dialogs | `frontend/src/utils/swal.ts` |
 | Broadcaster | `broadcaster/verisonic_broadcaster.py` |

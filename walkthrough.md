@@ -2,7 +2,7 @@
 
 This walkthrough covers the live broadcasting system: stream audio from your computer (microphone or system sound) to your station on the web portal.
 
-For full platform status, API details, and known gaps, see [implementation_plan.md](implementation_plan.md).
+For full platform status, API details, search, wallet/revenue, profiles, and known gaps, see [implementation_plan.md](implementation_plan.md).
 
 ---
 
