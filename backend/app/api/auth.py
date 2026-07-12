@@ -482,6 +482,9 @@ def update_user_role_admin(
         raise HTTPException(status_code=404, detail="User not found")
         
     user.role = role
+
+    if role == "admin":
+        apply_admin_subscription(user, "unlimited", None, db)
     
     # Ensure Artist profile is initialized if role is updated to studio_admin
     if role == "studio_admin":

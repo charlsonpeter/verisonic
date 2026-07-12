@@ -97,7 +97,7 @@ export const UsersManagement: React.FC = () => {
       fullName: user.full_name || '',
       email: user.email || '',
       role: user.role || 'listener',
-      subscription: user.subscription || 'free',
+      subscription: user.role === 'admin' ? 'unlimited' : (user.subscription || 'free'),
       subscriptionCycle: user.subscription_cycle || 'monthly'
     });
   };
@@ -462,7 +462,16 @@ export const UsersManagement: React.FC = () => {
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1.5">Role</label>
                   <select
                     value={editForm.role}
-                    onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
+                    onChange={(e) => {
+                      const role = e.target.value;
+                      setEditForm({
+                        ...editForm,
+                        role,
+                        ...(role === 'admin'
+                          ? { subscription: 'unlimited', subscriptionCycle: '' }
+                          : {}),
+                      });
+                    }}
                     disabled={selectedUser.id === currentUser?.id}
                     className="w-full bg-slate-950/60 border border-white/5 rounded-xl p-2.5 text-sm text-slate-200 outline-none focus:border-rose-500/50 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed font-semibold"
                   >
@@ -485,7 +494,8 @@ export const UsersManagement: React.FC = () => {
                         subscriptionCycle: subscription === 'premium' ? editForm.subscriptionCycle : '',
                       });
                     }}
-                    className="w-full bg-slate-950/60 border border-white/5 rounded-xl p-2.5 text-sm text-slate-200 outline-none focus:border-rose-500/50 cursor-pointer font-semibold"
+                    disabled={editForm.role === 'admin'}
+                    className="w-full bg-slate-950/60 border border-white/5 rounded-xl p-2.5 text-sm text-slate-200 outline-none focus:border-rose-500/50 cursor-pointer font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     <option value="free">Free</option>
                     <option value="premium">Premium</option>

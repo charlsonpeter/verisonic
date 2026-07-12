@@ -14,7 +14,7 @@ from app.db.migrations import run_migrations
 from app.models import User, Genre
 from app.core.security import get_password_hash, verify_password
 from app.api import auth, music, radio, playlists, analytics, favorites, subscriptions, wallet, revenue_admin
-from app.services.live_stream import live_stream_manager
+from app.services.subscription_service import apply_admin_subscription
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -53,8 +53,8 @@ async def startup_seeder():
     try:
         run_migrations(db)
 
-        admin_user = db.query(User).filter(User.role == "admin").first()
-        if not admin_user:
+        admin_users = db.query(User).filter(User.role == "admin").all()
+        if not admin_users:
             admin = User(
                 email="admin@verisonic.com",
                 hashed_password=get_password_hash("admin12345"),
@@ -63,16 +63,26 @@ async def startup_seeder():
                 must_reset_password=True,
             )
             db.add(admin)
+            db.flush()
+            apply_admin_subscription(admin, "unlimited", None, db)
             db.commit()
             print("Seeded default admin account (admin@verisonic.com / admin12345)")
-        elif (
-            admin_user.email == "admin@verisonic.com"
-            and verify_password("admin12345", admin_user.hashed_password)
-            and not admin_user.must_reset_password
-        ):
-            admin_user.must_reset_password = True
-            db.commit()
-            print("Flagged default admin account for mandatory password reset")
+        else:
+            dirty = False
+            for admin_user in admin_users:
+                if admin_user.subscription != "unlimited":
+                    apply_admin_subscription(admin_user, "unlimited", None, db)
+                    dirty = True
+                if (
+                    admin_user.email == "admin@verisonic.com"
+                    and verify_password("admin12345", admin_user.hashed_password)
+                    and not admin_user.must_reset_password
+                ):
+                    admin_user.must_reset_password = True
+                    dirty = True
+            if dirty:
+                db.commit()
+                print("Synced platform admin accounts (unlimited subscription / password reset flags)")
 
         genre_count = db.query(Genre).count()
         if genre_count == 0:
