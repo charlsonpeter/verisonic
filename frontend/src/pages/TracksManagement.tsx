@@ -6,7 +6,7 @@ import { AppModal } from '../components/shared/AppModal';
 import { showError, showConfirm } from '../utils/swal';
 import { trackHasPlayableStream } from '../utils/streamQuality';
 import { createAuthenticatedWebSocket } from '../utils/authTokens';
-import { TableSkeleton } from '../components/shared/skeleton';
+import { TableSkeleton, TrackCardSkeleton } from '../components/shared/skeleton';
 
 interface UploadQueueItem {
   id: string;
@@ -988,7 +988,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
 
       <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
         {isLoading && tracks.length === 0 ? (
-          <TableSkeleton rows={8} columns={6} />
+          <TableSkeleton rows={8} variant="tracks-admin" />
         ) : tracks.length === 0 ? (
           <div className="p-16 text-center space-y-3">
             <Music className="w-10 h-10 text-slate-600 mx-auto" />
@@ -1142,7 +1142,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
 
       <div className="md:hidden space-y-3">
         {isLoading && tracks.length === 0 ? (
-          <TableSkeleton rows={8} columns={6} />
+          <TrackCardSkeleton count={4} withCheckbox />
         ) : tracks.length === 0 ? (
           <div className="p-12 text-center space-y-3 rounded-2xl border border-white/5 bg-slate-900/10">
             <Music className="w-10 h-10 text-slate-600 mx-auto" />

@@ -215,7 +215,7 @@ export const UsersManagement: React.FC = () => {
 
       <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
         {isLoading ? (
-          <TableSkeleton rows={6} columns={5} />
+          <TableSkeleton rows={6} variant="users" />
         ) : users.length === 0 ? (
           <p className="p-8 text-xs text-slate-500 text-center font-bold">No users found.</p>
         ) : (

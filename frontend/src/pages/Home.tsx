@@ -7,8 +7,10 @@ import { useAuth } from '../context/AuthContext';
 import { TrackRow } from '../components/shared/TrackRow';
 import {
   TrackRowSkeleton,
-  TrackTileSkeleton,
+  RecentlyPlayedSkeleton,
+  TrendingMobileSkeleton,
   ArtistTileSkeleton,
+  ArtistListSkeleton,
 } from '../components/shared/skeleton';
 
 interface HomeProps {
@@ -171,7 +173,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
           <h3 className="text-lg font-extrabold text-white flex items-center gap-1.5">
             <Clock className="w-5 h-5 text-rose-400" /> Recently Played
           </h3>
-          <TrackTileSkeleton count={3} compact />
+          <RecentlyPlayedSkeleton count={3} />
         </section>
       ) : allTracks.length > 0 && (
         <section className="space-y-4">
@@ -221,7 +223,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
 
           {/* Mobile: 3×3 pages, row-major within each page, scroll horizontally */}
           {isLoading ? (
-            <TrackTileSkeleton count={9} compact />
+            <TrendingMobileSkeleton tileCount={9} />
           ) : (
           <div className={mobileScrollStrip}>
             {trackPages.map((page, pageIdx) => (
@@ -263,7 +265,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
 
           {/* Mobile: horizontal artist strip */}
           {isLoading ? (
-            <ArtistTileSkeleton count={4} />
+            <ArtistTileSkeleton count={4} scrollable />
           ) : popularArtists.length === 0 ? (
             <p className="md:hidden text-xs text-slate-500 text-center py-4">No artists available.</p>
           ) : (
@@ -275,20 +277,11 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
           )}
 
           {/* Desktop: artist list */}
+          {isLoading ? (
+            <ArtistListSkeleton count={4} />
+          ) : (
           <div className="hidden md:block space-y-4 bg-slate-950/40 backdrop-blur-md p-6 rounded-3xl shadow-inner">
-            {isLoading ? (
-              <div className="space-y-4">
-                {Array.from({ length: 4 }).map((_, idx) => (
-                  <div key={idx} className="flex items-center gap-4 p-2 rounded-3xl">
-                    <div className="w-11 h-11 rounded-full skeleton-shimmer flex-shrink-0" />
-                    <div className="min-w-0 flex-1 space-y-1.5">
-                      <div className="h-3 w-24 skeleton-shimmer rounded" />
-                      <div className="h-2.5 w-32 skeleton-shimmer rounded" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : popularArtists.length === 0 ? (
+            {popularArtists.length === 0 ? (
               <p className="text-xs text-slate-500 text-center py-4">No artists available.</p>
             ) : (
               popularArtists.map((art, idx) => (
@@ -307,6 +300,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
               ))
             )}
           </div>
+          )}
         </div>
 
       </section>

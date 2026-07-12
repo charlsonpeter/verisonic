@@ -7,7 +7,7 @@ import { AppModal } from '../components/shared/AppModal';
 import { TimePicker } from '../components/shared/TimePicker';
 import { showError } from '../utils/swal';
 import { fetchBroadcastKey, getAccessToken } from '../utils/authTokens';
-import { RadioCardSkeleton } from '../components/shared/skeleton';
+import { RadioPageSkeleton } from '../components/shared/skeleton';
 
 const API_URL = '/api';
 
@@ -16,7 +16,7 @@ const mobileScrollStrip =
 
 export const Radio: React.FC = () => {
   const { playRadioStation, activeRadioStation, isPlaying, togglePlay } = useAudio();
-  const { token, currentUser, isLoading: isAuthLoading, checkRadioStationStatus } = useAuth();
+  const { token, currentUser, isLoading: isAuthLoading, checkRadioStationStatus, hasRadioStation } = useAuth();
 
   // Radio states
   const [stations, setStations] = useState<RadioStation[]>([]);
@@ -367,12 +367,10 @@ export const Radio: React.FC = () => {
   // ── Render ────────────────────────────────────────────────────────────────
   if (isAuthLoading || isInitialLoad) {
     return (
-      <div className="space-y-6 md:space-y-10 w-full">
-        <div className="hidden md:block">
-          <div className="h-9 w-64 skeleton-shimmer rounded-xl" />
-        </div>
-        <RadioCardSkeleton count={4} />
-      </div>
+      <RadioPageSkeleton
+        isRadioAdmin={currentUser?.role === 'radio_admin'}
+        hasStation={hasRadioStation}
+      />
     );
   }
 

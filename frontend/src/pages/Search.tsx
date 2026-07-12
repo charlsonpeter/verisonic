@@ -3,7 +3,7 @@ import { Search as SearchIcon, X, Clock, HelpCircle, Flame, Star, ChevronRight }
 import { useAudio, Track, RadioStation } from '../context/AudioContext';
 import { TrackRow } from '../components/shared/TrackRow';
 import { RadioCard } from '../components/shared/RadioCard';
-import { TrackRowSkeleton, RadioCardSkeleton } from '../components/shared/skeleton';
+import { TrackRowSkeleton, RadioStationsSkeleton } from '../components/shared/skeleton';
 
 interface SearchProps {
   onViewDetails: (track: Track) => void;
@@ -202,7 +202,7 @@ export const Search: React.FC<SearchProps> = ({
                   <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest px-1 flex items-center gap-1">
                     Matched Live Stations
                   </h3>
-                  <RadioCardSkeleton count={2} />
+                  <RadioStationsSkeleton tileCount={3} cardCount={2} />
                 </div>
               )}
             </div>
