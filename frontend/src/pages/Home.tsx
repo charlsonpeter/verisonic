@@ -5,6 +5,11 @@ import {
 import { useAudio, Track } from '../context/AudioContext';
 import { useAuth } from '../context/AuthContext';
 import { TrackRow } from '../components/shared/TrackRow';
+import {
+  TrackRowSkeleton,
+  TrackTileSkeleton,
+  ArtistTileSkeleton,
+} from '../components/shared/skeleton';
 
 interface HomeProps {
   onNavigate: (tab: string) => void;
@@ -72,6 +77,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
   const { currentUser, hasRadioStation } = useAuth();
 
   const [allTracks, setAllTracks] = useState<Track[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   const popularArtists = Array.from(new Set(allTracks.map(t => t.artist_name))).map(name => {
     const tracksByArtist = allTracks.filter(t => t.artist_name === name);
@@ -91,6 +97,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
   useEffect(() => {
     // Load tracks from backend API
     const loadTracks = async () => {
+      setIsLoading(true);
       try {
         const res = await fetch('/api/music?approved_only=true');
         if (res.ok) {
@@ -104,6 +111,8 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
       } catch (e) {
         console.error("Failed to load tracks from backend API:", e);
         setAllTracks([]);
+      } finally {
+        setIsLoading(false);
       }
     };
     loadTracks();
@@ -157,7 +166,14 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
       )}
 
       {/* Recently Played */}
-      {allTracks.length > 0 && (
+      {isLoading ? (
+        <section className="space-y-4">
+          <h3 className="text-lg font-extrabold text-white flex items-center gap-1.5">
+            <Clock className="w-5 h-5 text-rose-400" /> Recently Played
+          </h3>
+          <TrackTileSkeleton count={3} compact />
+        </section>
+      ) : allTracks.length > 0 && (
         <section className="space-y-4">
           <h3 className="text-lg font-extrabold text-white flex items-center gap-1.5">
               <Clock className="w-5 h-5 text-rose-400" /> Recently Played
@@ -204,6 +220,9 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
           </div>
 
           {/* Mobile: 3×3 pages, row-major within each page, scroll horizontally */}
+          {isLoading ? (
+            <TrackTileSkeleton count={9} compact />
+          ) : (
           <div className={mobileScrollStrip}>
             {trackPages.map((page, pageIdx) => (
               <div
@@ -216,10 +235,14 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
               </div>
             ))}
           </div>
+          )}
 
           {/* Desktop: list view */}
           <div className="hidden md:block space-y-2 bg-slate-950/40 backdrop-blur-md p-5 rounded-3xl shadow-inner glow-rose/5">
-            {allTracks.map((track, index) => (
+            {isLoading ? (
+              <TrackRowSkeleton count={8} borderless />
+            ) : (
+            allTracks.map((track, index) => (
               <TrackRow
                 key={track.id}
                 track={track}
@@ -227,7 +250,8 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
                 onViewDetails={onViewDetails}
                 borderless
               />
-            ))}
+            ))
+            )}
           </div>
         </div>
 
@@ -238,7 +262,9 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
           </h3>
 
           {/* Mobile: horizontal artist strip */}
-          {popularArtists.length === 0 ? (
+          {isLoading ? (
+            <ArtistTileSkeleton count={4} />
+          ) : popularArtists.length === 0 ? (
             <p className="md:hidden text-xs text-slate-500 text-center py-4">No artists available.</p>
           ) : (
             <div className={mobileScrollStrip}>
@@ -250,7 +276,19 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
 
           {/* Desktop: artist list */}
           <div className="hidden md:block space-y-4 bg-slate-950/40 backdrop-blur-md p-6 rounded-3xl shadow-inner">
-            {popularArtists.length === 0 ? (
+            {isLoading ? (
+              <div className="space-y-4">
+                {Array.from({ length: 4 }).map((_, idx) => (
+                  <div key={idx} className="flex items-center gap-4 p-2 rounded-3xl">
+                    <div className="w-11 h-11 rounded-full skeleton-shimmer flex-shrink-0" />
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <div className="h-3 w-24 skeleton-shimmer rounded" />
+                      <div className="h-2.5 w-32 skeleton-shimmer rounded" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : popularArtists.length === 0 ? (
               <p className="text-xs text-slate-500 text-center py-4">No artists available.</p>
             ) : (
               popularArtists.map((art, idx) => (

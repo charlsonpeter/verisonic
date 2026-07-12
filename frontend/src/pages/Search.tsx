@@ -3,6 +3,7 @@ import { Search as SearchIcon, X, Clock, HelpCircle, Flame, Star, ChevronRight }
 import { useAudio, Track, RadioStation } from '../context/AudioContext';
 import { TrackRow } from '../components/shared/TrackRow';
 import { RadioCard } from '../components/shared/RadioCard';
+import { TrackRowSkeleton, RadioCardSkeleton } from '../components/shared/skeleton';
 
 interface SearchProps {
   onViewDetails: (track: Track) => void;
@@ -20,6 +21,7 @@ export const Search: React.FC<SearchProps> = ({
   const [recentSearches, setRecentSearches] = useState<string[]>(['Beethoven', 'Sarah Jenkins', 'Lossless Jazz']);
   const [filteredTracks, setFilteredTracks] = useState<Track[]>([]);
   const [filteredRadio, setFilteredRadio] = useState<RadioStation[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
 
   // Dynamic search matching
   useEffect(() => {
@@ -27,10 +29,12 @@ export const Search: React.FC<SearchProps> = ({
     if (!query) {
       setFilteredTracks([]);
       setFilteredRadio([]);
+      setIsSearching(false);
       return;
     }
 
     const performSearch = async () => {
+      setIsSearching(true);
       try {
         // Fetch tracks from backend API
         const tracksRes = await fetch(`/api/music?search=${encodeURIComponent(query)}&approved_only=true`);
@@ -52,6 +56,8 @@ export const Search: React.FC<SearchProps> = ({
         }
       } catch (e) {
         console.error("Search failed:", e);
+      } finally {
+        setIsSearching(false);
       }
     };
 
@@ -179,6 +185,29 @@ export const Search: React.FC<SearchProps> = ({
         </div>
       ) : (
         <div className="space-y-8">
+          {isSearching ? (
+            <div className="space-y-6">
+              {(activeFilter === 'all' || activeFilter === 'tracks') && (
+                <div className="space-y-4">
+                  <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest px-1 flex items-center gap-1">
+                    Matched Tracks
+                  </h3>
+                  <div className="space-y-2.5 bg-slate-900/15 border border-white/3 p-4 rounded-3xl">
+                    <TrackRowSkeleton count={5} />
+                  </div>
+                </div>
+              )}
+              {(activeFilter === 'all' || activeFilter === 'radio') && (
+                <div className="space-y-4">
+                  <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest px-1 flex items-center gap-1">
+                    Matched Live Stations
+                  </h3>
+                  <RadioCardSkeleton count={2} />
+                </div>
+              )}
+            </div>
+          ) : (
+          <>
           {/* Tracks results list */}
           {(activeFilter === 'all' || activeFilter === 'tracks') && filteredTracks.length > 0 && (
             <div className="space-y-4">
@@ -219,6 +248,8 @@ export const Search: React.FC<SearchProps> = ({
               <h4 className="text-sm font-bold text-slate-300">No matching results found</h4>
               <p className="text-xs text-slate-500 mt-1">Check the spelling or search by specific frequencies e.g. "96kHz".</p>
             </div>
+          )}
+          </>
           )}
         </div>
       )}

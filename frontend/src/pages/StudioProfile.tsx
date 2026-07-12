@@ -3,6 +3,7 @@ import { Disc, Settings, Edit2, Info, BookOpen, AlertTriangle, MapPin, Sparkles 
 import { useAuth } from '../context/AuthContext';
 import { showConfirm, showError, showSuccess } from '../utils/swal';
 import Swal from 'sweetalert2';
+import { CardGridSkeleton } from '../components/shared/skeleton';
 
 const emptyStudioForm = {
   stage_name: '',
@@ -533,7 +534,7 @@ export const StudioProfile: React.FC<{ onNavigate?: (tab: string) => void }> = (
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
               {isLoading ? (
-                <p className="text-slate-500 text-xs py-8 col-span-2 text-center font-sans">Loading music studio profiles...</p>
+                <CardGridSkeleton count={2} />
               ) : filteredStudios.length === 0 ? (
                 <div className="glass-card p-12 rounded-3xl border border-white/5 text-center col-span-2 space-y-4">
                   <Info className="w-12 h-12 text-rose-400/50 mx-auto" />

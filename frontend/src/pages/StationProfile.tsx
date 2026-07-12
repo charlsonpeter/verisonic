@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { showConfirm, showError, showSuccess } from '../utils/swal';
 import { fetchBroadcastKey, getAccessToken } from '../utils/authTokens';
 import Swal from 'sweetalert2';
+import { CardGridSkeleton } from '../components/shared/skeleton';
 
 interface StationProfileProps {
   onNavigate?: (tab: string) => void;
@@ -497,7 +498,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
             {isLoading ? (
-              <p className="text-slate-500 text-xs py-8 col-span-2 text-center font-sans">Loading station profiles...</p>
+              <CardGridSkeleton count={2} />
             ) : myStations.length === 0 ? (
               <div className="glass-card p-12 rounded-3xl border border-white/5 text-center col-span-2 space-y-4">
                 <Info className="w-12 h-12 text-rose-400/50 mx-auto" />

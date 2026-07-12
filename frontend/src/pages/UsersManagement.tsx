@@ -4,6 +4,7 @@ import { AppModal } from '../components/shared/AppModal';
 import { Users, Trash2, Eye, Pencil, Mail, Shield, Crown, Sparkles, UserCircle2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { showConfirm } from '../utils/swal';
+import { TableSkeleton, UserCardSkeleton } from '../components/shared/skeleton';
 
 const roleBadgeClass = (role: string) => {
   switch (role) {
@@ -214,7 +215,7 @@ export const UsersManagement: React.FC = () => {
 
       <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
         {isLoading ? (
-          <p className="p-8 text-xs text-slate-500 text-center">Loading platform users...</p>
+          <TableSkeleton rows={6} columns={5} />
         ) : users.length === 0 ? (
           <p className="p-8 text-xs text-slate-500 text-center font-bold">No users found.</p>
         ) : (
@@ -298,7 +299,7 @@ export const UsersManagement: React.FC = () => {
       {/* Mobile card list */}
       <div className="md:hidden space-y-3">
         {isLoading ? (
-          <p className="p-8 text-xs text-slate-500 text-center">Loading platform users...</p>
+          <UserCardSkeleton count={4} />
         ) : users.length === 0 ? (
           <p className="p-8 text-xs text-slate-500 text-center font-bold">No users found.</p>
         ) : (

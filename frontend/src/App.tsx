@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
 import { 
   Play, Pause, Volume2, VolumeX, Search, 
   ShieldCheck, Radio, BarChart2, Music, CheckCircle, 
@@ -25,28 +25,32 @@ import { TrackRow } from './components/shared/TrackRow';
 import { LyricsModal } from './components/shared/LyricsModal';
 import { AcousticScoreBreakdown } from './components/shared/AcousticScoreBreakdown';
 
-// Page components
-import { LandingPage } from './pages/LandingPage';
-import { Home } from './pages/Home';
-import { Radio as RadioPage } from './pages/Radio';
-import { Search as SearchPage } from './pages/Search';
-import { Artist as ArtistPage } from './pages/Artist';
-import { Playlist as PlaylistPage } from './pages/Playlist';
-import { MusicDetails } from './pages/MusicDetails';
-import { UserProfile } from './pages/UserProfile';
-import { Favorites } from './pages/Favorites';
-import { StationProfile } from './pages/StationProfile';
-import { StudioProfile } from './pages/StudioProfile';
-import { Settings } from './pages/Settings';
-import { AuthPage } from './pages/AuthPage';
-import { ForceAdminPasswordReset } from './pages/ForceAdminPasswordReset';
-import { UsersManagement } from './pages/UsersManagement';
-import { TracksManagement } from './pages/TracksManagement';
-import { StudioTrackList } from './pages/StudioTrackList';
-import { Contact } from './pages/Contact';
-import { BroadcasterDownload } from './pages/BroadcasterDownload';
-import { AdminAnalytics } from './pages/AdminAnalytics';
-import { Wallet } from './pages/Wallet';
+// Shared skeleton fallback for lazy-loaded pages
+import { PageSkeleton } from './components/shared/skeleton';
+
+// Page components (lazy-loaded)
+const LandingPage = lazy(() => import('./pages/LandingPage').then((m) => ({ default: m.LandingPage })));
+const Home = lazy(() => import('./pages/Home').then((m) => ({ default: m.Home })));
+const RadioPage = lazy(() => import('./pages/Radio').then((m) => ({ default: m.Radio })));
+const SearchPage = lazy(() => import('./pages/Search').then((m) => ({ default: m.Search })));
+const PlaylistPage = lazy(() => import('./pages/Playlist').then((m) => ({ default: m.Playlist })));
+const MusicDetails = lazy(() => import('./pages/MusicDetails').then((m) => ({ default: m.MusicDetails })));
+const UserProfile = lazy(() => import('./pages/UserProfile').then((m) => ({ default: m.UserProfile })));
+const Favorites = lazy(() => import('./pages/Favorites').then((m) => ({ default: m.Favorites })));
+const StationProfile = lazy(() => import('./pages/StationProfile').then((m) => ({ default: m.StationProfile })));
+const StudioProfile = lazy(() => import('./pages/StudioProfile').then((m) => ({ default: m.StudioProfile })));
+const Settings = lazy(() => import('./pages/Settings').then((m) => ({ default: m.Settings })));
+const AuthPage = lazy(() => import('./pages/AuthPage').then((m) => ({ default: m.AuthPage })));
+const ForceAdminPasswordReset = lazy(() =>
+  import('./pages/ForceAdminPasswordReset').then((m) => ({ default: m.ForceAdminPasswordReset }))
+);
+const UsersManagement = lazy(() => import('./pages/UsersManagement').then((m) => ({ default: m.UsersManagement })));
+const TracksManagement = lazy(() => import('./pages/TracksManagement').then((m) => ({ default: m.TracksManagement })));
+const StudioTrackList = lazy(() => import('./pages/StudioTrackList').then((m) => ({ default: m.StudioTrackList })));
+const Contact = lazy(() => import('./pages/Contact').then((m) => ({ default: m.Contact })));
+const BroadcasterDownload = lazy(() => import('./pages/BroadcasterDownload').then((m) => ({ default: m.BroadcasterDownload })));
+const AdminAnalytics = lazy(() => import('./pages/AdminAnalytics').then((m) => ({ default: m.AdminAnalytics })));
+const Wallet = lazy(() => import('./pages/Wallet').then((m) => ({ default: m.Wallet })));
 
 const API_URL = '/api';
 
@@ -657,7 +661,9 @@ function DashboardContent() {
           }`}
         >
           <div key={activeTab} className="animate-page-entry w-full">
-            {renderTabContent()}
+            <Suspense fallback={<PageSkeleton />}>
+              {renderTabContent()}
+            </Suspense>
           </div>
         </main>
 

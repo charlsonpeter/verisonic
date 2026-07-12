@@ -9,6 +9,7 @@ import {
   saveRevenueSettings,
   type RevenueSettings,
 } from '../utils/wallet';
+import { Skeleton } from '../components/shared/skeleton';
 
 export const RevenueSettingsPanel: React.FC = () => {
   const { token } = useAuth();
@@ -84,6 +85,29 @@ export const RevenueSettingsPanel: React.FC = () => {
       </div>
 
       <form onSubmit={handleSave} className="rounded-2xl border border-white/10 bg-slate-950/40 p-5 space-y-5">
+        {loading && !settings ? (
+          <div className="space-y-5">
+            <Skeleton className="h-4 w-40" />
+            <div className="grid sm:grid-cols-2 gap-3">
+              <Skeleton className="h-10 w-full rounded-xl" />
+              <Skeleton className="h-10 w-full rounded-xl" />
+            </div>
+            <Skeleton className="h-4 w-48" />
+            <div className="grid sm:grid-cols-2 gap-3">
+              {Array.from({ length: 4 }).map((_, idx) => (
+                <Skeleton key={idx} className="h-10 w-full rounded-xl" />
+              ))}
+            </div>
+            <Skeleton className="h-4 w-56" />
+            <div className="grid sm:grid-cols-2 gap-3">
+              {Array.from({ length: 5 }).map((_, idx) => (
+                <Skeleton key={idx} className="h-10 w-full rounded-xl" />
+              ))}
+            </div>
+            <Skeleton className="h-9 w-40 rounded-xl" />
+          </div>
+        ) : (
+        <>
         <h4 className="text-sm font-bold text-white flex items-center gap-2">
           <IndianRupee className="w-4 h-4" /> Subscription prices
         </h4>
@@ -161,6 +185,8 @@ export const RevenueSettingsPanel: React.FC = () => {
         >
           Save revenue settings
         </button>
+        </>
+        )}
       </form>
     </div>
   );

@@ -3,6 +3,7 @@ import { Play, Disc, Plus, Trash2, FolderHeart, Loader2, GripVertical, ChevronLe
 import { useAuth } from '../context/AuthContext';
 import { useAudio, Track } from '../context/AudioContext';
 import { TrackRow } from '../components/shared/TrackRow';
+import { PlaylistListSkeleton } from '../components/shared/skeleton';
 import { toastError, toastSuccess } from '../utils/toast';
 
 interface PlaylistData {
@@ -381,7 +382,7 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
 
           <div className="bg-slate-900/20 border border-white/5 rounded-2xl overflow-hidden">
             {isLoading ? (
-              <p className="text-xs text-slate-500 text-center py-8">Loading playlists...</p>
+              <PlaylistListSkeleton count={4} />
             ) : playlists.length === 0 ? (
               <p className="text-xs text-slate-500 text-center py-8 px-4">No playlists yet. Create one above.</p>
             ) : (

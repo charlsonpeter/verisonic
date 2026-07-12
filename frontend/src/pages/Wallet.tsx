@@ -25,6 +25,7 @@ import {
   type WalletSummary,
   type WithdrawalRequest,
 } from '../utils/wallet';
+import { WalletSkeleton } from '../components/shared/skeleton';
 
 export const Wallet: React.FC = () => {
   const { token, currentUser } = useAuth();
@@ -168,6 +169,9 @@ export const Wallet: React.FC = () => {
       </div>
 
       {/* 3-column body — col 3 narrower */}
+      {loading && !summary ? (
+        <WalletSkeleton />
+      ) : (
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-5 md:gap-6 min-h-0 items-stretch">
         {/* Col 1 — recent earnings */}
         <div className="lg:col-span-6 flex flex-col min-h-[280px]">
@@ -255,6 +259,7 @@ export const Wallet: React.FC = () => {
           </div>
         </div>
       </div>
+      )}
 
       <WithdrawModal
         open={withdrawOpen}
