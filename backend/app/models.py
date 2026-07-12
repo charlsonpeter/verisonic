@@ -17,6 +17,7 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     full_name = Column(String, nullable=True)
+    profile_image_path = Column(String, nullable=True)
     role = Column(String, default="listener") # admin, artist, listener
     subscription = Column(String, default="free") # free, premium, unlimited
     subscription_cycle = Column(String, nullable=True) # monthly, yearly, null
@@ -75,6 +76,8 @@ class Artist(Base):
     # Detailed profile metadata
     category = Column(String, nullable=True)
     licence = Column(String, nullable=True)
+    licence_document_path = Column(String, nullable=True)
+    cover_image_path = Column(String, nullable=True)
     street_address = Column(String, nullable=True)
     city = Column(String, nullable=True)
     state_province = Column(String, nullable=True)
@@ -204,6 +207,7 @@ class RadioStation(Base):
     # Detailed profile metadata
     category = Column(String, nullable=True)
     licence = Column(String, nullable=True)
+    licence_document_path = Column(String, nullable=True)
     street_address = Column(String, nullable=True)
     city = Column(String, nullable=True)
     state_province = Column(String, nullable=True)

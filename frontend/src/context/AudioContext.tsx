@@ -79,6 +79,7 @@ export interface RadioStation {
   current_program_title?: string;
   rj_name?: string;
   licence?: string;
+  licence_document_url?: string;
   street_address?: string;
   city?: string;
   state_province?: string;

@@ -210,6 +210,16 @@ MIGRATIONS = [
         WHERE account_holder_name IS NOT NULL
           AND account_holder_name NOT LIKE 'gAAAA%';
     """),
+    ("018_licence_document_paths", """
+        ALTER TABLE radio_stations ADD COLUMN IF NOT EXISTS licence_document_path VARCHAR;
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS licence_document_path VARCHAR;
+    """),
+    ("019_profile_cover_images", """
+        ALTER TABLE artists ADD COLUMN IF NOT EXISTS cover_image_path VARCHAR;
+    """),
+    ("020_user_profile_images", """
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_image_path VARCHAR;
+    """),
 ]
 
 

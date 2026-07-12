@@ -590,8 +590,9 @@ def list_tracks(
             
         query = query.outerjoin(Album, Track.album_id == Album.id)\
                      .filter(
-                         (Track.title.ilike(search_pattern)) | 
-                         (Artist.stage_name.ilike(search_pattern)) | 
+                         (Track.title.ilike(search_pattern)) |
+                         (Track.artist_name_override.ilike(search_pattern)) |
+                         (Artist.stage_name.ilike(search_pattern)) |
                          (Album.title.ilike(search_pattern))
                      )
                      

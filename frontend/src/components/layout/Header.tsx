@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Search, Crown, Signal, User, ChevronDown, 
+  Crown, Signal, User, ChevronDown,
   Compass, Radio, Heart, FolderHeart, UploadCloud,
   ShieldCheck, BarChart2, Settings, LogOut, Disc, Mail, Laptop, Music, Wallet
 } from 'lucide-react';
@@ -8,17 +8,20 @@ import { useAuth } from '../../context/AuthContext';
 import { useAudio } from '../../context/AudioContext';
 import { getPageTitle } from '../../utils/pageTitles';
 import { getAccountTierLabel, hasPaidSubscription, isOnFreeTrial } from '../../utils/accountTier';
+import { HeaderSearch } from './HeaderSearch';
 
 interface HeaderProps {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
+  selectedSearchArtist: string | null;
+  setSelectedSearchArtist: (artist: string | null) => void;
   activeTab: string;
   setActiveTab: (tab: string) => void;
   pageTitleOverride?: string | null;
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
-  searchQuery, setSearchQuery, activeTab, setActiveTab, pageTitleOverride
+  searchQuery, setSearchQuery, selectedSearchArtist, setSelectedSearchArtist, activeTab, setActiveTab, pageTitleOverride
 }) => {
   const { currentUser, logout, token, userMode, switchUserMode, isSwitchingMode, isStaffInAdminMode, canUsePlaylists, canAccessPlatformSettings, canAccessStationProfile } = useAuth();
   const { setShowPremiumModal } = useAudio();
@@ -64,7 +67,6 @@ export const Header: React.FC<HeaderProps> = ({
       : [
         { id: 'home', label: 'Home Feed', icon: Compass },
         { id: 'radio', label: 'Radio Stations', icon: Radio },
-        { id: 'search', label: 'Search', icon: Search },
         { id: 'favorites', label: 'Favorites', icon: Heart },
         ...(canUsePlaylists || !token ? [{ id: 'playlists', label: 'Playlists', icon: FolderHeart }] : []),
         { id: 'contact', label: 'Contact Us', icon: Mail }
@@ -152,21 +154,14 @@ export const Header: React.FC<HeaderProps> = ({
       {/* 3. Right: Search & Profile & telemetry status */}
       <div className="relative z-10 flex items-center gap-3 md:gap-4 flex-shrink-0 ml-auto">
         
-        {/* Compact Search — visible from tablet up; narrower until lg */}
+        {/* Compact Search — dropdown preview; full page via "Search all" */}
         {activeTab !== 'search' && !isStaffInAdminMode && (
-          <div className="hidden md:flex items-center gap-2 bg-slate-900/40 border border-white/5 rounded-xl px-2.5 lg:px-3 py-1.5 hover:border-slate-800 transition duration-300 w-28 lg:w-48 flex-shrink-0">
-            <Search className="w-4 h-4 text-slate-500 flex-shrink-0" />
-            <input 
-              type="text" 
-              placeholder="Search..." 
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setActiveTab('search');
-              }}
-              className="bg-transparent text-xs text-slate-200 outline-none w-full min-w-0 placeholder-slate-505"
-            />
-          </div>
+          <HeaderSearch
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            setSelectedArtist={setSelectedSearchArtist}
+            setActiveTab={setActiveTab}
+          />
         )}
         {/* VIP badge */}
         {currentUser && !isStaffInAdminMode && (

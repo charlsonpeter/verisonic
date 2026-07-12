@@ -15,6 +15,7 @@ export interface User {
   id: number;
   email: string;
   full_name: string;
+  profile_image_url?: string | null;
   role: 'listener' | 'studio_admin' | 'radio_admin' | 'admin';
   real_role?: 'listener' | 'studio_admin' | 'radio_admin' | 'admin';
   subscription: 'free' | 'premium' | 'unlimited';
@@ -39,6 +40,8 @@ export interface User {
     profile_complete?: boolean;
     category?: string | null;
     licence?: string | null;
+    licence_document_url?: string | null;
+    cover_art_url?: string | null;
     street_address?: string | null;
     city?: string | null;
     state_province?: string | null;

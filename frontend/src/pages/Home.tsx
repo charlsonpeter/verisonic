@@ -16,6 +16,7 @@ import {
 interface HomeProps {
   onNavigate: (tab: string) => void;
   onViewDetails: (track: Track) => void;
+  onArtistClick: (artistName: string) => void;
 }
 
 const mobileScrollStrip =
@@ -62,19 +63,24 @@ const ArtistTile: React.FC<{
   name: string;
   tracks: number;
   avatar: string;
-}> = ({ name, tracks, avatar }) => (
-  <div className="flex-shrink-0 w-[5.5rem] text-center">
-    <div className="w-[5.5rem] aspect-square rounded-xl overflow-hidden bg-slate-800 mb-1.5 p-2.5 flex items-center justify-center">
+  onClick: () => void;
+}> = ({ name, tracks, avatar, onClick }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className="flex-shrink-0 w-[5.5rem] text-center group active:scale-[0.98] transition"
+  >
+    <div className="w-[5.5rem] aspect-square rounded-xl overflow-hidden bg-slate-800 mb-1.5 p-2.5 flex items-center justify-center group-hover:bg-slate-800/80">
       <div className="w-full h-full rounded-full overflow-hidden">
         <img src={avatar} alt="" className="w-full h-full object-cover" />
       </div>
     </div>
-    <h4 className="text-[10px] font-bold text-slate-200 truncate">{name}</h4>
+    <h4 className="text-[10px] font-bold text-slate-200 truncate group-hover:text-rose-400 transition">{name}</h4>
     <p className="text-[9px] text-slate-550 truncate mt-0">{tracks} Tracks</p>
-  </div>
+  </button>
 );
 
-export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
+export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistClick }) => {
   const { playTrack } = useAudio();
   const { currentUser, hasRadioStation } = useAuth();
 
@@ -270,8 +276,14 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
             <p className="md:hidden text-xs text-slate-500 text-center py-4">No artists available.</p>
           ) : (
             <div className={mobileScrollStrip}>
-              {popularArtists.map((art, idx) => (
-                <ArtistTile key={idx} name={art.name} tracks={art.tracks} avatar={art.avatar} />
+              {popularArtists.map((art) => (
+                <ArtistTile
+                  key={art.name}
+                  name={art.name}
+                  tracks={art.tracks}
+                  avatar={art.avatar}
+                  onClick={() => onArtistClick(art.name)}
+                />
               ))}
             </div>
           )}
@@ -284,19 +296,21 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails }) => {
             {popularArtists.length === 0 ? (
               <p className="text-xs text-slate-500 text-center py-4">No artists available.</p>
             ) : (
-              popularArtists.map((art, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center gap-4 p-2 rounded-3xl"
+              popularArtists.map((art) => (
+                <button
+                  key={art.name}
+                  type="button"
+                  onClick={() => onArtistClick(art.name)}
+                  className="w-full flex items-center gap-4 p-2 rounded-3xl hover:bg-slate-900/40 transition text-left group"
                 >
                   <div className="w-11 h-11 rounded-full overflow-hidden border border-white/5 flex-shrink-0">
-                    <img src={art.avatar} alt="Avatar" className="w-full h-full object-cover" />
+                    <img src={art.avatar} alt="" className="w-full h-full object-cover" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h4 className="text-xs font-bold text-slate-200 truncate">{art.name}</h4>
+                    <h4 className="text-xs font-bold text-slate-200 truncate group-hover:text-rose-400 transition">{art.name}</h4>
                     <p className="text-[10px] text-slate-550 truncate mt-0.5">{art.genre} • {art.tracks} Tracks</p>
                   </div>
-                </div>
+                </button>
               ))
             )}
           </div>

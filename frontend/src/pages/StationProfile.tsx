@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Settings, Plus, Edit2, ArrowLeft, Radio, Info, MapPin, Globe, Eye, EyeOff, Copy, Check, RefreshCw, Wifi } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { showConfirm, showError, showSuccess } from '../utils/swal';
+import { showError, showSuccess } from '../utils/swal';
 import { fetchBroadcastKey, getAccessToken } from '../utils/authTokens';
 import Swal from 'sweetalert2';
 import { CardGridSkeleton } from '../components/shared/skeleton';
+import { LicenceDocumentUpload } from '../components/shared/LicenceDocumentUpload';
+import { CoverImageUpload } from '../components/shared/CoverImageUpload';
 
 interface StationProfileProps {
   onNavigate?: (tab: string) => void;
@@ -13,7 +15,6 @@ interface StationProfileProps {
 export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) => {
   const { currentUser, token, checkRadioStationStatus } = useAuth();
   const userRole = currentUser?.real_role || currentUser?.role;
-  const isSuperAdmin = userRole === 'admin';
   const [myStations, setMyStations] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'edit' | 'add'>('list');
@@ -50,11 +51,13 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
 
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [licenceDocumentUrl, setLicenceDocumentUrl] = useState<string | null>(null);
+  const [coverArtUrl, setCoverArtUrl] = useState<string | null>(null);
 
   const fetchStations = async () => {
     setIsLoading(true);
     const userRole = currentUser?.real_role || currentUser?.role;
-    if (userRole !== 'radio_admin' && userRole !== 'admin') {
+    if (userRole !== 'radio_admin') {
       setIsLoading(false);
       return;
     }
@@ -62,14 +65,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
       const res = await fetch('/api/radio');
       if (res.ok) {
         const data = await res.json();
-        // Filter stations owned by this user
-        let stationsList = [];
-        if (userRole === 'admin') {
-          stationsList = data;
-        } else {
-          stationsList = data.filter((s: any) => s.owner_id === currentUser?.id);
-        }
-        setMyStations(stationsList);
+        setMyStations(data.filter((s: any) => s.owner_id === currentUser?.id));
       }
     } catch (e) {
       console.error("Failed to fetch stations for profile:", e);
@@ -80,20 +76,14 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
 
   const fetchStationsSilently = async () => {
     const userRole = currentUser?.real_role || currentUser?.role;
-    if (userRole !== 'radio_admin' && userRole !== 'admin') {
+    if (userRole !== 'radio_admin') {
       return;
     }
     try {
       const res = await fetch('/api/radio');
       if (res.ok) {
         const data = await res.json();
-        let stationsList = [];
-        if (userRole === 'admin') {
-          stationsList = data;
-        } else {
-          stationsList = data.filter((s: any) => s.owner_id === currentUser?.id);
-        }
-        setMyStations(stationsList);
+        setMyStations(data.filter((s: any) => s.owner_id === currentUser?.id));
       }
     } catch (e) {
       console.error("Failed to silently fetch stations:", e);
@@ -140,6 +130,8 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
       is_active: station.is_active !== undefined ? station.is_active : true
     });
     setMessage(null);
+    setLicenceDocumentUrl(station.licence_document_url || null);
+    setCoverArtUrl(station.cover_art_url || null);
     setViewMode('edit');
   };
 
@@ -166,6 +158,8 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
       is_active: true
     });
     setMessage(null);
+    setLicenceDocumentUrl(null);
+    setCoverArtUrl(null);
     setViewMode('add');
   };
 
@@ -205,18 +199,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
         if (checkRadioStationStatus) {
           await checkRadioStationStatus();
         }
-        if (!isSuperAdmin) {
-          onNavigate?.('radio');
-          return;
-        }
-        setMessage({
-          type: 'success',
-          text: isEdit ? 'Station details updated successfully!' : 'Station registered successfully!',
-        });
-        setTimeout(() => {
-          setViewMode('list');
-          setMessage(null);
-        }, 1500);
+        onNavigate?.('radio');
       } else {
         const err = await res.json();
         setMessage({ type: 'error', text: err.detail || 'Request failed.' });
@@ -225,78 +208,6 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
       setMessage({ type: 'error', text: 'Connection failed.' });
     } finally {
       setIsSaving(false);
-    }
-  };
-
-  const handleDisableStation = async (station: any) => {
-    const { value: reason } = await Swal.fire({
-      title: 'Disable Radio Station',
-      text: 'Please enter a reason for disabling this station:',
-      input: 'text',
-      inputPlaceholder: 'Reason for deactivation...',
-      showCancelButton: true,
-      confirmButtonColor: '#e11d48',
-      cancelButtonColor: '#334155',
-      background: '#0f172a',
-      color: '#fff',
-      inputValidator: (value) => {
-        if (!value) {
-          return 'Deactivation reason is required!';
-        }
-      }
-    });
-
-    if (reason) {
-      try {
-        const res = await fetch(`/api/radio/${station.id}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token || localStorage.getItem('token') || ''}`
-          },
-          body: JSON.stringify({
-            is_active: false,
-            disabled_reason: reason
-          })
-        });
-        if (res.ok) {
-          await fetchStations();
-          showSuccess('Station Disabled');
-        } else {
-          showError("Failed to disable station");
-        }
-      } catch {
-        showError("Connection failed");
-      }
-    }
-  };
-
-  const handleEnableStation = async (station: any) => {
-    const confirmed = await showConfirm(
-      'Enable Radio Station',
-      `Are you sure you want to reactivate ${station.name}?`,
-      'Yes, reactivate'
-    );
-    if (!confirmed) return;
-
-    try {
-      const res = await fetch(`/api/radio/${station.id}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token || localStorage.getItem('token') || ''}`
-        },
-        body: JSON.stringify({
-          is_active: true
-        })
-      });
-      if (res.ok) {
-        await fetchStations();
-      } else {
-        showError("Failed to enable station");
-      }
-    } catch {
-      showError("Connection failed");
     }
   };
 
@@ -592,7 +503,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
                 )}
 
                 <div className="flex gap-3 pt-2">
-                  {(station.is_active || isSuperAdmin) && (
+                  {station.is_active && (
                     <button
                       onClick={() => handleEditClick(station)}
                       className="flex-1 py-2.5 bg-slate-900 hover:bg-slate-800 rounded-xl border border-white/5 text-[10px] font-bold text-slate-350 hover:text-white uppercase tracking-wider flex items-center justify-center gap-1 transition cursor-pointer"
@@ -600,7 +511,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
                       <Edit2 className="w-3.5 h-3.5" /> Edit Profile
                     </button>
                   )}
-                  {!isSuperAdmin && !station.is_active && !station.reactivation_requested && (
+                  {!station.is_active && !station.reactivation_requested && (
                     <button
                       type="button"
                       onClick={() => handleRequestReactivation(station)}
@@ -609,7 +520,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
                       Request Reactivation
                     </button>
                   )}
-                  {currentUser && (currentUser.real_role || currentUser.role) !== 'admin' && station.is_active && (
+                  {station.is_active && (
                     <button
                       onClick={() => toggleCredentials(station.id)}
                       className={`flex-1 py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-wider flex items-center justify-center gap-1 transition cursor-pointer border ${
@@ -624,7 +535,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
                 </div>
 
                 {/* Connection Settings Expandable Panel */}
-                {currentUser && (currentUser.real_role || currentUser.role) !== 'admin' && showCredentialsMap[station.id] && (
+                {showCredentialsMap[station.id] && (
                   <div className="border-t border-white/5 pt-4 mt-3 space-y-4 animate-slide-down font-sans">
                     <div className="space-y-1">
                       <h4 className="text-xs font-bold text-rose-400 uppercase tracking-widest block">Stream Ingestion Node</h4>
@@ -716,6 +627,20 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
                       required
                     />
                   </div>
+                  {viewMode === 'edit' && editingStationId && (
+                    <CoverImageUpload
+                      uploadUrl={`/api/radio/${editingStationId}/cover`}
+                      coverUrl={coverArtUrl}
+                      token={token}
+                      label="Station Cover"
+                      onUploaded={setCoverArtUrl}
+                    />
+                  )}
+                  {viewMode === 'add' && (
+                    <p className="text-[10px] text-slate-500">
+                      Save the station first, then upload a cover image from the edit screen.
+                    </p>
+                  )}
                   
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1.5">
@@ -765,6 +690,19 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
                       />
                     </div>
                   </div>
+                  {viewMode === 'edit' && editingStationId && (
+                    <LicenceDocumentUpload
+                      uploadUrl={`/api/radio/${editingStationId}/licence-document`}
+                      documentUrl={licenceDocumentUrl}
+                      token={token}
+                      onUploaded={setLicenceDocumentUrl}
+                    />
+                  )}
+                  {viewMode === 'add' && (
+                    <p className="text-[10px] text-slate-500">
+                      Save the station first, then upload licence documents from the edit screen.
+                    </p>
+                  )}
                   {viewMode === 'add' && (
                     <div className="space-y-1.5">
                       <label className="font-bold text-slate-400 uppercase tracking-wider block">Stream URL (Optional)</label>
@@ -923,39 +861,6 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
             >
               Cancel
             </button>
-
-            {/* Super Admin Disable/Enable inside Edit Page */}
-            {viewMode === 'edit' && isSuperAdmin && (
-              formValues.is_active ? (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const currentStation = myStations.find(s => s.id === editingStationId);
-                    if (currentStation) {
-                      await handleDisableStation(currentStation);
-                      setFormValues(prev => ({ ...prev, is_active: false }));
-                    }
-                  }}
-                  className="px-8 py-3.5 bg-rose-950/40 hover:bg-rose-900/50 border border-rose-500/30 text-rose-400 font-bold text-xs rounded-xl shadow-lg transition uppercase tracking-wider cursor-pointer"
-                >
-                  Disable Station
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const currentStation = myStations.find(s => s.id === editingStationId);
-                    if (currentStation) {
-                      await handleEnableStation(currentStation);
-                      setFormValues(prev => ({ ...prev, is_active: true }));
-                    }
-                  }}
-                  className="px-8 py-3.5 bg-emerald-950/40 hover:bg-emerald-900/50 border border-emerald-500/30 text-emerald-450 font-bold text-xs rounded-xl shadow-lg transition uppercase tracking-wider cursor-pointer"
-                >
-                  Enable Station
-                </button>
-              )
-            )}
 
             <button
               type="submit"

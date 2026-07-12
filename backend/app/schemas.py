@@ -81,6 +81,10 @@ class ArtistResponse(BaseModel):
     languages: Optional[str] = None
     social_twitter: Optional[str] = None
     social_instagram: Optional[str] = None
+    owner_name: Optional[str] = None
+    owner_email: Optional[str] = None
+    licence_document_url: Optional[str] = None
+    cover_art_url: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -100,6 +104,7 @@ class UserResponse(BaseModel):
     id: int
     email: EmailStr
     full_name: Optional[str] = None
+    profile_image_url: Optional[str] = None
     role: str
     subscription: str
     subscription_cycle: Optional[str] = None
@@ -335,6 +340,9 @@ class RadioStationResponse(BaseModel):
     disabled_reason: Optional[str] = None
     reactivation_reason: Optional[str] = None
     reactivation_requested: Optional[bool] = None
+    owner_name: Optional[str] = None
+    owner_email: Optional[str] = None
+    licence_document_url: Optional[str] = None
 
     class Config:
         from_attributes = True

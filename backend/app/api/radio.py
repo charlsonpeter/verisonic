@@ -8,7 +8,7 @@ import random
 import secrets
 import asyncio
 from collections import deque
-from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Header, Request
+from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Header, Request, File, UploadFile
 from pydantic import BaseModel
 
 try:
@@ -43,6 +43,8 @@ from app.core.ws_auth import extract_ws_token, resolve_ws_user
 from app.api.music import serialize_track
 from app.services.storage import generate_presigned_url
 from app.services.live_stream import live_stream_manager
+from app.services.licence_documents import licence_document_url, store_licence_document
+from app.services.cover_images import resolve_cover_art_url_with_fallback, store_profile_cover
 
 # =====================================================================
 # SERVER-SIDE WEBRTC DELIVERY (SFU relay from LiveStreamManager queue)
@@ -304,6 +306,25 @@ def _verify_station_stream_key(station: RadioStation, stream_key: str) -> bool:
         return False
 
 
+def _admin_owner_fields(db: Session, viewer: Optional[User], owner_id: Optional[int]) -> dict:
+    if not viewer or getattr(viewer, "role", None) != "admin" or not owner_id:
+        return {}
+    owner = db.query(User).filter(User.id == owner_id).first()
+    if not owner:
+        return {}
+    return {"owner_name": owner.full_name, "owner_email": owner.email}
+
+
+def _can_view_licence_document(viewer: Optional[User], owner_id: Optional[int]) -> bool:
+    if not viewer:
+        return False
+    if getattr(viewer, "role", None) == "admin":
+        return True
+    if getattr(viewer, "role", None) == "radio_admin" and owner_id == viewer.id:
+        return True
+    return False
+
+
 def serialize_station(
     station: RadioStation,
     db: Session,
@@ -311,6 +332,7 @@ def serialize_station(
     *,
     include_stream_key: bool = False,
 ) -> dict:
+    admin_owner = _admin_owner_fields(db, viewer, station.owner_id)
     stream_key_value = None
     if include_stream_key and _viewer_can_see_stream_key(viewer, station):
         _ensure_stream_key_fresh(station, db)
@@ -366,6 +388,11 @@ def serialize_station(
     profile_data = {
         "category": station.category,
         "licence": station.licence,
+        "licence_document_url": (
+            licence_document_url(station.licence_document_path)
+            if _can_view_licence_document(viewer, station.owner_id)
+            else None
+        ),
         "street_address": station.street_address,
         "city": station.city,
         "state_province": station.state_province,
@@ -389,7 +416,7 @@ def serialize_station(
             "id": station.id,
             "name": station.name,
             "description": station.description,
-            "cover_art_url": station.cover_art_url or "https://images.unsplash.com/photo-1507838153414-b4b713384a76?w=150&auto=format&fit=crop",
+            "cover_art_url": resolve_cover_art_url_with_fallback(station.cover_art_url),
             "is_active": station.is_active,
             "stream_url": f"/api/radio/{station.id}/live",
             "owner_id": station.owner_id,
@@ -405,7 +432,8 @@ def serialize_station(
             "rj_details": station.rj_details,
             "listeners_count": listeners_count,
             "is_online": True,
-            **profile_data
+            **profile_data,
+            **admin_owner,
         }
 
     if station.stream_url and station.stream_url.startswith("/api/radio/"):
@@ -413,7 +441,7 @@ def serialize_station(
             "id": station.id,
             "name": station.name,
             "description": station.description,
-            "cover_art_url": station.cover_art_url or "https://images.unsplash.com/photo-1507838153414-b4b713384a76?w=150&auto=format&fit=crop",
+            "cover_art_url": resolve_cover_art_url_with_fallback(station.cover_art_url),
             "is_active": station.is_active,
             "stream_url": station.stream_url,
             "owner_id": station.owner_id,
@@ -429,7 +457,8 @@ def serialize_station(
             "rj_details": station.rj_details,
             "listeners_count": listeners_count,
             "is_online": True,
-            **profile_data
+            **profile_data,
+            **admin_owner,
         }
 
     # Otherwise, the station is offline (no live broadcaster, no stream url)
@@ -437,7 +466,7 @@ def serialize_station(
         "id": station.id,
         "name": station.name,
         "description": station.description,
-        "cover_art_url": station.cover_art_url or "https://images.unsplash.com/photo-1507838153414-b4b713384a76?w=150&auto=format&fit=crop",
+        "cover_art_url": resolve_cover_art_url_with_fallback(station.cover_art_url),
         "is_active": station.is_active,
         "stream_url": None,
         "owner_id": station.owner_id,
@@ -453,7 +482,8 @@ def serialize_station(
         "rj_details": station.rj_details,
         "listeners_count": 0,
         "is_online": False,
-        **profile_data
+        **profile_data,
+        **admin_owner,
     }
 
 @router.post("", response_model=RadioStationResponse)
@@ -594,6 +624,59 @@ def update_radio_station(
     db.commit()
     db.refresh(station)
     return serialize_station(station, db, viewer=current_user, include_stream_key=True)
+
+
+@router.post("/{id}/licence-document", response_model=RadioStationResponse)
+async def upload_station_licence_document(
+    id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_radio_admin),
+):
+    station = db.query(RadioStation).filter(RadioStation.id == id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail="Radio station not found")
+
+    real_role = getattr(current_user, "_real_role", None) or current_user.role
+    if real_role == "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Platform admins can only view licence documents",
+        )
+    if station.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to modify this station")
+
+    station.licence_document_path = await store_licence_document(file, "radio", station.id)
+    db.commit()
+    db.refresh(station)
+    return serialize_station(station, db, viewer=current_user, include_stream_key=True)
+
+
+@router.post("/{id}/cover", response_model=RadioStationResponse)
+async def upload_station_cover(
+    id: int,
+    cover_image: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_radio_admin),
+):
+    station = db.query(RadioStation).filter(RadioStation.id == id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail="Radio station not found")
+
+    real_role = getattr(current_user, "_real_role", None) or current_user.role
+    if real_role == "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Platform admins can only view station covers",
+        )
+    if station.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to modify this station")
+
+    station.cover_art_url = await store_profile_cover(cover_image, "radio", station.id)
+    db.commit()
+    db.refresh(station)
+    return serialize_station(station, db, viewer=current_user, include_stream_key=True)
+
 
 @router.get("", response_model=List[RadioStationResponse])
 def list_radio_stations(

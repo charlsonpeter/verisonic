@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Request, Response, File, UploadFile
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session, joinedload
 from jose import jwt, JWTError
@@ -18,6 +18,8 @@ from app.core.rate_limit import enforce_rate_limit, REFRESH_LIMIT, REFRESH_WINDO
 from app.core.premium import paid_subscription_is_active
 from app.core.user_mode import apply_user_mode, set_user_mode, _resolve_db_role
 from app.services.subscription_service import apply_admin_subscription
+from app.services.licence_documents import licence_document_url, store_licence_document
+from app.services.cover_images import resolve_cover_art_url, store_profile_cover
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -51,6 +53,16 @@ def _apply_studio_profile_fields(artist: Artist, profile_in) -> None:
             if value is not None:
                 setattr(artist, field, _normalize_text(value))
     artist.profile_complete = _studio_profile_is_complete(artist)
+
+
+def _serialize_artist_response(artist: Artist, owner: Optional[User] = None) -> dict:
+    data = ArtistResponse.model_validate(artist).model_dump()
+    data["licence_document_url"] = licence_document_url(artist.licence_document_path)
+    data["cover_art_url"] = resolve_cover_art_url(artist.cover_image_path)
+    if owner:
+        data["owner_name"] = owner.full_name
+        data["owner_email"] = owner.email
+    return data
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login-form")
 security = HTTPBearer(auto_error=False)
@@ -314,7 +326,13 @@ def login_google(body: dict, request: Request, response: Response, db: Session =
 def _user_response(user: User) -> UserResponse:
     real_role = getattr(user, "_real_role", None) or user.role
     response = UserResponse.model_validate(user)
-    return response.model_copy(update={"real_role": real_role})
+    updates: dict = {
+        "real_role": real_role,
+        "profile_image_url": resolve_cover_art_url(user.profile_image_path),
+    }
+    if user.artist_profile:
+        updates["artist_profile"] = _serialize_artist_response(user.artist_profile)
+    return response.model_copy(update=updates)
 
 
 @router.get("/me", response_model=UserResponse)
@@ -450,6 +468,68 @@ def update_studio_profile(
     db.refresh(artist)
     db.refresh(current_user)
     return current_user
+
+
+@router.post("/studio-profile/licence-document", response_model=UserResponse)
+async def upload_studio_licence_document(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_studio_admin),
+    db: Session = Depends(get_db),
+):
+    real_role = getattr(current_user, "_real_role", None) or current_user.role
+    if real_role == "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Platform admins can only view licence documents",
+        )
+
+    artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+    if not artist:
+        raise HTTPException(status_code=404, detail="Studio profile not found")
+
+    artist.licence_document_path = await store_licence_document(file, "studio", artist.id)
+    db.commit()
+    db.refresh(artist)
+    db_user = (
+        db.query(User)
+        .options(joinedload(User.artist_profile))
+        .filter(User.id == current_user.id)
+        .first()
+    )
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return _user_response(db_user)
+
+
+@router.post("/studio-profile/cover", response_model=UserResponse)
+async def upload_studio_cover(
+    cover_image: UploadFile = File(...),
+    current_user: User = Depends(get_current_studio_admin),
+    db: Session = Depends(get_db),
+):
+    real_role = getattr(current_user, "_real_role", None) or current_user.role
+    if real_role == "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Platform admins can only view studio profiles",
+        )
+
+    artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+    if not artist:
+        raise HTTPException(status_code=404, detail="Studio profile not found")
+
+    artist.cover_image_path = await store_profile_cover(cover_image, "studio", artist.id)
+    db.commit()
+    db.refresh(artist)
+    db_user = (
+        db.query(User)
+        .options(joinedload(User.artist_profile))
+        .filter(User.id == current_user.id)
+        .first()
+    )
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return _user_response(db_user)
 
 
 @router.get("/admin/users", response_model=List[UserResponse])
@@ -612,7 +692,18 @@ def update_profile(
             
     db.commit()
     db.refresh(current_user)
-    return current_user
+    return _user_response(current_user)
+
+@router.post("/profile/avatar", response_model=UserResponse)
+async def upload_profile_avatar(
+    cover_image: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    current_user.profile_image_path = await store_profile_cover(cover_image, "users", current_user.id)
+    db.commit()
+    db.refresh(current_user)
+    return _user_response(current_user)
 
 @router.put("/change-password")
 def change_password(
@@ -708,7 +799,11 @@ def get_studios_admin(
     """
     Admin studio (artist) management: list all studios.
     """
-    return db.query(Artist).all()
+    artists = db.query(Artist).options(joinedload(Artist.user)).all()
+    results = []
+    for artist in artists:
+        results.append(_serialize_artist_response(artist, artist.user))
+    return results
 
 @router.put("/admin/studios/{artist_id}", response_model=ArtistResponse)
 def update_studio_admin(
@@ -774,7 +869,9 @@ def update_studio_admin(
         
     db.commit()
     db.refresh(artist)
-    return artist
+    owner = db.query(User).filter(User.id == artist.user_id).first()
+    return _serialize_artist_response(artist, owner)
+
 
 @router.post("/request-reactivation", response_model=ArtistResponse)
 def request_studio_reactivation(

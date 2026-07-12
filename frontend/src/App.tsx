@@ -39,6 +39,8 @@ const UserProfile = lazy(() => import('./pages/UserProfile').then((m) => ({ defa
 const Favorites = lazy(() => import('./pages/Favorites').then((m) => ({ default: m.Favorites })));
 const StationProfile = lazy(() => import('./pages/StationProfile').then((m) => ({ default: m.StationProfile })));
 const StudioProfile = lazy(() => import('./pages/StudioProfile').then((m) => ({ default: m.StudioProfile })));
+const RadioStationsManagement = lazy(() => import('./pages/RadioStationsManagement').then((m) => ({ default: m.RadioStationsManagement })));
+const StudiosManagement = lazy(() => import('./pages/StudiosManagement').then((m) => ({ default: m.StudiosManagement })));
 const Settings = lazy(() => import('./pages/Settings').then((m) => ({ default: m.Settings })));
 const AuthPage = lazy(() => import('./pages/AuthPage').then((m) => ({ default: m.AuthPage })));
 const ForceAdminPasswordReset = lazy(() =>
@@ -71,6 +73,7 @@ function DashboardContent() {
     return 'landing';
   });
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [selectedSearchArtist, setSelectedSearchArtist] = useState<string | null>(null);
   const [isQueueOpen, setIsQueueOpen] = useState<boolean>(false);
   const [isLyricsOpen, setIsLyricsOpen] = useState<boolean>(false);
 
@@ -303,7 +306,17 @@ function DashboardContent() {
       case 'landing':
         return <LandingPage onNavigate={setActiveTab} />;
       case 'home':
-        return <Home onNavigate={setActiveTab} onViewDetails={handleDetailsView} />;
+        return (
+          <Home
+            onNavigate={setActiveTab}
+            onViewDetails={handleDetailsView}
+            onArtistClick={(artistName) => {
+              setSearchQuery(artistName);
+              setSelectedSearchArtist(artistName);
+              setActiveTab('search');
+            }}
+          />
+        );
       case 'radio':
         return <RadioPage />;
       case 'search':
@@ -312,6 +325,8 @@ function DashboardContent() {
             onViewDetails={handleDetailsView}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
+            selectedArtist={selectedSearchArtist}
+            setSelectedArtist={setSelectedSearchArtist}
           />
         );
       case 'favorites':
@@ -323,9 +338,13 @@ function DashboardContent() {
       case 'profile':
         return <UserProfile />;
       case 'station-profile':
-        return <StationProfile onNavigate={setActiveTab} />;
+        return (currentUser?.real_role || currentUser?.role) === 'admin'
+          ? <RadioStationsManagement />
+          : <StationProfile onNavigate={setActiveTab} />;
       case 'studio-profile':
-        return <StudioProfile onNavigate={setActiveTab} />;
+        return (currentUser?.real_role || currentUser?.role) === 'admin'
+          ? <StudiosManagement />
+          : <StudioProfile onNavigate={setActiveTab} />;
       case 'settings':
         return <Settings />;
       case 'users':
@@ -643,7 +662,9 @@ function DashboardContent() {
         {!hideAppChrome && (
           <Header 
             searchQuery={searchQuery} 
-            setSearchQuery={setSearchQuery} 
+            setSearchQuery={setSearchQuery}
+            selectedSearchArtist={selectedSearchArtist}
+            setSelectedSearchArtist={setSelectedSearchArtist}
             activeTab={activeTab} 
             setActiveTab={setActiveTab}
             pageTitleOverride={

@@ -28,6 +28,7 @@ export const Radio: React.FC = () => {
   const [newStationStreamUrl, setNewStationStreamUrl] = useState('');
   const [newStationCategory, setNewStationCategory] = useState('');
   const [newStationLicence, setNewStationLicence] = useState('');
+  const [newStationLicenceFile, setNewStationLicenceFile] = useState<File | null>(null);
   const [newStationStreetAddress, setNewStationStreetAddress] = useState('');
   const [newStationCity, setNewStationCity] = useState('');
   const [newStationStateProvince, setNewStationStateProvince] = useState('');
@@ -304,7 +305,7 @@ export const Radio: React.FC = () => {
   // ── Station creation ──────────────────────────────────────────────────────
   const resetCreationForm = () => {
     setNewStationName(''); setNewStationDesc(''); setNewStationStreamUrl('');
-    setNewStationCategory(''); setNewStationLicence(''); setNewStationStreetAddress('');
+    setNewStationCategory(''); setNewStationLicence(''); setNewStationLicenceFile(null); setNewStationStreetAddress('');
     setNewStationCity(''); setNewStationStateProvince(''); setNewStationPostalCode('');
     setNewStationCountry(''); setNewStationPhone(''); setNewStationEmail('');
     setNewStationWebsite(''); setNewStationBroadcastFrequency(''); setNewStationLanguages('');
@@ -334,6 +335,16 @@ export const Radio: React.FC = () => {
         })
       });
       if (res.ok) {
+        const saved = await res.json();
+        if (newStationLicenceFile && saved?.id) {
+          const formData = new FormData();
+          formData.append('file', newStationLicenceFile);
+          await fetch(`${API_URL}/radio/${saved.id}/licence-document`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+            body: formData,
+          });
+        }
         resetCreationForm();
         fetchRadioStations();
         if (checkRadioStationStatus) await checkRadioStationStatus();
@@ -406,7 +417,6 @@ export const Radio: React.FC = () => {
                         { label: 'Category', placeholder: 'e.g. Chillout, Pop, Classical', value: newStationCategory, onChange: setNewStationCategory },
                         { label: 'Licence', placeholder: 'License/Permit number', value: newStationLicence, onChange: setNewStationLicence },
                         { label: 'Frequency', placeholder: 'e.g. 98.1 FM, Web Only', value: newStationBroadcastFrequency, onChange: setNewStationBroadcastFrequency },
-                        { label: 'Languages', placeholder: 'e.g. English, Spanish', value: newStationLanguages, onChange: setNewStationLanguages },
                         { label: 'Stream URL (Optional)', placeholder: 'Stream URL (Optional)', value: newStationStreamUrl, onChange: setNewStationStreamUrl },
                       ].map(field => (
                         <div key={field.label} className="space-y-1">
@@ -417,6 +427,22 @@ export const Radio: React.FC = () => {
                             required={field.required} />
                         </div>
                       ))}
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Languages</label>
+                        <input type="text" placeholder="e.g. English, Spanish" value={newStationLanguages}
+                          onChange={(e) => setNewStationLanguages(e.target.value)}
+                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans" />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Licence Document</label>
+                        <input
+                          type="file"
+                          accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+                          onChange={(e) => setNewStationLicenceFile(e.target.files?.[0] || null)}
+                          className="w-full text-[10px] text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-slate-800 file:text-slate-200"
+                        />
+                        <p className="text-[9px] text-slate-550">PDF or image, max 10 MB.</p>
+                      </div>
                     </div>
 
                     {/* Section 2: Address Details */}
