@@ -70,10 +70,10 @@ export const RevenueSettingsPanel: React.FC = () => {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-[11px] text-slate-400 leading-relaxed font-semibold max-w-2xl">
-          Configure subscription prices, profit splits, and owner payout rates. Owner withdrawals are instant — no approval needed.
-        </p>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-base font-bold text-white flex items-center gap-2">
+          <IndianRupee className="w-4 h-4 text-rose-400" /> Revenue & Payouts
+        </h3>
         <button
           type="button"
           onClick={() => void reload()}

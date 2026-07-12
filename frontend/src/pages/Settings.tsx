@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { 
   Settings as SettingsIcon, Monitor, Crown, 
-  Laptop, Headphones, Speaker, RefreshCw, IndianRupee,
+  Laptop, Headphones, Speaker, RefreshCw,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
@@ -307,10 +307,7 @@ export const Settings: React.FC = () => {
   );
 
   const revenueSection = (
-    <section className="bg-slate-900/10 border border-white/3 p-6 rounded-3xl space-y-6 shadow-inner lg:sticky lg:top-6 min-w-0">
-      <h3 className="text-base font-bold text-white flex items-center gap-2">
-        <IndianRupee className="w-4 h-4 text-rose-400" /> Revenue & Payouts
-      </h3>
+    <section className="bg-slate-900/10 border border-white/3 p-6 rounded-3xl shadow-inner lg:sticky lg:top-6 min-w-0">
       <RevenueSettingsPanel />
     </section>
   );
