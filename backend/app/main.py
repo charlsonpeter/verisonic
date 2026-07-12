@@ -14,6 +14,7 @@ from app.db.migrations import run_migrations
 from app.models import User, Genre
 from app.core.security import get_password_hash, verify_password
 from app.api import auth, music, radio, playlists, analytics, favorites, subscriptions, wallet, revenue_admin
+from app.services.live_stream import live_stream_manager
 from app.services.subscription_service import apply_admin_subscription
 
 app = FastAPI(
