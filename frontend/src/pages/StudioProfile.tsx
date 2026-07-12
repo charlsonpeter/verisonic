@@ -38,7 +38,7 @@ const studioFormFromProfile = (profile: Record<string, unknown> | null | undefin
   is_active: profile?.is_active !== undefined ? Boolean(profile.is_active) : true,
 });
 
-export const StudioProfile: React.FC = () => {
+export const StudioProfile: React.FC<{ onNavigate?: (tab: string) => void }> = ({ onNavigate }) => {
   const { currentUser, token, fetchCurrentUser, hasStudioProfileComplete } = useAuth();
 
   const [profileMessage, setProfileMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -132,13 +132,15 @@ export const StudioProfile: React.FC = () => {
         body: JSON.stringify(formValues),
       });
       if (res.ok) {
+        if (fetchCurrentUser) await fetchCurrentUser();
+        if (!isSuperAdmin) {
+          onNavigate?.('track-list');
+          return;
+        }
         setProfileMessage({
           type: 'success',
-          text: isOnboarding
-            ? 'Studio profile completed! You can now upload and manage tracks.'
-            : 'Studio profile saved successfully!',
+          text: 'Studio profile saved successfully!',
         });
-        if (fetchCurrentUser) await fetchCurrentUser();
       } else {
         const errorData = await res.json();
         setProfileMessage({ type: 'error', text: errorData.detail || 'Failed to save studio profile.' });

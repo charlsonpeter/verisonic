@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { getTrialDaysLeft, hasPaidSubscription } from '../utils/accountTier';
 import {
+  beginLogout,
   clearAuthTokens,
   getAccessToken,
   setAuthTokens,
@@ -8,6 +9,7 @@ import {
 } from '../utils/authTokens';
 import type { QualityLevelSetting } from '../utils/streamQuality';
 import { saveUserStreamQuality } from '../utils/userSettings';
+import { showBanner } from '../utils/banner';
 
 export interface User {
   id: number;
@@ -61,10 +63,12 @@ interface AuthContextType {
   canAccessPlatformSettings: boolean;
   canAccessStationProfile: boolean;
   userMode: 'admin' | 'listener';
+  serverUserMode: 'admin' | 'listener';
   canUsePlaylists: boolean;
   isStaffInAdminMode: boolean;
+  isSwitchingMode: boolean;
   mustResetPassword: boolean;
-  switchUserMode: (mode: 'admin' | 'listener') => void;
+  switchUserMode: (mode: 'admin' | 'listener') => Promise<boolean>;
   login: (email: string, password: string) => Promise<boolean>;
   register: (email: string, password: string, fullName: string) => Promise<boolean>;
   logout: () => void;
@@ -80,33 +84,96 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const API_URL = '/api';
 
+export function deriveUserMode(user: User | null): 'admin' | 'listener' {
+  if (!user) return 'listener';
+  const realRole = user.real_role || user.role;
+  if (realRole === 'studio_admin' || realRole === 'radio_admin') {
+    return user.role === 'listener' ? 'listener' : 'admin';
+  }
+  return 'admin';
+}
+
+function mergeUserFromApi(prev: User | null, data: unknown): User {
+  const api = data as User;
+  return {
+    ...(prev ?? {}),
+    ...api,
+    real_role: api.real_role ?? prev?.real_role ?? api.role,
+    artist_profile: api.artist_profile ?? prev?.artist_profile ?? null,
+    subscription: api.subscription || prev?.subscription || 'free',
+    subscription_cycle: api.subscription_cycle ?? prev?.subscription_cycle ?? null,
+    subscription_expires_at: api.subscription_expires_at ?? prev?.subscription_expires_at ?? null,
+    subscription_activated_at: api.subscription_activated_at ?? prev?.subscription_activated_at ?? null,
+    must_reset_password: api.must_reset_password ?? prev?.must_reset_password ?? false,
+  } as User;
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [token, setToken] = useState<string | null>(getAccessToken());
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [userMode, setUserMode] = useState<'admin' | 'listener'>(() => {
-    return (localStorage.getItem('userMode') as 'admin' | 'listener') || 'admin';
-  });
+  const [isSwitchingMode, setIsSwitchingMode] = useState(false);
   const [hasRadioStation, setHasRadioStation] = useState<boolean>(false);
 
-  const switchUserMode = async (mode: 'admin' | 'listener') => {
-    localStorage.setItem('userMode', mode);
-    setUserMode(mode);
-    if (!token) return;
+  const applyUserFromApi = (data: unknown): User => {
+    let merged = mergeUserFromApi(null, data);
+    setCurrentUser((prev) => {
+      merged = mergeUserFromApi(prev, data);
+      return merged;
+    });
+    return merged;
+  };
+
+  const [pendingMode, setPendingMode] = useState<'admin' | 'listener' | null>(null);
+  const serverUserMode = deriveUserMode(currentUser);
+  const userMode = pendingMode ?? serverUserMode;
+
+  const switchUserMode = async (mode: 'admin' | 'listener'): Promise<boolean> => {
+    const accessToken = getAccessToken();
+    if (!accessToken || isSwitchingMode || mode === userMode) return false;
+
+    setPendingMode(mode);
+    setIsSwitchingMode(true);
+    setAuthError(null);
     try {
-      await fetch(`${API_URL}/auth/switch-mode`, {
+      const res = await fetch(`${API_URL}/auth/switch-mode`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          Authorization: `Bearer ${accessToken}`,
         },
         credentials: 'include',
         body: JSON.stringify({ mode }),
       });
-      await fetchCurrentUser();
-    } catch {
-      // Keep local mode even if server sync fails in dev without Redis
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        const detail = data.detail;
+        const message = typeof detail === 'string'
+          ? detail
+          : Array.isArray(detail)
+            ? detail.map((d: { msg?: string }) => d.msg).filter(Boolean).join(', ')
+            : 'Could not switch mode.';
+        throw new Error(message || 'Could not switch mode.');
+      }
+      const data = await res.json();
+      const userWithSub = applyUserFromApi(data);
+      if (deriveUserMode(userWithSub) !== mode) {
+        throw new Error('Mode did not update on the server. Please try again.');
+      }
+      setPendingMode(null);
+      if ((userWithSub.real_role || userWithSub.role) === 'radio_admin') {
+        await checkRadioStationStatus(userWithSub);
+      }
+      return true;
+    } catch (err) {
+      setPendingMode(null);
+      const message = err instanceof Error ? err.message : 'Could not switch mode.';
+      setAuthError(message);
+      showBanner('error', 'Mode switch failed', message);
+      return false;
+    } finally {
+      setIsSwitchingMode(false);
     }
   };
 
@@ -129,30 +196,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     };
     bootstrap();
-  }, [token, userMode]);
+  }, [token]);
 
   const fetchCurrentUser = async () => {
+    const accessToken = getAccessToken();
+    if (!accessToken) {
+      setCurrentUser(null);
+      setIsLoading(false);
+      return;
+    }
     setIsLoading(true);
     try {
       const res = await fetch(`${API_URL}/auth/me`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${accessToken}` },
       });
       if (res.ok) {
         const data = await res.json();
-        const userWithSub: User = {
-          ...data,
-          subscription: data.subscription || 'free',
-          subscription_cycle: data.subscription_cycle || null,
-          subscription_expires_at: data.subscription_expires_at || null,
-          subscription_activated_at: data.subscription_activated_at || null,
-          must_reset_password: data.must_reset_password ?? false,
-        };
-        setCurrentUser(userWithSub);
-        if (userWithSub.role === 'admin') {
-          localStorage.setItem('userMode', 'admin');
-          setUserMode('admin');
-        }
-        if (userWithSub.role === 'radio_admin') {
+        setPendingMode(null);
+        const userWithSub = applyUserFromApi(data);
+        if ((userWithSub.real_role || userWithSub.role) === 'radio_admin') {
           await checkRadioStationStatus(userWithSub);
         }
       } else {
@@ -252,7 +314,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const checkRadioStationStatus = async (user?: User | null): Promise<boolean> => {
     const activeUser = user !== undefined ? user : currentUser;
-    if (!activeUser || activeUser.role !== 'radio_admin') {
+    const realRole = activeUser?.real_role || activeUser?.role;
+    if (!activeUser || realRole !== 'radio_admin') {
       setHasRadioStation(false);
       return false;
     }
@@ -275,11 +338,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     const accessToken = getAccessToken();
-    clearAuthTokens();
-    setToken(null);
-    setCurrentUser(null);
-    setAuthError(null);
-    setHasRadioStation(false);
+    beginLogout();
 
     if (accessToken) {
       try {
@@ -292,6 +351,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Best-effort server-side refresh token revocation
       }
     }
+
+    clearAuthTokens();
+    setToken(null);
+    setCurrentUser(null);
+    setAuthError(null);
+    setHasRadioStation(false);
+    setIsLoading(false);
   };
 
   const clearError = () => setAuthError(null);
@@ -311,19 +377,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const isPremium =
     hasPaidSubscription(currentUser) ||
     userRole === 'admin' ||
-    userRole === 'studio_admin' ||
-    userRole === 'radio_admin' ||
+    (userRole === 'studio_admin' && serverUserMode === 'admin') ||
     (currentUser?.subscription === 'free' && isTrialActive());
 
   const canConfigureStreamQuality = hasPaidSubscription(currentUser);
   const isStaffInAdminMode =
-    (userRole === 'radio_admin' || userRole === 'studio_admin') && userMode === 'admin';
+    (userRole === 'radio_admin' || userRole === 'studio_admin') &&
+    serverUserMode === 'admin' &&
+    !isSwitchingMode;
   const canAccessPlatformSettings =
     !!currentUser &&
-    (userRole === 'admin' || userRole === 'listener' || userMode === 'listener');
+    (userRole === 'admin' || userRole === 'listener' || serverUserMode === 'listener');
   const canAccessStationProfile =
     !!currentUser &&
-    (userRole === 'admin' || (userRole === 'radio_admin' && userMode === 'admin'));
+    (userRole === 'admin' || (userRole === 'radio_admin' && serverUserMode === 'admin'));
   const canUsePlaylists = !!token && !isStaffInAdminMode;
   const mustResetPassword = !!(
     currentUser?.role === 'admin' && currentUser?.must_reset_password
@@ -341,8 +408,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       canAccessPlatformSettings,
       canAccessStationProfile,
       userMode,
+      serverUserMode,
       canUsePlaylists,
       isStaffInAdminMode,
+      isSwitchingMode,
       mustResetPassword,
       hasRadioStation,
       hasStudioProfileComplete,

@@ -16,6 +16,13 @@ import {
 } from '../utils/streamQuality';
 import { parseStoredStreamQuality } from '../utils/userSettings';
 import { showError } from '../utils/swal';
+import { hasPaidSubscription } from '../utils/accountTier';
+import {
+  endRadioListenSession,
+  heartbeatRadioListenSession,
+  reportTrackListenProgress,
+  startRadioListenSession,
+} from '../utils/wallet';
 import {
   applyAudioSinkId,
   enumerateAudioOutputDevices,
@@ -156,8 +163,11 @@ const resolveStorageUrl = (url?: string): string => {
   return "";
 };
 
+const PREVIEW_LIMIT_SECONDS = 30;
+const RADIO_PREVIEW_LIMIT_SECONDS = 60;
+
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { token, isPremium, canConfigureStreamQuality, userMode, currentUser, isStaffInAdminMode, updateStreamQuality } = useAuth();
+  const { token, isPremium, canConfigureStreamQuality, userMode, serverUserMode, currentUser, isStaffInAdminMode, updateStreamQuality } = useAuth();
 
   // State variables
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
@@ -216,6 +226,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Keep latest state refs to avoid stale closures in audio event handlers
   const currentTrackRef = useRef(currentTrack);
   const isPremiumRef = useRef(isPremium);
+  const playingOwnUploadRef = useRef(false);
   const canConfigureStreamQualityRef = useRef(canConfigureStreamQuality);
   const activeRadioStationRef = useRef(activeRadioStation);
   const isPlayingRef = useRef(isPlaying);
@@ -229,6 +240,12 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const userPausedRef = useRef(false);
   const playbackEpochRef = useRef(0);
   const ownedBlobUrlRef = useRef<string | null>(null);
+  const walletBilledTrackRef = useRef<number | null>(null);
+  const radioWalletSessionRef = useRef<{ stationId: number; token: string } | null>(null);
+  const radioWalletHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isStaffInAdminModeRef = useRef(isStaffInAdminMode);
+  const tokenRef = useRef(token);
+  const currentUserRef = useRef(currentUser);
 
   const resetAudioElementForNewSource = () => {
     const audio = audioRef.current;
@@ -426,6 +443,82 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { isShuffleRef.current = isShuffle; }, [isShuffle]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+  useEffect(() => { isStaffInAdminModeRef.current = isStaffInAdminMode; }, [isStaffInAdminMode]);
+  useEffect(() => { tokenRef.current = token; }, [token]);
+  useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
+
+  const canBillListenActivity = useCallback(() => {
+    const user = currentUserRef.current;
+    const activeToken = tokenRef.current;
+    if (!user || !activeToken || isStaffInAdminModeRef.current) return false;
+    if ((user.real_role || user.role) === 'admin') return false;
+    return user.subscription === 'premium' && hasPaidSubscription(user);
+  }, []);
+
+  const clearRadioWalletSession = useCallback(async () => {
+    const session = radioWalletSessionRef.current;
+    const activeToken = tokenRef.current;
+    if (radioWalletHeartbeatRef.current) {
+      clearInterval(radioWalletHeartbeatRef.current);
+      radioWalletHeartbeatRef.current = null;
+    }
+    radioWalletSessionRef.current = null;
+    if (session && activeToken) {
+      try {
+        await endRadioListenSession(activeToken, session.stationId, session.token);
+      } catch {
+        // Best-effort billing cleanup.
+      }
+    }
+  }, []);
+
+  const startRadioWalletBilling = useCallback(async (stationId: number) => {
+    await clearRadioWalletSession();
+    const activeToken = tokenRef.current;
+    if (!activeToken || !canBillListenActivity()) return;
+    try {
+      const data = await startRadioListenSession(activeToken, stationId);
+      if (!data.billable || !data.session_token) return;
+      radioWalletSessionRef.current = { stationId, token: data.session_token };
+      radioWalletHeartbeatRef.current = setInterval(() => {
+        const session = radioWalletSessionRef.current;
+        const tok = tokenRef.current;
+        if (!session || !tok) return;
+        void heartbeatRadioListenSession(tok, session.stationId, session.token).catch(() => {});
+      }, 30000);
+    } catch {
+      // Billing is best-effort and should not block playback.
+    }
+  }, [canBillListenActivity, clearRadioWalletSession]);
+
+  const maybeReportTrackListenProgress = useCallback((track: Track, listenedSeconds: number) => {
+    const activeToken = tokenRef.current;
+    if (!activeToken || !canBillListenActivity()) return;
+    if (walletBilledTrackRef.current === track.id) return;
+    const threshold =
+      track.duration && track.duration > 0
+        ? Math.max(30, track.duration * 0.5)
+        : 30;
+    if (listenedSeconds < threshold) return;
+    walletBilledTrackRef.current = track.id;
+    void reportTrackListenProgress(activeToken, track.id, listenedSeconds).catch(() => {});
+  }, [canBillListenActivity]);
+  const maybeReportTrackListenProgressRef = useRef(maybeReportTrackListenProgress);
+  useEffect(() => {
+    maybeReportTrackListenProgressRef.current = maybeReportTrackListenProgress;
+  }, [maybeReportTrackListenProgress]);
+
+  useEffect(() => {
+    if (!activeRadioStation) {
+      if (radioWalletSessionRef.current || radioWalletHeartbeatRef.current) {
+        void clearRadioWalletSession();
+      }
+    }
+  }, [activeRadioStation, clearRadioWalletSession]);
+
+  useEffect(() => () => {
+    void clearRadioWalletSession();
+  }, [clearRadioWalletSession]);
 
   useEffect(() => {
     setFavorites([]);
@@ -495,13 +588,23 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [token]);
 
-  // Stop library music/other stations playback when radio admin switches to Admin Mode
+  // Stop library tracks and other stations when radio admin switches to Admin Mode.
+  // Own station may keep playing in both modes with no preview limit.
   useEffect(() => {
     if (
-      userMode === 'admin' &&
+      serverUserMode === 'admin' &&
       currentUser &&
       (currentUser.real_role || currentUser.role) === 'radio_admin'
     ) {
+      const station = activeRadioStationRef.current;
+      const role = currentUser.real_role || currentUser.role;
+      const isOwnStation = !!(
+        station &&
+        role === 'radio_admin' &&
+        station.owner_id === currentUser.id
+      );
+      if (isOwnStation) return;
+
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = '';
@@ -511,7 +614,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setActiveRadioStation(null);
       setIsRadioSync(false);
     }
-  }, [userMode, currentUser]);
+  }, [serverUserMode, currentUser]);
 
   // Initialize Audio Object
   useEffect(() => {
@@ -583,15 +686,27 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       }
 
-      // Enforce guest limits here
-      if (!isPremiumRef.current) {
-        if (activeRadioStationRef.current && audio.currentTime >= 60) {
-          // Live radio limit of 1 minute
-          handleLimitReached();
-        } else if (!activeRadioStationRef.current && audio.currentTime >= 30) {
-          // Standard track limit of 30 seconds
+      // Enforce guest limits only during active playback
+      if (!audio.paused && !isPremiumRef.current && !playingOwnUploadRef.current) {
+        if (activeRadioStationRef.current && audio.currentTime >= RADIO_PREVIEW_LIMIT_SECONDS) {
+          const st = activeRadioStationRef.current;
+          const u = currentUserRef.current;
+          const isOwnStation = !!(
+            u?.id &&
+            st.owner_id === u.id &&
+            (u.real_role || u.role) === 'radio_admin'
+          );
+          if (!isOwnStation) {
+            handleLimitReached();
+          }
+        } else if (!activeRadioStationRef.current && audio.currentTime >= PREVIEW_LIMIT_SECONDS) {
           handleLimitReached();
         }
+      }
+
+      const track = currentTrackRef.current;
+      if (track && !activeRadioStationRef.current && track.id < 100000) {
+        maybeReportTrackListenProgressRef.current(track, audio.currentTime);
       }
     };
     const onDurationChange = () => setDuration(audio.duration || 0);
@@ -803,6 +918,28 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setShowPremiumModal(true);
   };
 
+  const isOwnRadioStation = (
+    station?: RadioStation | null,
+    user?: typeof currentUser,
+  ) => {
+    const st = station ?? activeRadioStationRef.current;
+    const u = user ?? currentUserRef.current;
+    if (!st || !u?.id) return false;
+    const role = u.real_role || u.role;
+    return role === 'radio_admin' && st.owner_id === u.id;
+  };
+
+  const isPreviewBlockedAt = (
+    position: number,
+    isRadio = false,
+    isOwnUpload = playingOwnUploadRef.current,
+  ) => {
+    if (isPremiumRef.current || isOwnUpload) return false;
+    if (isRadio && isOwnRadioStation()) return false;
+    if (isRadio) return position >= RADIO_PREVIEW_LIMIT_SECONDS;
+    return position >= PREVIEW_LIMIT_SECONDS;
+  };
+
   const handleTrackEnded = () => {
     if (repeatModeRef.current === 'one') {
       if (audioRef.current) {
@@ -831,6 +968,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     if (isRadio) {
       hasSyncedLiveHeadRef.current = false;
+      playingOwnUploadRef.current = false;
     }
 
     if (isStaffInAdminMode && (currentUser?.real_role || currentUser?.role) === 'radio_admin' && !isRadio) {
@@ -850,8 +988,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // Clear live radio station status if playing normal track
     if (!isRadio) {
+      await clearRadioWalletSession();
       setActiveRadioStation(null);
       setIsRadioSync(false);
+      walletBilledTrackRef.current = null;
     }
 
     let trackToPlay = track;
@@ -880,6 +1020,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       console.warn("Studio admins in admin mode can only play tracks they uploaded.");
       return;
     }
+
+    playingOwnUploadRef.current = isOwnUpload;
 
     // Determine stream candidates from quality preference and subscription tier
     const candidates = isRadio
@@ -1033,6 +1175,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
         }
         if (autoPlay) {
+          const position = audioRef.current?.currentTime ?? seekAfterLoad ?? 0;
+          if (isPreviewBlockedAt(position, isRadio, isOwnUpload)) {
+            userPausedRef.current = true;
+            isPlayingRef.current = false;
+            setIsPlaying(false);
+            if (audioRef.current) {
+              audioRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
+            }
+            return;
+          }
           beginPlayback();
         } else if (audioRef.current) {
           audioRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
@@ -1239,6 +1391,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setActiveRadioStation(station);
     setIsRadioSync(true);
     setCurrentTrack(null);
+    void startRadioWalletBilling(station.id);
 
     // Register MediaSession for lock screen / notification controls on mobile
     if ('mediaSession' in navigator) {
@@ -1487,15 +1640,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       });
     } else {
-      // Trigger checkout modal if already blocked at guest threshold
-      if (!isPremium) {
-        if (activeRadioStation && currentTime >= 60) {
-          setShowPremiumModal(true);
-          return;
-        } else if (!activeRadioStation && currentTime >= 30) {
-          setShowPremiumModal(true);
-          return;
-        }
+      const position = Math.max(audioRef.current.currentTime ?? 0, currentTime);
+      if (isPreviewBlockedAt(position, !!activeRadioStation)) {
+        setShowPremiumModal(true);
+        return;
       }
 
       if (activeRadioStation) {
@@ -1678,13 +1826,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       prevPremiumRef.current = isPremium;
       return;
     }
-    if (prevPremiumRef.current && !isPremium && currentTrackRef.current && !activeRadioStationRef.current) {
+    if (prevPremiumRef.current && !isPremium && currentTrackRef.current && !activeRadioStationRef.current && !playingOwnUploadRef.current) {
+      const wasPlaying = isPlayingRef.current && !(audioRef.current?.paused ?? true);
       const savedPosition = Math.max(
         audioRef.current?.currentTime ?? 0,
         currentTimeRef.current,
       );
+      const blocked = isPreviewBlockedAt(savedPosition, false, playingOwnUploadRef.current);
       pendingSeekRef.current = savedPosition >= 0.25 ? savedPosition : null;
-      void playTrackRef.current(currentTrackRef.current, false);
+      void playTrackRef.current(currentTrackRef.current, false, wasPlaying && !blocked);
     }
     prevPremiumRef.current = isPremium;
   }, [isPremium, token]);

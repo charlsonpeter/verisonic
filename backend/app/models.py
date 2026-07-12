@@ -41,6 +41,9 @@ class User(Base):
     favorites = relationship("Favorite", back_populates="user")
     listening_history = relationship("ListeningHistory", back_populates="user")
     subscription_payments = relationship("SubscriptionPayment", back_populates="user")
+    wallet = relationship("OwnerWallet", back_populates="user", uselist=False)
+    bank_account = relationship("OwnerBankAccount", back_populates="user", uselist=False)
+    withdrawal_requests = relationship("WithdrawalRequest", back_populates="user", foreign_keys="WithdrawalRequest.user_id")
 
 class SubscriptionPayment(Base):
     __tablename__ = "subscription_payments"
@@ -270,3 +273,108 @@ class StreamingLog(Base):
     track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False)
     bytes_streamed = Column(Integer, default=0)
     played_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class PlatformRevenueSettings(Base):
+    __tablename__ = "platform_revenue_settings"
+    id = Column(Integer, primary_key=True, index=True)
+    premium_monthly_paise = Column(Integer, default=9900, nullable=False)
+    premium_yearly_paise = Column(Integer, default=99900, nullable=False)
+    company_share_bps = Column(Integer, default=3000, nullable=False)
+    owner_share_bps = Column(Integer, default=7000, nullable=False)
+    studio_pool_bps = Column(Integer, default=6000, nullable=False)
+    radio_pool_bps = Column(Integer, default=4000, nullable=False)
+    min_track_seconds = Column(Integer, default=30, nullable=False)
+    min_radio_heartbeat_sec = Column(Integer, default=30, nullable=False)
+    estimated_qualifying_plays_per_day = Column(Integer, default=10, nullable=False)
+    estimated_radio_minutes_per_day = Column(Integer, default=60, nullable=False)
+    min_withdrawal_paise = Column(Integer, default=10000, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+class OwnerWallet(Base):
+    __tablename__ = "owner_wallets"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+    balance_paise = Column(Integer, default=0, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="wallet")
+    ledger_entries = relationship("WalletLedgerEntry", back_populates="wallet", cascade="all, delete-orphan")
+
+
+class WalletLedgerEntry(Base):
+    __tablename__ = "wallet_ledger_entries"
+    id = Column(Integer, primary_key=True, index=True)
+    wallet_id = Column(Integer, ForeignKey("owner_wallets.id", ondelete="CASCADE"), nullable=False, index=True)
+    amount_paise = Column(Integer, nullable=False)
+    entry_type = Column(String, nullable=False)  # track_play, radio_listen, withdrawal, adjustment
+    description = Column(String, nullable=True)
+    reference_id = Column(String, nullable=True)
+    listener_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    wallet = relationship("OwnerWallet", back_populates="ledger_entries")
+
+
+class OwnerBankAccount(Base):
+    __tablename__ = "owner_bank_accounts"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+    account_holder_name = Column(String, nullable=False)
+    bank_name = Column(String, nullable=True)
+    account_number = Column(String, nullable=False)
+    ifsc_code = Column(String, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="bank_account")
+
+
+class WithdrawalRequest(Base):
+    __tablename__ = "withdrawal_requests"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    amount_paise = Column(Integer, nullable=False)
+    status = Column(String, default="pending", nullable=False)  # pending, paid, rejected
+    admin_note = Column(String, nullable=True)
+    # Fernet-encrypted at rest (see wallet_service.encrypt_withdrawal_bank_snapshot)
+    account_holder_name = Column(String, nullable=True)
+    bank_name = Column(String, nullable=True)
+    account_number_masked = Column(String, nullable=True)  # masked only, never full number
+    ifsc_code = Column(String, nullable=True)
+    utr_reference = Column(String, nullable=True)
+    processed_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    processed_at = Column(DateTime, nullable=True)
+
+    user = relationship("User", back_populates="withdrawal_requests", foreign_keys=[user_id])
+
+
+class BillableTrackPlay(Base):
+    __tablename__ = "billable_track_plays"
+    __table_args__ = (
+        UniqueConstraint("listener_user_id", "track_id", "play_date", name="uq_billable_track_plays_listener_track_day"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    listener_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False, index=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    listened_seconds = Column(Float, nullable=False)
+    credit_paise = Column(Integer, nullable=False)
+    play_date = Column(String, nullable=False)  # YYYY-MM-DD UTC
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class RadioListenSession(Base):
+    __tablename__ = "radio_listen_sessions"
+    id = Column(Integer, primary_key=True, index=True)
+    session_token = Column(String, unique=True, index=True, nullable=False)
+    listener_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    station_id = Column(Integer, ForeignKey("radio_stations.id", ondelete="CASCADE"), nullable=False, index=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    total_seconds = Column(Integer, default=0, nullable=False)
+    total_credit_paise = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    started_at = Column(DateTime, default=datetime.datetime.utcnow)
+    ended_at = Column(DateTime, nullable=True)
+    last_heartbeat_at = Column(DateTime, nullable=True)

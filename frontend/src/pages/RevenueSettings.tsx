@@ -1,0 +1,167 @@
+import React, { useEffect, useState } from 'react';
+import { IndianRupee, Percent, RefreshCw } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { showError, showSuccess } from '../utils/swal';
+import {
+  bpsToPercent,
+  fetchRevenueSettings,
+  formatInrFromPaise,
+  saveRevenueSettings,
+  type RevenueSettings,
+} from '../utils/wallet';
+
+export const RevenueSettingsPanel: React.FC = () => {
+  const { token } = useAuth();
+  const [settings, setSettings] = useState<RevenueSettings | null>(null);
+  const [form, setForm] = useState<Partial<RevenueSettings>>({});
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const reload = async () => {
+    if (!token) return;
+    setLoading(true);
+    try {
+      const cfg = await fetchRevenueSettings(token);
+      setSettings(cfg);
+      setForm(cfg);
+    } catch (err) {
+      showError('Revenue settings', err instanceof Error ? err.message : 'Could not load settings.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void reload();
+  }, [token]);
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token) return;
+    setBusy(true);
+    try {
+      const saved = await saveRevenueSettings(token, {
+        premium_monthly_paise: Number(form.premium_monthly_paise),
+        premium_yearly_paise: Number(form.premium_yearly_paise),
+        company_share_bps: Number(form.company_share_bps),
+        owner_share_bps: Number(form.owner_share_bps),
+        studio_pool_bps: Number(form.studio_pool_bps),
+        radio_pool_bps: Number(form.radio_pool_bps),
+        min_track_seconds: Number(form.min_track_seconds),
+        min_radio_heartbeat_sec: Number(form.min_radio_heartbeat_sec),
+        estimated_qualifying_plays_per_day: Number(form.estimated_qualifying_plays_per_day),
+        estimated_radio_minutes_per_day: Number(form.estimated_radio_minutes_per_day),
+        min_withdrawal_paise: Number(form.min_withdrawal_paise),
+      });
+      setSettings(saved);
+      setForm(saved);
+      showSuccess('Revenue settings saved. Subscription checkout prices update automatically.');
+    } catch (err) {
+      showError('Save failed', err instanceof Error ? err.message : 'Could not save settings.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setField = (key: keyof RevenueSettings, value: string) => {
+    setForm((prev) => ({ ...prev, [key]: Number(value) }));
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-[11px] text-slate-400 leading-relaxed font-semibold max-w-2xl">
+          Configure subscription prices, profit splits, and owner payout rates. Owner withdrawals are instant — no approval needed.
+        </p>
+        <button
+          type="button"
+          onClick={() => void reload()}
+          className="p-2 rounded-xl border border-white/10 text-slate-300 hover:text-white transition flex-shrink-0"
+          aria-label="Refresh revenue settings"
+        >
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
+
+      <form onSubmit={handleSave} className="rounded-2xl border border-white/10 bg-slate-950/40 p-5 space-y-5">
+        <h4 className="text-sm font-bold text-white flex items-center gap-2">
+          <IndianRupee className="w-4 h-4" /> Subscription prices
+        </h4>
+        <div className="grid sm:grid-cols-2 gap-3">
+          <label className="text-xs text-slate-400 space-y-1">
+            Premium monthly (paise)
+            <input
+              type="number"
+              value={form.premium_monthly_paise ?? ''}
+              onChange={(e) => setField('premium_monthly_paise', e.target.value)}
+              className="w-full bg-slate-950/70 border border-white/10 rounded-xl px-3 py-2 text-white"
+            />
+          </label>
+          <label className="text-xs text-slate-400 space-y-1">
+            Premium yearly (paise)
+            <input
+              type="number"
+              value={form.premium_yearly_paise ?? ''}
+              onChange={(e) => setField('premium_yearly_paise', e.target.value)}
+              className="w-full bg-slate-950/70 border border-white/10 rounded-xl px-3 py-2 text-white"
+            />
+          </label>
+        </div>
+
+        <h4 className="text-sm font-bold text-white flex items-center gap-2 pt-2">
+          <Percent className="w-4 h-4" /> Profit split (basis points, total 10000 = 100%)
+        </h4>
+        <div className="grid sm:grid-cols-2 gap-3">
+          {(['company_share_bps', 'owner_share_bps', 'studio_pool_bps', 'radio_pool_bps'] as const).map((key) => (
+            <label key={key} className="text-xs text-slate-400 space-y-1">
+              {key.replace(/_/g, ' ')}
+              <input
+                type="number"
+                value={form[key] ?? ''}
+                onChange={(e) => setField(key, e.target.value)}
+                className="w-full bg-slate-950/70 border border-white/10 rounded-xl px-3 py-2 text-white"
+              />
+              <span className="text-[10px] text-slate-500">{form[key] != null ? bpsToPercent(form[key] as number) : ''}</span>
+            </label>
+          ))}
+        </div>
+
+        <h4 className="text-sm font-bold text-white pt-2">Playback thresholds & payout estimates</h4>
+        <div className="grid sm:grid-cols-2 gap-3">
+          {([
+            ['min_track_seconds', 'Min track seconds for qualifying play'],
+            ['min_radio_heartbeat_sec', 'Radio heartbeat interval (sec)'],
+            ['estimated_qualifying_plays_per_day', 'Est. qualifying plays / premium user / day'],
+            ['estimated_radio_minutes_per_day', 'Est. radio minutes / premium user / day'],
+            ['min_withdrawal_paise', 'Min withdrawal (paise)'],
+          ] as const).map(([key, label]) => (
+            <label key={key} className="text-xs text-slate-400 space-y-1">
+              {label}
+              <input
+                type="number"
+                value={form[key] ?? ''}
+                onChange={(e) => setField(key, e.target.value)}
+                className="w-full bg-slate-950/70 border border-white/10 rounded-xl px-3 py-2 text-white"
+              />
+            </label>
+          ))}
+        </div>
+
+        {settings && (
+          <p className="text-[10px] text-slate-500">
+            Current checkout prices: {formatInrFromPaise(settings.premium_monthly_paise)}/month ·{' '}
+            {formatInrFromPaise(settings.premium_yearly_paise)}/year
+          </p>
+        )}
+
+        <button
+          type="submit"
+          disabled={busy}
+          className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 rounded-xl text-xs font-bold text-white"
+        >
+          Save revenue settings
+        </button>
+      </form>
+    </div>
+  );
+};

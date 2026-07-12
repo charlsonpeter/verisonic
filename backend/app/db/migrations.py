@@ -107,6 +107,109 @@ MIGRATIONS = [
         ALTER TABLE artists ADD COLUMN IF NOT EXISTS social_instagram VARCHAR;
         UPDATE artists SET profile_complete = TRUE WHERE bio IS NOT NULL AND TRIM(bio) != '';
     """),
+    ("014_wallet_revenue", """
+        CREATE TABLE IF NOT EXISTS platform_revenue_settings (
+            id SERIAL PRIMARY KEY,
+            premium_monthly_paise INTEGER NOT NULL DEFAULT 9900,
+            premium_yearly_paise INTEGER NOT NULL DEFAULT 99900,
+            company_share_bps INTEGER NOT NULL DEFAULT 3000,
+            owner_share_bps INTEGER NOT NULL DEFAULT 7000,
+            studio_pool_bps INTEGER NOT NULL DEFAULT 6000,
+            radio_pool_bps INTEGER NOT NULL DEFAULT 4000,
+            min_track_seconds INTEGER NOT NULL DEFAULT 30,
+            min_radio_heartbeat_sec INTEGER NOT NULL DEFAULT 30,
+            estimated_qualifying_plays_per_day INTEGER NOT NULL DEFAULT 10,
+            estimated_radio_minutes_per_day INTEGER NOT NULL DEFAULT 60,
+            min_withdrawal_paise INTEGER NOT NULL DEFAULT 10000,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO platform_revenue_settings (id) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM platform_revenue_settings WHERE id = 1);
+        CREATE TABLE IF NOT EXISTS owner_wallets (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            balance_paise INTEGER NOT NULL DEFAULT 0,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS ix_owner_wallets_user_id ON owner_wallets (user_id);
+        CREATE TABLE IF NOT EXISTS wallet_ledger_entries (
+            id SERIAL PRIMARY KEY,
+            wallet_id INTEGER NOT NULL REFERENCES owner_wallets(id) ON DELETE CASCADE,
+            amount_paise INTEGER NOT NULL,
+            entry_type VARCHAR NOT NULL,
+            description VARCHAR,
+            reference_id VARCHAR,
+            listener_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS ix_wallet_ledger_entries_wallet_id ON wallet_ledger_entries (wallet_id);
+        CREATE TABLE IF NOT EXISTS owner_bank_accounts (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+            account_holder_name VARCHAR NOT NULL,
+            bank_name VARCHAR,
+            account_number VARCHAR NOT NULL,
+            ifsc_code VARCHAR NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS ix_owner_bank_accounts_user_id ON owner_bank_accounts (user_id);
+        CREATE TABLE IF NOT EXISTS withdrawal_requests (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            amount_paise INTEGER NOT NULL,
+            status VARCHAR NOT NULL DEFAULT 'pending',
+            admin_note VARCHAR,
+            processed_by_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS ix_withdrawal_requests_user_id ON withdrawal_requests (user_id);
+        CREATE TABLE IF NOT EXISTS billable_track_plays (
+            id SERIAL PRIMARY KEY,
+            listener_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+            owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            listened_seconds FLOAT NOT NULL,
+            credit_paise INTEGER NOT NULL,
+            play_date VARCHAR NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_billable_track_plays_listener_track_day UNIQUE (listener_user_id, track_id, play_date)
+        );
+        CREATE INDEX IF NOT EXISTS ix_billable_track_plays_owner ON billable_track_plays (owner_user_id);
+        CREATE TABLE IF NOT EXISTS radio_listen_sessions (
+            id SERIAL PRIMARY KEY,
+            session_token VARCHAR NOT NULL UNIQUE,
+            listener_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            station_id INTEGER NOT NULL REFERENCES radio_stations(id) ON DELETE CASCADE,
+            owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            total_seconds INTEGER NOT NULL DEFAULT 0,
+            total_credit_paise INTEGER NOT NULL DEFAULT 0,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ended_at TIMESTAMP,
+            last_heartbeat_at TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS ix_radio_listen_sessions_listener ON radio_listen_sessions (listener_user_id);
+        CREATE INDEX IF NOT EXISTS ix_radio_listen_sessions_station ON radio_listen_sessions (station_id);
+    """),
+    ("015_encrypt_saved_bank_accounts", """
+        DELETE FROM owner_bank_accounts;
+    """),
+    ("016_withdrawal_payout_bank_snapshot", """
+        ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS account_holder_name VARCHAR;
+        ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS bank_name VARCHAR;
+        ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS account_number_masked VARCHAR;
+        ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS ifsc_code VARCHAR;
+        ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS utr_reference VARCHAR;
+    """),
+    ("017_clear_plaintext_withdrawal_bank_snapshots", """
+        UPDATE withdrawal_requests
+        SET account_holder_name = NULL,
+            bank_name = NULL,
+            account_number_masked = NULL,
+            ifsc_code = NULL
+        WHERE account_holder_name IS NOT NULL
+          AND account_holder_name NOT LIKE 'gAAAA%';
+    """),
 ]
 
 

@@ -42,7 +42,7 @@ def apply_plan_immediately(user: User, plan: SubscriptionPlan) -> None:
     user.subscription_cancel_at_period_end = False
 
 
-def apply_admin_subscription(user: User, subscription: str, subscription_cycle: Optional[str]) -> None:
+def apply_admin_subscription(user: User, subscription: str, subscription_cycle: Optional[str], db: Optional[Session] = None) -> None:
     """Apply subscription tier from super-admin user management."""
     now = utcnow()
     user.pending_plan_id = None
@@ -64,7 +64,7 @@ def apply_admin_subscription(user: User, subscription: str, subscription_cycle: 
         return
 
     plan_id = plan_id_for_cycle(subscription_cycle or "")
-    plan = get_plan(plan_id) if plan_id else None
+    plan = get_plan(plan_id, db) if plan_id else None
     duration_days = plan.duration_days if plan else 30
 
     user.subscription = "premium"
@@ -133,7 +133,7 @@ def apply_pending_subscription_if_due(user: User, db: Session) -> bool:
         db.commit()
         return True
 
-    pending = get_plan(user.pending_plan_id) if user.pending_plan_id else None
+    pending = get_plan(user.pending_plan_id, db) if user.pending_plan_id else None
     if pending and user.pending_plan_paid:
         user.subscription = pending.subscription
         user.subscription_cycle = pending.cycle

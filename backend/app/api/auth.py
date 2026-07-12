@@ -1,12 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header, Request, Response
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from jose import jwt, JWTError
 from typing import List, Optional
 
 from app.db.session import get_db
 from app.models import User, Artist
-from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, UserSettingsUpdate, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, StudioProfileUpdate, RequestReactivationSchema
+from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, UserSettingsUpdate, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, StudioProfileUpdate, RequestReactivationSchema, SwitchModeRequest
 from app.core.security import (
     verify_password, get_password_hash, create_access_token, create_refresh_token,
     validate_refresh_token, revoke_refresh_token, ALGORITHM, REFRESH_COOKIE_NAME,
@@ -16,7 +16,7 @@ from app.core.config import settings
 from app.core.password_policy import validate_password
 from app.core.rate_limit import enforce_rate_limit, REFRESH_LIMIT, REFRESH_WINDOW_SEC
 from app.core.premium import paid_subscription_is_active
-from app.core.user_mode import apply_user_mode, set_user_mode
+from app.core.user_mode import apply_user_mode, set_user_mode, _resolve_db_role
 from app.services.subscription_service import apply_admin_subscription
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -192,19 +192,31 @@ def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
 
 def get_current_studio_admin(current_user: User = Depends(get_current_user)) -> User:
     _ensure_password_reset_not_required(current_user)
-    if current_user.role not in ["studio_admin", "admin"]:
+    real_role = getattr(current_user, "_real_role", None) or current_user.role
+    if real_role not in ("studio_admin", "admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="The user must be a studio admin or admin to execute this action"
+            detail="The user must be a studio admin or admin to execute this action",
+        )
+    if real_role == "studio_admin" and current_user.role == "listener":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Switch to Admin mode to upload and manage tracks.",
         )
     return current_user
 
 def get_current_radio_admin(current_user: User = Depends(get_current_user)) -> User:
     _ensure_password_reset_not_required(current_user)
-    if current_user.role not in ["radio_admin", "admin"]:
+    real_role = getattr(current_user, "_real_role", None) or current_user.role
+    if real_role not in ("radio_admin", "admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="The user must be a radio admin or admin to execute this action"
+            detail="The user must be a radio admin or admin to execute this action",
+        )
+    if real_role == "radio_admin" and current_user.role == "listener":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Switch to Admin mode to manage your radio station.",
         )
     return current_user
 
@@ -299,6 +311,12 @@ def login_google(body: dict, request: Request, response: Response, db: Session =
         
     return _issue_token_response(user, response)
 
+def _user_response(user: User) -> UserResponse:
+    real_role = getattr(user, "_real_role", None) or user.role
+    response = UserResponse.model_validate(user)
+    return response.model_copy(update={"real_role": real_role})
+
+
 @router.get("/me", response_model=UserResponse)
 def read_current_user(
     current_user: User = Depends(get_current_user_allow_reset),
@@ -306,9 +324,19 @@ def read_current_user(
 ):
     from app.services.subscription_service import apply_pending_subscription_if_due
 
-    apply_pending_subscription_if_due(current_user, db)
-    db.refresh(current_user)
-    return current_user
+    db_user = (
+        db.query(User)
+        .options(joinedload(User.artist_profile))
+        .filter(User.id == current_user.id)
+        .first()
+    )
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    apply_pending_subscription_if_due(db_user, db)
+    db.commit()
+    db.refresh(db_user)
+    apply_user_mode(db_user)
+    return _user_response(db_user)
 
 
 @router.put("/me/settings", response_model=UserResponse)
@@ -350,20 +378,25 @@ def logout(
 
 @router.post("/switch-mode", response_model=UserResponse)
 def switch_user_mode(
-    body: dict,
+    body: SwitchModeRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    mode = (body.get("mode") or "").strip().lower()
+    mode = body.mode.strip().lower()
     if mode not in ("admin", "listener"):
         raise HTTPException(status_code=400, detail="Mode must be 'admin' or 'listener'")
-    db_user = db.query(User).filter(User.id == current_user.id).first()
-    if not db_user or db_user.role not in ("radio_admin", "studio_admin"):
+    db_user = (
+        db.query(User)
+        .options(joinedload(User.artist_profile))
+        .filter(User.id == current_user.id)
+        .first()
+    )
+    real_role = _resolve_db_role(db_user) if db_user else None
+    if not db_user or real_role not in ("radio_admin", "studio_admin"):
         raise HTTPException(status_code=400, detail="Mode switching is not available for this account")
     set_user_mode(db_user.id, mode)
-    db.refresh(db_user)
     apply_user_mode(db_user)
-    return db_user
+    return _user_response(db_user)
 
 
 @router.post("/request-artist", response_model=UserResponse)
@@ -503,7 +536,7 @@ def update_user_subscription_admin(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    apply_admin_subscription(user, subscription, subscription_cycle)
+    apply_admin_subscription(user, subscription, subscription_cycle, db)
     db.commit()
     db.refresh(user)
     return user

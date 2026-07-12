@@ -200,15 +200,18 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
       });
 
       if (res.ok) {
-        setMessage({ 
-          type: 'success', 
-          text: isEdit ? 'Station details updated successfully!' : 'Station registered successfully!' 
-        });
         await fetchStations();
         if (checkRadioStationStatus) {
           await checkRadioStationStatus();
         }
-        // Return to list after a small delay
+        if (!isSuperAdmin) {
+          onNavigate?.('radio');
+          return;
+        }
+        setMessage({
+          type: 'success',
+          text: isEdit ? 'Station details updated successfully!' : 'Station registered successfully!',
+        });
         setTimeout(() => {
           setViewMode('list');
           setMessage(null);

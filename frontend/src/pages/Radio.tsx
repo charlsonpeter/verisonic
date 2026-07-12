@@ -4,6 +4,7 @@ import { useAudio, RadioStation } from '../context/AudioContext';
 import { useAuth } from '../context/AuthContext';
 import { RadioCard, RadioTile } from '../components/shared/RadioCard';
 import { AppModal } from '../components/shared/AppModal';
+import { TimePicker } from '../components/shared/TimePicker';
 import { showError } from '../utils/swal';
 import { fetchBroadcastKey, getAccessToken } from '../utils/authTokens';
 
@@ -706,15 +707,30 @@ export const Radio: React.FC = () => {
                                         </div>
                                         <div className="w-full md:w-28 space-y-1">
                                           <label className="text-[8px] font-bold text-slate-500 uppercase tracking-wider block">Time From</label>
-                                          <input type="time" value={prog.timeFrom}
-                                            onChange={(e) => { const u = [...editPrograms]; u[index].timeFrom = e.target.value; setEditPrograms(u); }}
-                                            className="w-full bg-slate-900 border border-white/5 text-xs p-2 rounded-lg outline-none focus:border-rose-500 text-slate-200 transition" />
+                                          <TimePicker
+                                            value={prog.timeFrom}
+                                            onChange={(timeFrom) => {
+                                              const u = [...editPrograms];
+                                              u[index].timeFrom = timeFrom;
+                                              setEditPrograms(u);
+                                            }}
+                                            size="xs"
+                                            buttonClassName="bg-slate-900 border-white/5 rounded-lg outline-none focus:border-rose-500"
+                                          />
                                         </div>
                                         <div className="w-full md:w-28 space-y-1">
                                           <label className="text-[8px] font-bold text-slate-500 uppercase tracking-wider block">Time To</label>
-                                          <input type="time" value={prog.timeTo}
-                                            onChange={(e) => { const u = [...editPrograms]; u[index].timeTo = e.target.value; setEditPrograms(u); }}
-                                            className="w-full bg-slate-900 border border-white/5 text-xs p-2 rounded-lg outline-none focus:border-rose-500 text-slate-200 transition" />
+                                          <TimePicker
+                                            value={prog.timeTo}
+                                            onChange={(timeTo) => {
+                                              const u = [...editPrograms];
+                                              u[index].timeTo = timeTo;
+                                              setEditPrograms(u);
+                                            }}
+                                            size="xs"
+                                            min={prog.timeFrom || undefined}
+                                            buttonClassName="bg-slate-900 border-white/5 rounded-lg outline-none focus:border-rose-500"
+                                          />
                                         </div>
                                         {editPrograms.length > 1 && (
                                           <button type="button"

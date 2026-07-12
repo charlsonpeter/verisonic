@@ -1,7 +1,10 @@
 import asyncio
+import time
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from app.core.security_headers import SecurityHeadersMiddleware
 from app.core.config import settings
 
@@ -10,10 +13,8 @@ from app.db.base_class import Base
 from app.db.migrations import run_migrations
 from app.models import User, Genre
 from app.core.security import get_password_hash, verify_password
-from app.api import auth, music, radio, playlists, analytics, favorites, subscriptions
+from app.api import auth, music, radio, playlists, analytics, favorites, subscriptions, wallet, revenue_admin
 from app.services.live_stream import live_stream_manager
-
-Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -23,12 +24,30 @@ app = FastAPI(
 )
 
 
+def _wait_for_database(max_attempts: int = 30, delay_seconds: float = 2.0) -> None:
+    """Wait until Postgres is reachable (Docker cold starts)."""
+    for attempt in range(max_attempts):
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return
+        except OperationalError:
+            if attempt + 1 >= max_attempts:
+                raise
+            print(f"Database not ready (attempt {attempt + 1}/{max_attempts}), retrying...")
+            time.sleep(delay_seconds)
+
+
 @app.on_event("startup")
 async def startup_seeder():
     from app.services.storage import ensure_bucket_exists
     ensure_bucket_exists()
 
     live_stream_manager.bind_event_loop(asyncio.get_running_loop())
+
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _wait_for_database)
+    await loop.run_in_executor(None, lambda: Base.metadata.create_all(bind=engine))
 
     db = SessionLocal()
     try:
@@ -83,6 +102,8 @@ app.include_router(favorites.router, prefix="/api")
 app.include_router(radio.router, prefix="/api")
 app.include_router(analytics.router, prefix="/api")
 app.include_router(subscriptions.router, prefix="/api")
+app.include_router(wallet.router, prefix="/api")
+app.include_router(revenue_admin.router, prefix="/api")
 
 
 @app.get("/")

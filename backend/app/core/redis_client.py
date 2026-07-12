@@ -1,13 +1,20 @@
-from functools import lru_cache
 from typing import Optional
 
 import redis
 
 from app.core.config import settings
 
+_redis_client: Optional[redis.Redis] = None
 
-@lru_cache(maxsize=1)
+
 def get_redis() -> Optional[redis.Redis]:
+    global _redis_client
+    if _redis_client is not None:
+        try:
+            _redis_client.ping()
+            return _redis_client
+        except Exception:
+            _redis_client = None
     try:
         client = redis.Redis(
             host=settings.REDIS_HOST,
@@ -17,6 +24,7 @@ def get_redis() -> Optional[redis.Redis]:
             socket_connect_timeout=2,
         )
         client.ping()
+        _redis_client = client
         return client
     except Exception:
         return None

@@ -46,12 +46,13 @@ import { StudioTrackList } from './pages/StudioTrackList';
 import { Contact } from './pages/Contact';
 import { BroadcasterDownload } from './pages/BroadcasterDownload';
 import { AdminAnalytics } from './pages/AdminAnalytics';
+import { Wallet } from './pages/Wallet';
 
 const API_URL = '/api';
 
 // Headless UI Router Core
 function DashboardContent() {
-  const { currentUser, token, hasRadioStation, hasStudioProfileComplete, mustResetPassword, canAccessPlatformSettings, canAccessStationProfile, userMode } = useAuth();
+  const { currentUser, token, hasRadioStation, hasStudioProfileComplete, mustResetPassword, canAccessPlatformSettings, canAccessStationProfile, serverUserMode } = useAuth();
   const { playTrack, playQueue, addToQueue, favorites } = useAudio();
 
   // Route/Tab Switcher state
@@ -126,27 +127,27 @@ function DashboardContent() {
   // Hide studio admin manage menus in listen mode
   useEffect(() => {
     const role = currentUser?.real_role || currentUser?.role;
-    if (currentUser && role === 'studio_admin' && userMode === 'listener') {
-      if (activeTab === 'tracks' || activeTab === 'studio-profile') {
+    if (currentUser && role === 'studio_admin' && serverUserMode === 'listener') {
+      if (activeTab === 'tracks' || activeTab === 'studio-profile' || activeTab === 'track-list') {
         setActiveTab('home');
       }
     }
-  }, [currentUser, activeTab, userMode]);
+  }, [currentUser, activeTab, serverUserMode]);
 
   // Route protection redirect for Radio Admins who do NOT have a station yet (admin mode only)
   useEffect(() => {
     const role = currentUser?.real_role || currentUser?.role;
-    if (currentUser && role === 'radio_admin' && !hasRadioStation && userMode === 'admin') {
-      if (activeTab !== 'radio' && activeTab !== 'contact' && activeTab !== 'settings' && activeTab !== 'profile' && activeTab !== 'station-profile' && activeTab !== 'studio-profile' && activeTab !== 'broadcaster-download') {
+    if (currentUser && role === 'radio_admin' && !hasRadioStation && serverUserMode === 'admin') {
+      if (activeTab !== 'radio' && activeTab !== 'contact' && activeTab !== 'settings' && activeTab !== 'profile' && activeTab !== 'station-profile' && activeTab !== 'studio-profile' && activeTab !== 'broadcaster-download' && activeTab !== 'wallet') {
         setActiveTab('radio');
       }
     }
-  }, [currentUser, activeTab, hasRadioStation, userMode]);
+  }, [currentUser, activeTab, hasRadioStation, serverUserMode]);
 
   // Restrict studio admin admin mode to tracks list, contact, and account-menu pages
   useEffect(() => {
     const role = currentUser?.real_role || currentUser?.role;
-    if (currentUser && role === 'studio_admin' && userMode === 'admin') {
+    if (currentUser && role === 'studio_admin' && serverUserMode === 'admin') {
       const onboardingAllowed = new Set([
         'studio-profile',
         'contact',
@@ -162,6 +163,7 @@ function DashboardContent() {
             'studio-profile',
             'tracks',
             'reports',
+            'wallet',
             'admin-password-reset',
           ])
         : onboardingAllowed;
@@ -169,7 +171,7 @@ function DashboardContent() {
         setActiveTab(hasStudioProfileComplete ? 'track-list' : 'studio-profile');
       }
     }
-  }, [currentUser, activeTab, userMode, hasStudioProfileComplete]);
+  }, [currentUser, activeTab, serverUserMode, hasStudioProfileComplete]);
 
   useEffect(() => {
     if (activeTab === 'discover') {
@@ -319,7 +321,7 @@ function DashboardContent() {
       case 'station-profile':
         return <StationProfile onNavigate={setActiveTab} />;
       case 'studio-profile':
-        return <StudioProfile />;
+        return <StudioProfile onNavigate={setActiveTab} />;
       case 'settings':
         return <Settings />;
       case 'users':
@@ -615,6 +617,8 @@ function DashboardContent() {
       // Admin Analytics Dashboard
       case 'analytics':
         return <AdminAnalytics analyticsData={analyticsData} onLoad={fetchAnalytics} />;
+      case 'wallet':
+        return <Wallet />;
 
       default:
         return <LandingPage onNavigate={setActiveTab} />;

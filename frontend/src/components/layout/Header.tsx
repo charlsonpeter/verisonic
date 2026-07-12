@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   Search, Crown, Signal, User, ChevronDown, 
   Compass, Radio, Heart, FolderHeart, UploadCloud,
-  ShieldCheck, BarChart2, Settings, LogOut, Disc, Mail, Laptop, Music
+  ShieldCheck, BarChart2, Settings, LogOut, Disc, Mail, Laptop, Music, Wallet
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useAudio } from '../../context/AudioContext';
@@ -20,7 +20,7 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({ 
   searchQuery, setSearchQuery, activeTab, setActiveTab, pageTitleOverride
 }) => {
-  const { currentUser, logout, token, userMode, switchUserMode, canUsePlaylists, canAccessPlatformSettings, canAccessStationProfile } = useAuth();
+  const { currentUser, logout, token, userMode, switchUserMode, isSwitchingMode, isStaffInAdminMode, canUsePlaylists, canAccessPlatformSettings, canAccessStationProfile } = useAuth();
   const { setShowPremiumModal } = useAudio();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -39,12 +39,12 @@ export const Header: React.FC<HeaderProps> = ({
   const isRadioAdminInAdminMode =
     !!currentUser &&
     (currentUser.real_role || currentUser.role) === 'radio_admin' &&
-    userMode === 'admin';
+    isStaffInAdminMode;
 
   const isStudioAdminInAdminMode =
     !!currentUser &&
     (currentUser.real_role || currentUser.role) === 'studio_admin' &&
-    userMode === 'admin';
+    isStaffInAdminMode;
 
   const isPaidSubscriber = hasPaidSubscription(currentUser);
   const isOnTrial = isOnFreeTrial(currentUser);
@@ -76,7 +76,7 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   const handleLogoClick = () => {
-    if (currentUser && userMode === 'admin') {
+    if (currentUser && isStaffInAdminMode) {
       const role = currentUser.real_role || currentUser.role;
       if (role === 'radio_admin') setActiveTab('radio');
       else if (role === 'studio_admin') setActiveTab('track-list');
@@ -153,7 +153,7 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="relative z-10 flex items-center gap-3 md:gap-4 flex-shrink-0 ml-auto">
         
         {/* Compact Search — visible from tablet up; narrower until lg */}
-        {activeTab !== 'search' && userMode !== 'admin' && (
+        {activeTab !== 'search' && !isStaffInAdminMode && (
           <div className="hidden md:flex items-center gap-2 bg-slate-900/40 border border-white/5 rounded-xl px-2.5 lg:px-3 py-1.5 hover:border-slate-800 transition duration-300 w-28 lg:w-48 flex-shrink-0">
             <Search className="w-4 h-4 text-slate-500 flex-shrink-0" />
             <input 
@@ -169,7 +169,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         )}
         {/* VIP badge */}
-        {currentUser && userMode !== 'admin' && (
+        {currentUser && !isStaffInAdminMode && (
           isPaidSubscriber ? (
             <>
               <span
@@ -223,17 +223,22 @@ export const Header: React.FC<HeaderProps> = ({
         {currentUser && ['radio_admin', 'studio_admin'].includes(currentUser.real_role || currentUser.role) && (
           <div className="hidden md:flex items-center select-none font-sans flex-shrink-0">
             <button
-              onClick={() => {
+              type="button"
+              disabled={isSwitchingMode}
+              onClick={async () => {
+                if (isSwitchingMode) return;
                 if (userMode === 'admin') {
-                  switchUserMode('listener');
-                  setActiveTab('home');
+                  const ok = await switchUserMode('listener');
+                  if (ok) setActiveTab('home');
                 } else {
-                  switchUserMode('admin');
-                  const role = currentUser.real_role || currentUser.role;
-                  setActiveTab(role === 'radio_admin' ? 'radio' : role === 'studio_admin' ? 'track-list' : 'home');
+                  const ok = await switchUserMode('admin');
+                  if (ok) {
+                    const role = currentUser.real_role || currentUser.role;
+                    setActiveTab(role === 'radio_admin' ? 'radio' : role === 'studio_admin' ? 'track-list' : 'home');
+                  }
                 }
               }}
-              className={`w-20 h-7 rounded-full p-0.5 transition-colors duration-300 outline-none cursor-pointer relative flex items-center ${
+              className={`w-20 h-7 rounded-full p-0.5 transition-colors duration-300 outline-none cursor-pointer relative flex items-center disabled:opacity-60 disabled:cursor-wait ${
                 userMode === 'admin' ? 'bg-rose-600 shadow-md shadow-rose-600/15' : 'bg-slate-800'
               }`}
             >
@@ -300,17 +305,22 @@ export const Header: React.FC<HeaderProps> = ({
                   <div className="md:hidden p-2 border-b border-white/3 mb-1 flex items-center justify-between font-sans select-none">
                     <span className="text-[8px] text-slate-550 font-bold uppercase tracking-wider block">Active Mode</span>
                     <button
-                      onClick={() => {
+                      type="button"
+                      disabled={isSwitchingMode}
+                      onClick={async () => {
+                        if (isSwitchingMode) return;
                         if (userMode === 'admin') {
-                          switchUserMode('listener');
-                          handleDropdownSelect('home');
+                          const ok = await switchUserMode('listener');
+                          if (ok) handleDropdownSelect('home');
                         } else {
-                          switchUserMode('admin');
-                          const role = currentUser.real_role || currentUser.role;
-                          handleDropdownSelect(role === 'radio_admin' ? 'radio' : role === 'studio_admin' ? 'track-list' : 'home');
+                          const ok = await switchUserMode('admin');
+                          if (ok) {
+                            const role = currentUser.real_role || currentUser.role;
+                            handleDropdownSelect(role === 'radio_admin' ? 'radio' : role === 'studio_admin' ? 'track-list' : 'home');
+                          }
                         }
                       }}
-                      className={`w-20 h-7 rounded-full p-0.5 transition-colors duration-300 outline-none cursor-pointer relative flex items-center ${
+                      className={`w-20 h-7 rounded-full p-0.5 transition-colors duration-300 outline-none cursor-pointer relative flex items-center disabled:opacity-60 disabled:cursor-wait ${
                         userMode === 'admin' ? 'bg-rose-600 shadow-md shadow-rose-600/15' : 'bg-slate-800'
                       }`}
                     >
@@ -343,6 +353,16 @@ export const Header: React.FC<HeaderProps> = ({
                   <User className="w-4 h-4 text-slate-450" />
                   My Profile
                 </button>
+
+                {(isStudioAdminInAdminMode || isRadioAdminInAdminMode) && (
+                  <button
+                    onClick={() => handleDropdownSelect('wallet')}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
+                  >
+                    <Wallet className="w-4 h-4 text-slate-450" />
+                    My Wallet
+                  </button>
+                )}
 
                 {currentUser && canAccessStationProfile && (
                   <button 

@@ -10,6 +10,7 @@ export function getRefreshToken(): string | null {
 }
 
 export function setAuthTokens(accessToken: string, _refreshToken?: string | null): void {
+  suppressSessionRestore = false;
   sessionStorage.setItem(TOKEN_KEY, accessToken);
   localStorage.removeItem(REFRESH_TOKEN_KEY);
   localStorage.removeItem(TOKEN_KEY);
@@ -22,8 +23,17 @@ export function clearAuthTokens(): void {
 }
 
 let refreshPromise: Promise<boolean> | null = null;
+let suppressSessionRestore = false;
+
+/** Block silent refresh while logout is in progress. */
+export function beginLogout(): void {
+  suppressSessionRestore = true;
+}
 
 export async function refreshAccessToken(): Promise<boolean> {
+  if (suppressSessionRestore) {
+    return false;
+  }
   if (refreshPromise) {
     return refreshPromise;
   }
@@ -62,6 +72,7 @@ export function shouldAttemptTokenRefresh(url: string): boolean {
     !url.includes('/api/auth/login') &&
     !url.includes('/api/auth/register') &&
     !url.includes('/api/auth/refresh') &&
+    !url.includes('/api/auth/logout') &&
     !url.includes('/api/auth/google')
   );
 }

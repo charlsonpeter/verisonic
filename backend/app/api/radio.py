@@ -9,6 +9,7 @@ import secrets
 import asyncio
 from collections import deque
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Header, Request
+from pydantic import BaseModel
 
 try:
     from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack, RTCConfiguration, RTCIceServer
@@ -1032,3 +1033,69 @@ async def webrtc_listener(id: int, params: dict, buffer_sec: Optional[float] = N
     webrtc_manager.register_listener(id, pc, relay_track)
 
     return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+
+
+class RadioListenStartResponse(BaseModel):
+    session_token: Optional[str] = None
+    billable: bool = False
+
+
+class RadioListenHeartbeatRequest(BaseModel):
+    session_token: str
+
+
+class RadioListenHeartbeatResponse(BaseModel):
+    total_credit_paise: int = 0
+
+
+class RadioListenEndRequest(BaseModel):
+    session_token: str
+
+
+@router.post("/{id}/listen-session/start", response_model=RadioListenStartResponse)
+def start_radio_listen_billing(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    station = db.query(RadioStation).filter(RadioStation.id == id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail="Radio station not found")
+
+    from app.services.wallet_service import is_billable_listener, start_radio_listen_session
+
+    if not is_billable_listener(current_user):
+        return RadioListenStartResponse(session_token=None, billable=False)
+
+    token = start_radio_listen_session(db, listener=current_user, station=station)
+    return RadioListenStartResponse(session_token=token, billable=token is not None)
+
+
+@router.post("/{id}/listen-session/heartbeat", response_model=RadioListenHeartbeatResponse)
+def heartbeat_radio_listen_billing(
+    id: int,
+    body: RadioListenHeartbeatRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    from app.services.wallet_service import heartbeat_radio_listen_session
+
+    total_credit = heartbeat_radio_listen_session(
+        db,
+        listener=current_user,
+        session_token=body.session_token,
+    )
+    return RadioListenHeartbeatResponse(total_credit_paise=total_credit or 0)
+
+
+@router.post("/{id}/listen-session/end", status_code=status.HTTP_204_NO_CONTENT)
+def end_radio_listen_billing(
+    id: int,
+    body: RadioListenEndRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    from app.services.wallet_service import end_radio_listen_session
+
+    end_radio_listen_session(db, listener=current_user, session_token=body.session_token)
+    return None

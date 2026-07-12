@@ -22,6 +22,9 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+class SwitchModeRequest(BaseModel):
+    mode: str
+
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     email: Optional[EmailStr] = None

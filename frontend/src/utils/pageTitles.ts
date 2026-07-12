@@ -41,6 +41,8 @@ export function getPageTitle(activeTab: string, ctx: PageTitleContext = {}): str
       return 'Broadcaster App';
     case 'analytics':
       return 'System Metrics';
+    case 'wallet':
+      return 'My Wallet';
     case 'reports':
       return 'Acoustic Reports';
     case 'details':

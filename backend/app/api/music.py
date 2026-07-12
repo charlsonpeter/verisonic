@@ -8,6 +8,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional, Tuple
 from jose import jwt, JWTError
+from pydantic import BaseModel
 
 from app.db.session import get_db, SessionLocal
 from app.models import Track, Artist, Album, Genre, AudioAnalysisReport, ListeningHistory, StreamingLog
@@ -901,6 +902,39 @@ def log_track_play(
     
     db.commit()
     return {"message": "Play logged successfully"}
+
+
+class ListenProgressRequest(BaseModel):
+    listened_seconds: float
+
+
+class ListenProgressResponse(BaseModel):
+    credited: bool
+    credit_paise: Optional[int] = None
+
+
+@router.post("/{id}/listen-progress", response_model=ListenProgressResponse)
+def report_listen_progress(
+    id: int,
+    body: ListenProgressRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    track = db.query(Track).filter(Track.id == id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+    if not track.approved:
+        raise HTTPException(status_code=403, detail="Track is not approved for playback")
+
+    from app.services.wallet_service import process_track_listen_progress
+
+    credit = process_track_listen_progress(
+        db,
+        listener=current_user,
+        track=track,
+        listened_seconds=body.listened_seconds,
+    )
+    return ListenProgressResponse(credited=credit is not None and credit > 0, credit_paise=credit)
 
 
 @router.websocket("/ws/tracks/status")

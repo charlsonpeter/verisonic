@@ -23,30 +23,41 @@ function getStatusDetails(t: {
 }
 
 export const StudioTrackList: React.FC = () => {
-  const { token } = useAuth();
+  const { token, isStaffInAdminMode, isSwitchingMode } = useAuth();
   const { playTrack, currentTrack, isPlaying } = useAudio();
   const [tracks, setTracks] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const fetchTracks = async (silent = false) => {
     if (!silent) setIsLoading(true);
+    setFetchError(null);
     try {
       const res = await fetch('/api/music/manage?approved_only=true', {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
         setTracks(await res.json());
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setFetchError(data.detail || 'Could not load tracks.');
+        setTracks([]);
       }
     } catch (e) {
       console.error('Failed to fetch tracks:', e);
+      setFetchError('Could not load tracks.');
     } finally {
       if (!silent) setIsLoading(false);
     }
   };
 
   useEffect(() => {
+    if (!token || !isStaffInAdminMode) {
+      setFetchError(null);
+      return;
+    }
     fetchTracks();
-  }, []);
+  }, [token, isStaffInAdminMode]);
 
   useEffect(() => {
     if (!token) return;
@@ -115,6 +126,18 @@ export const StudioTrackList: React.FC = () => {
           Refresh
         </button>
       </div>
+
+      {fetchError && (
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+          {fetchError}
+        </div>
+      )}
+
+      {isSwitchingMode && (
+        <div className="rounded-xl border border-white/10 bg-slate-900/40 px-4 py-3 text-sm text-slate-400">
+          Switching mode…
+        </div>
+      )}
 
       <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
         {isLoading && tracks.length === 0 ? (

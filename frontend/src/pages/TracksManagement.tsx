@@ -31,7 +31,7 @@ interface TracksManagementProps {
 }
 
 export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport }) => {
-  const { token, currentUser, fetchCurrentUser } = useAuth();
+  const { token, currentUser, fetchCurrentUser, isStaffInAdminMode } = useAuth();
   const { playTrack, currentTrack, isPlaying, updateTrackMetadata } = useAudio();
   
   const [tracks, setTracks] = useState<any[]>([]);
@@ -283,9 +283,17 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
   };
 
   useEffect(() => {
-    fetchTracks();
-    fetchSuggestions();
-  }, []);
+    if (token && isStaffInAdminMode) {
+      fetchTracks();
+      fetchSuggestions();
+    }
+  }, [token, isStaffInAdminMode]);
+
+  useEffect(() => {
+    if (!message) return;
+    const timer = setTimeout(() => setMessage(null), 4000);
+    return () => clearTimeout(timer);
+  }, [message]);
 
   useEffect(() => {
     setSelectedTrackIds((prev) => prev.filter((id) => tracks.some((t) => t.id === id)));

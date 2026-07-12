@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.api.auth import get_current_user
 from app.core.config import settings
 from app.core.premium import is_trial_active
-from app.core.subscription_plans import SUBSCRIPTION_PLANS, get_plan
+from app.core.subscription_plans import get_plan, get_subscription_plans
 from app.db.session import get_db
 from app.models import SubscriptionPayment, User
 from app.services.razorpay_service import (
@@ -109,10 +109,10 @@ def _sync_user_subscription(user: User, db: Session) -> None:
     db.refresh(user)
 
 
-def _pending_plan_label(plan_id: Optional[str]) -> Optional[str]:
+def _pending_plan_label(plan_id: Optional[str], db: Session) -> Optional[str]:
     if not plan_id:
         return None
-    plan = get_plan(plan_id)
+    plan = get_plan(plan_id, db)
     return plan.label if plan else None
 
 
@@ -132,14 +132,14 @@ def get_subscription_status(
         is_active=premium_is_active(current_user),
         current_plan_id=current_plan_id(current_user),
         pending_plan_id=current_user.pending_plan_id,
-        pending_plan_label=_pending_plan_label(current_user.pending_plan_id),
+        pending_plan_label=_pending_plan_label(current_user.pending_plan_id, db),
         pending_plan_paid=bool(current_user.pending_plan_paid),
         cancel_at_period_end=bool(current_user.subscription_cancel_at_period_end),
     )
 
 
 @router.get("/plans", response_model=List[SubscriptionPlanResponse])
-def list_subscription_plans():
+def list_subscription_plans(db: Session = Depends(get_db)):
     return [
         SubscriptionPlanResponse(
             id=plan.id,
@@ -150,7 +150,7 @@ def list_subscription_plans():
             currency=plan.currency,
             description=plan.description,
         )
-        for plan in SUBSCRIPTION_PLANS.values()
+        for plan in get_subscription_plans(db).values()
     ]
 
 
@@ -161,7 +161,7 @@ def create_subscription_order(
     db: Session = Depends(get_db),
 ):
     _sync_user_subscription(current_user, db)
-    plan = get_plan(body.plan_id)
+    plan = get_plan(body.plan_id, db)
     if plan is None:
         raise HTTPException(status_code=400, detail="Invalid subscription plan")
 
@@ -225,7 +225,7 @@ def verify_subscription_payment(
     if payment is None:
         raise HTTPException(status_code=404, detail="Order not found")
 
-    plan = get_plan(payment.plan_id)
+    plan = get_plan(payment.plan_id, db)
     if plan is None:
         raise HTTPException(status_code=400, detail="Plan no longer available")
 
@@ -322,7 +322,7 @@ def schedule_subscription_change(
     db: Session = Depends(get_db),
 ):
     _sync_user_subscription(current_user, db)
-    plan = get_plan(body.plan_id)
+    plan = get_plan(body.plan_id, db)
     if plan is None:
         raise HTTPException(status_code=400, detail="Invalid subscription plan")
 
