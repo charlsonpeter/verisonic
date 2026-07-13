@@ -1,5 +1,35 @@
 /** Date/time helpers for custom pickers (YYYY-MM-DD and HH:mm, local time). */
 
+/** Parse API datetimes stored as UTC (often naive ISO without a Z suffix). */
+export function parseServerDateTime(iso: string): Date {
+  const trimmed = iso.trim();
+  if (!trimmed) return new Date(NaN);
+  if (/[zZ]|[+-]\d{2}:\d{2}$/.test(trimmed)) {
+    return new Date(trimmed);
+  }
+  const normalized = trimmed.includes('T') ? trimmed : trimmed.replace(' ', 'T');
+  return new Date(`${normalized}Z`);
+}
+
+/** Format an API datetime in the viewer's local timezone (no UTC label). */
+export function formatLocalDateTime(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const date = parseServerDateTime(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
+}
+
+/** Date-only variant for lists and tables. */
+export function formatLocalDate(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const date = parseServerDateTime(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(date);
+}
+
 export function formatDateInputValue(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');

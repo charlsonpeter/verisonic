@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Play, Flame, Award, Sparkles, Clock 
 } from 'lucide-react';
@@ -13,6 +13,13 @@ import {
   ArtistListSkeleton,
 } from '../components/shared/skeleton';
 
+import { DEFAULT_COVER_FALLBACK } from '../utils/constants';
+
+interface StudioBrowseItem {
+  stage_name: string;
+  cover_art_url?: string | null;
+}
+
 interface HomeProps {
   onNavigate: (tab: string) => void;
   onViewDetails: (track: Track) => void;
@@ -21,6 +28,36 @@ interface HomeProps {
 
 const mobileScrollStrip =
   'flex md:hidden gap-3 overflow-x-auto pb-1 -mx-4 px-4 snap-x snap-mandatory [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden';
+
+const RECENT_MOBILE_PAGE_SIZE = 9;
+const RECENT_DESKTOP_BATCH_SIZE = 27;
+const RECENT_DESKTOP_VISIBLE_ROWS = 9;
+
+const RecentRowCard: React.FC<{ track: Track; onPlay: () => void }> = ({ track, onPlay }) => (
+  <div
+    role="button"
+    tabIndex={0}
+    onClick={onPlay}
+    onKeyDown={(e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        onPlay();
+      }
+    }}
+    className="flex bg-slate-900/20 hover:bg-slate-900/40 rounded-2xl p-3 items-center gap-3 transition duration-200 cursor-pointer group min-h-[4.25rem]"
+  >
+    <div className="w-11 h-11 bg-slate-800 rounded-xl overflow-hidden relative flex-shrink-0">
+      <img src={track.cover_art_url} alt="" className="w-full h-full object-cover" />
+      <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
+        <Play className="w-4 h-4 text-white fill-current" />
+      </div>
+    </div>
+    <div className="flex-1 min-w-0">
+      <h4 className="text-[11px] font-bold text-slate-200 truncate">{track.title}</h4>
+      <p className="text-[10px] text-slate-400 truncate mt-0.5">{track.artist_name}</p>
+    </div>
+  </div>
+);
 
 const TrackTile: React.FC<{
   track: Track;
@@ -82,18 +119,69 @@ const ArtistTile: React.FC<{
 
 export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistClick }) => {
   const { playTrack } = useAudio();
-  const { currentUser, hasRadioStation } = useAuth();
+  const { currentUser, hasRadioStation, token, canAccessListeningHistory } = useAuth();
 
   const [allTracks, setAllTracks] = useState<Track[]>([]);
+  const [recentlyPlayed, setRecentlyPlayed] = useState<Track[]>([]);
+  const [studioCovers, setStudioCovers] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingRecent, setIsLoadingRecent] = useState(false);
+  const [isLoadingMoreRecent, setIsLoadingMoreRecent] = useState(false);
+  const [hasMoreRecent, setHasMoreRecent] = useState(true);
+  const recentOffsetRef = useRef(0);
+  const mobileScrollRef = useRef<HTMLDivElement>(null);
+  const mobileLoadMoreRef = useRef<HTMLDivElement>(null);
+  const desktopScrollRef = useRef<HTMLDivElement>(null);
+  const desktopLoadMoreRef = useRef<HTMLDivElement>(null);
+
+  const recentMobilePages: Track[][] = [];
+  for (let i = 0; i < recentlyPlayed.length; i += RECENT_MOBILE_PAGE_SIZE) {
+    recentMobilePages.push(recentlyPlayed.slice(i, i + RECENT_MOBILE_PAGE_SIZE));
+  }
+
+  const appendRecentTracks = useCallback((tracks: Track[]) => {
+    if (tracks.length === 0) return;
+    setRecentlyPlayed((prev) => {
+      const existingIds = new Set(prev.map((t) => t.id));
+      const merged = [...prev];
+      for (const track of tracks) {
+        if (!existingIds.has(track.id)) {
+          merged.push(track);
+        }
+      }
+      return merged;
+    });
+  }, []);
+
+  const fetchRecentBatch = useCallback(async (limit: number, offset: number) => {
+    const res = await fetch(
+      `/api/music/listening-history?limit=${limit}&offset=${offset}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) {
+      return { tracks: [] as Track[], hasMore: false };
+    }
+    const entries = (await res.json()) as { track: Track }[];
+    const tracks = entries.map((entry) => entry.track);
+    return { tracks, hasMore: tracks.length >= limit };
+  }, [token]);
+
+  const getInitialBatchSize = () =>
+    typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
+      ? RECENT_DESKTOP_BATCH_SIZE
+      : RECENT_MOBILE_PAGE_SIZE;
 
   const popularArtists = Array.from(new Set(allTracks.map(t => t.artist_name))).map(name => {
     const tracksByArtist = allTracks.filter(t => t.artist_name === name);
+    const normalized = name.toLowerCase().trim();
     return {
       name,
-      genre: tracksByArtist[0]?.file_format || "Artist",
+      genre: tracksByArtist[0]?.file_format || 'Artist',
       tracks: tracksByArtist.length,
-      avatar: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&q=80&w=150"
+      avatar:
+        studioCovers[normalized]
+        || tracksByArtist[0]?.cover_art_url
+        || DEFAULT_COVER_FALLBACK,
     };
   });
 
@@ -103,7 +191,26 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
   }
 
   useEffect(() => {
-    // Load tracks from backend API
+    const loadStudios = async () => {
+      try {
+        const res = await fetch('/api/discovery/studios');
+        if (!res.ok) return;
+        const studios = (await res.json()) as StudioBrowseItem[];
+        const map: Record<string, string> = {};
+        for (const studio of studios) {
+          if (studio.cover_art_url) {
+            map[studio.stage_name.toLowerCase().trim()] = studio.cover_art_url;
+          }
+        }
+        setStudioCovers(map);
+      } catch {
+        /* optional enrichment */
+      }
+    };
+    void loadStudios();
+  }, []);
+
+  useEffect(() => {
     const loadTracks = async () => {
       setIsLoading(true);
       try {
@@ -126,11 +233,103 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
     loadTracks();
   }, []);
 
+  useEffect(() => {
+    if (!canAccessListeningHistory) {
+      setRecentlyPlayed([]);
+      setHasMoreRecent(false);
+      return;
+    }
+    const loadRecent = async () => {
+      setIsLoadingRecent(true);
+      setHasMoreRecent(true);
+      recentOffsetRef.current = 0;
+      try {
+        const batchSize = getInitialBatchSize();
+        const { tracks, hasMore } = await fetchRecentBatch(batchSize, 0);
+        setRecentlyPlayed(tracks);
+        recentOffsetRef.current = tracks.length;
+        setHasMoreRecent(hasMore);
+      } catch {
+        setRecentlyPlayed([]);
+        setHasMoreRecent(false);
+      } finally {
+        setIsLoadingRecent(false);
+      }
+    };
+    void loadRecent();
+  }, [canAccessListeningHistory, fetchRecentBatch]);
+
+  const loadMoreRecent = useCallback(async (batchSize: number) => {
+    if (isLoadingMoreRecent || isLoadingRecent || !hasMoreRecent || !canAccessListeningHistory) {
+      return;
+    }
+    setIsLoadingMoreRecent(true);
+    try {
+      const { tracks, hasMore } = await fetchRecentBatch(batchSize, recentOffsetRef.current);
+      if (tracks.length === 0) {
+        setHasMoreRecent(false);
+        return;
+      }
+      appendRecentTracks(tracks);
+      recentOffsetRef.current += tracks.length;
+      setHasMoreRecent(hasMore);
+    } catch {
+      setHasMoreRecent(false);
+    } finally {
+      setIsLoadingMoreRecent(false);
+    }
+  }, [
+    appendRecentTracks,
+    canAccessListeningHistory,
+    fetchRecentBatch,
+    hasMoreRecent,
+    isLoadingMoreRecent,
+    isLoadingRecent,
+  ]);
+
+  useEffect(() => {
+    if (!window.matchMedia('(max-width: 767px)').matches) return;
+    const root = mobileScrollRef.current;
+    const target = mobileLoadMoreRef.current;
+    if (!root || !target || !canAccessListeningHistory || !hasMoreRecent) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          void loadMoreRecent(RECENT_MOBILE_PAGE_SIZE);
+        }
+      },
+      { root, rootMargin: '80px', threshold: 0.1 },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [canAccessListeningHistory, hasMoreRecent, loadMoreRecent, recentlyPlayed.length]);
+
+  useEffect(() => {
+    if (!window.matchMedia('(min-width: 768px)').matches) return;
+    const root = desktopScrollRef.current;
+    const target = desktopLoadMoreRef.current;
+    if (!root || !target || !canAccessListeningHistory || !hasMoreRecent) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          void loadMoreRecent(RECENT_DESKTOP_BATCH_SIZE);
+        }
+      },
+      { root, rootMargin: '120px', threshold: 0.1 },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [canAccessListeningHistory, hasMoreRecent, loadMoreRecent, recentlyPlayed.length]);
+
+  const desktopScrollMaxHeight = `calc(${RECENT_DESKTOP_VISIBLE_ROWS} * 4.25rem + ${RECENT_DESKTOP_VISIBLE_ROWS - 1} * 0.75rem)`;
+
   return (
     <div className="space-y-8 md:space-y-12 w-full">
       
       {/* Promoted Studio Admin Setup Banner */}
-      {currentUser?.role === 'studio_admin' && !currentUser.artist_profile?.profile_complete && (
+      {(currentUser?.real_role || currentUser?.role) === 'studio_admin' && !currentUser?.artist_profile?.profile_complete && (
         <div className="relative overflow-hidden bg-gradient-to-r from-slate-900 via-slate-950 to-slate-900 border border-cyan-500/20 p-6 rounded-3xl flex flex-col md:flex-row items-center justify-between gap-6 shadow-2xl animate-fade-in group">
           <div className="absolute top-0 left-0 w-32 h-32 bg-cyan-500/5 rounded-full blur-3xl pointer-events-none group-hover:bg-cyan-500/10 transition-all duration-700" />
           <div className="space-y-2 relative z-10">
@@ -152,7 +351,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
       )}
 
       {/* Promoted Radio Admin Setup Banner */}
-      {currentUser?.role === 'radio_admin' && !hasRadioStation && (
+      {(currentUser?.real_role || currentUser?.role) === 'radio_admin' && !hasRadioStation && (
         <div className="relative overflow-hidden bg-gradient-to-r from-slate-900 via-slate-950 to-slate-900 border border-rose-500/20 p-6 rounded-3xl flex flex-col md:flex-row items-center justify-between gap-6 shadow-2xl animate-fade-in group">
           <div className="absolute top-0 left-0 w-32 h-32 bg-rose-500/5 rounded-full blur-3xl pointer-events-none group-hover:bg-rose-500/10 transition-all duration-700" />
           <div className="space-y-2 relative z-10">
@@ -173,45 +372,85 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
         </div>
       )}
 
-      {/* Recently Played */}
-      {isLoading ? (
+      {/* Recently Played — mobile 3×3 horizontal pages; desktop 3×9 vertical scroll */}
+      {canAccessListeningHistory && isLoadingRecent && (
         <section className="space-y-4">
           <h3 className="text-lg font-extrabold text-white flex items-center gap-1.5">
             <Clock className="w-5 h-5 text-rose-400" /> Recently Played
           </h3>
-          <RecentlyPlayedSkeleton count={3} />
+          <RecentlyPlayedSkeleton />
         </section>
-      ) : allTracks.length > 0 && (
+      )}
+      {canAccessListeningHistory && !isLoadingRecent && recentlyPlayed.length > 0 && (
         <section className="space-y-4">
           <h3 className="text-lg font-extrabold text-white flex items-center gap-1.5">
-              <Clock className="w-5 h-5 text-rose-400" /> Recently Played
-            </h3>
+            <Clock className="w-5 h-5 text-rose-400" /> Recently Played
+          </h3>
 
-          <div className={mobileScrollStrip}>
-            {allTracks.slice(0, 3).map((track) => (
-              <TrackTile key={`continue-${track.id}`} track={track} onPlay={() => playTrack(track)} compact />
-            ))}
-          </div>
-
-          <div className="hidden md:grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {allTracks.slice(0, 3).map((track) => (
+          {/* Mobile: 3×3 pages, horizontal scroll + lazy load */}
+          <div ref={mobileScrollRef} className={mobileScrollStrip}>
+            {recentMobilePages.map((page, pageIdx) => (
               <div
-                key={`continue-desktop-${track.id}`}
-                onClick={() => playTrack(track)}
-                className="flex bg-slate-900/20 hover:bg-slate-900/40 rounded-3xl p-4 items-center gap-4 transition duration-200 cursor-pointer group hover:scale-[1.02] hover:shadow-lg"
+                key={pageIdx}
+                className="grid grid-cols-3 gap-x-2.5 gap-y-2 flex-shrink-0 snap-start w-[calc(100vw-2rem)] max-w-[22rem]"
               >
-                <div className="w-12 h-12 bg-slate-800 rounded-xl overflow-hidden relative flex-shrink-0">
-                  <img src={track.cover_art_url} alt="Cover" className="w-full h-full object-cover" />
-                  <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
-                    <Play className="w-5 h-5 text-white fill-current" />
-                  </div>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h4 className="text-xs font-bold text-slate-200 truncate">{track.title}</h4>
-                  <p className="text-[10px] text-slate-400 truncate mt-0.5">{track.artist_name}</p>
-                </div>
+                {page.map((track) => (
+                  <TrackTile
+                    key={`recent-mobile-${track.id}-${pageIdx}`}
+                    track={track}
+                    onPlay={() => playTrack(track)}
+                    compact
+                  />
+                ))}
               </div>
             ))}
+            {isLoadingMoreRecent && (
+              <div className="grid grid-cols-3 gap-x-2.5 gap-y-2 flex-shrink-0 snap-start w-[calc(100vw-2rem)] max-w-[22rem]">
+                {Array.from({ length: RECENT_MOBILE_PAGE_SIZE }).map((_, idx) => (
+                  <div key={idx} className="w-full flex-shrink-0">
+                    <div className="w-full aspect-square rounded-xl bg-slate-800/60 animate-pulse mb-1.5" />
+                    <div className="h-2.5 bg-slate-800/60 rounded animate-pulse w-4/5 mb-1" />
+                    <div className="h-2 bg-slate-800/40 rounded animate-pulse w-3/5" />
+                  </div>
+                ))}
+              </div>
+            )}
+            {hasMoreRecent && (
+              <div ref={mobileLoadMoreRef} className="w-2 flex-shrink-0 snap-start" aria-hidden />
+            )}
+          </div>
+
+          {/* Desktop: 3 columns × 9 visible rows, vertical scroll + lazy load */}
+          <div
+            ref={desktopScrollRef}
+            className="hidden md:block overflow-y-auto pr-1 [scrollbar-width:thin] [scrollbar-color:rgba(148,163,184,0.35)_transparent]"
+            style={{ maxHeight: desktopScrollMaxHeight }}
+          >
+            <div className="grid grid-cols-3 gap-3">
+              {recentlyPlayed.map((track) => (
+                <RecentRowCard
+                  key={`recent-desktop-${track.id}`}
+                  track={track}
+                  onPlay={() => playTrack(track)}
+                />
+              ))}
+              {isLoadingMoreRecent &&
+                Array.from({ length: 6 }).map((_, idx) => (
+                  <div
+                    key={`recent-desktop-skeleton-${idx}`}
+                    className="flex bg-slate-900/20 rounded-2xl p-3 items-center gap-3 min-h-[4.25rem] animate-pulse"
+                  >
+                    <div className="w-11 h-11 rounded-xl bg-slate-800/60 flex-shrink-0" />
+                    <div className="flex-1 space-y-1.5">
+                      <div className="h-2.5 bg-slate-800/60 rounded w-3/5" />
+                      <div className="h-2 bg-slate-800/40 rounded w-2/5" />
+                    </div>
+                  </div>
+                ))}
+            </div>
+            {hasMoreRecent && (
+              <div ref={desktopLoadMoreRef} className="h-4 w-full" aria-hidden />
+            )}
           </div>
         </section>
       )}

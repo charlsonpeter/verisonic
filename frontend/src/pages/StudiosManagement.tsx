@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Disc, Settings, Edit2, ArrowLeft, Ban, Check } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { showConfirm, showError, showSuccess } from '../utils/swal';
 import Swal from 'sweetalert2';
 import { TableSkeleton } from '../components/shared/skeleton';
 import { LicenceDocumentLink } from '../components/shared/LicenceDocumentUpload';
+import { useLazyList, DEFAULT_LAZY_PAGE_SIZE } from '../hooks/useLazyList';
+import { LazyListSentinel } from '../components/shared/LazyListSentinel';
 
 interface StudioRow {
   id: number;
@@ -65,8 +67,6 @@ const statusLabel = (studio: StudioRow) => {
 
 export const StudiosManagement: React.FC = () => {
   const { token } = useAuth();
-  const [studios, setStudios] = useState<StudioRow[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'edit'>('list');
   const [editingStudioId, setEditingStudioId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -78,26 +78,28 @@ export const StudiosManagement: React.FC = () => {
 
   const authHeaders = {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${token || localStorage.getItem('token') || ''}`,
+    Authorization: `Bearer ${token || ''}`,
   };
 
-  const fetchStudios = async () => {
-    setIsLoading(true);
-    try {
-      const res = await fetch('/api/auth/admin/studios', { headers: authHeaders });
-      if (res.ok) {
-        setStudios(await res.json());
-      }
-    } catch (e) {
-      console.error('Failed to fetch studios:', e);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const studiosList = useLazyList<StudioRow>({
+    fetchPage: useCallback(async (offset, limit) => {
+      const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      if (searchQuery.trim()) params.set('search', searchQuery.trim());
+      if (statusFilter !== 'all') params.set('status', statusFilter);
+      const res = await fetch(`/api/auth/admin/studios?${params}`, { headers: authHeaders });
+      if (!res.ok) return { items: [], hasMore: false };
+      const data = await res.json();
+      return { items: data.items, hasMore: data.has_more };
+    }, [token, searchQuery, statusFilter]),
+    resetKey: viewMode === 'list' ? `${searchQuery}-${statusFilter}` : null,
+    enabled: viewMode === 'list' && !!token,
+    pageSize: DEFAULT_LAZY_PAGE_SIZE,
+  });
 
-  useEffect(() => {
-    fetchStudios();
-  }, []);
+  const studios = studiosList.items;
+  const isLoading = studiosList.loading;
+
+  const fetchStudios = () => studiosList.reload();
 
   const handleEditClick = (studio: StudioRow) => {
     setEditingStudioId(studio.id);
@@ -220,23 +222,7 @@ export const StudiosManagement: React.FC = () => {
     }
   };
 
-  const filteredStudios = studios.filter((studio) => {
-    const q = searchQuery.toLowerCase();
-    const matchesSearch =
-      studio.stage_name.toLowerCase().includes(q) ||
-      (studio.city && studio.city.toLowerCase().includes(q)) ||
-      (studio.country && studio.country.toLowerCase().includes(q)) ||
-      (studio.licence && studio.licence.toLowerCase().includes(q)) ||
-      (studio.owner_name && studio.owner_name.toLowerCase().includes(q)) ||
-      (studio.owner_email && studio.owner_email.toLowerCase().includes(q));
-
-    if (statusFilter === 'active') return matchesSearch && studio.is_active;
-    if (statusFilter === 'disabled') return matchesSearch && !studio.is_active;
-    if (statusFilter === 'pending') {
-      return matchesSearch && !studio.is_active && studio.reactivation_requested;
-    }
-    return matchesSearch;
-  });
+  const filteredStudios = studios;
 
   return (
     <div className="space-y-8 w-full max-w-[90rem] animate-page-entry font-sans">
@@ -367,6 +353,11 @@ export const StudiosManagement: React.FC = () => {
                 </tbody>
               </table>
             )}
+            <LazyListSentinel
+              hasMore={studiosList.hasMore}
+              loading={studiosList.loadingMore}
+              onLoadMore={studiosList.loadMore}
+            />
           </div>
 
           <div className="md:hidden space-y-3">
@@ -419,6 +410,11 @@ export const StudiosManagement: React.FC = () => {
                 </div>
               ))
             )}
+            <LazyListSentinel
+              hasMore={studiosList.hasMore}
+              loading={studiosList.loadingMore}
+              onLoadMore={studiosList.loadMore}
+            />
           </div>
         </div>
       )}

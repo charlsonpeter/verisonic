@@ -192,7 +192,9 @@ MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS ix_radio_listen_sessions_station ON radio_listen_sessions (station_id);
     """),
     ("015_encrypt_saved_bank_accounts", """
-        DELETE FROM owner_bank_accounts;
+        -- Intentionally empty: older builds wiped saved bank accounts here.
+        -- Encryption is applied on read/write in wallet_service (legacy plaintext tolerated).
+        SELECT 1;
     """),
     ("016_withdrawal_payout_bank_snapshot", """
         ALTER TABLE withdrawal_requests ADD COLUMN IF NOT EXISTS account_holder_name VARCHAR;
@@ -219,6 +221,17 @@ MIGRATIONS = [
     """),
     ("020_user_profile_images", """
         ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_image_path VARCHAR;
+    """),
+    ("021_track_comments", """
+        CREATE TABLE IF NOT EXISTS track_comments (
+            id SERIAL PRIMARY KEY,
+            track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            body VARCHAR NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS ix_track_comments_track_id ON track_comments (track_id);
+        CREATE INDEX IF NOT EXISTS ix_track_comments_user_id ON track_comments (user_id);
     """),
 ]
 

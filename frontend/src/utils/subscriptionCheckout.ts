@@ -7,6 +7,8 @@ declare global {
   }
 }
 
+import { formatLocalDateTime } from './dateTime';
+
 export interface SubscriptionPlan {
   id: string;
   label: string;
@@ -44,6 +46,15 @@ export interface VerifyPaymentResult {
   message: string;
   queued?: boolean;
   pending_plan_id?: string | null;
+  subscription_expires_at?: string | null;
+}
+
+export interface SubscriptionActionResult {
+  message: string;
+  subscription_expires_at?: string | null;
+  pending_plan_id?: string | null;
+  pending_plan_paid?: boolean;
+  cancel_at_period_end?: boolean;
 }
 
 export function formatInr(amountRupees: number): string {
@@ -55,12 +66,32 @@ export function formatInr(amountRupees: number): string {
 }
 
 export function formatExpiryDate(iso: string | null | undefined): string {
-  if (!iso) return '';
-  return new Date(iso).toLocaleDateString('en-IN', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  });
+  return formatLocalDateTime(iso);
+}
+
+export function subscriptionEndsLabel(iso: string | null | undefined): string {
+  const when = formatLocalDateTime(iso);
+  return when || 'the end of your billing period';
+}
+
+export function enrichSubscriptionMessage(
+  message: string,
+  expiresAt?: string | null,
+  tail?: 'renew' | 'ends' | 'continues',
+): string {
+  const when = formatLocalDateTime(expiresAt);
+  if (!when || !tail) return message;
+  const base = message.endsWith('.') ? message.slice(0, -1) : message;
+  switch (tail) {
+    case 'ends':
+      return `${base}. Your current plan ends on ${when}.`;
+    case 'continues':
+      return `${base}. Premium access continues until ${when}.`;
+    case 'renew':
+      return `${base}. Renews on ${when}.`;
+    default:
+      return message;
+  }
 }
 
 export async function fetchSubscriptionPlans(): Promise<SubscriptionPlan[]> {
@@ -127,7 +158,7 @@ export async function verifySubscriptionPayment(
 export async function scheduleSubscriptionChange(
   planId: string,
   token: string,
-): Promise<{ message: string }> {
+): Promise<SubscriptionActionResult> {
   const res = await fetch('/api/subscriptions/schedule-change', {
     method: 'POST',
     headers: {
@@ -143,7 +174,7 @@ export async function scheduleSubscriptionChange(
   return data;
 }
 
-export async function cancelSubscription(token: string): Promise<{ message: string }> {
+export async function cancelSubscription(token: string): Promise<SubscriptionActionResult> {
   const res = await fetch('/api/subscriptions/cancel', {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },

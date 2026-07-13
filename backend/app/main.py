@@ -13,7 +13,7 @@ from app.db.base_class import Base
 from app.db.migrations import run_migrations
 from app.models import User, Genre
 from app.core.security import get_password_hash, verify_password
-from app.api import auth, music, radio, playlists, analytics, favorites, subscriptions, wallet, revenue_admin
+from app.api import auth, music, radio, playlists, analytics, favorites, subscriptions, wallet, revenue_admin, discovery, catalog
 from app.services.live_stream import live_stream_manager
 from app.services.subscription_service import apply_admin_subscription
 
@@ -115,6 +115,8 @@ app.include_router(analytics.router, prefix="/api")
 app.include_router(subscriptions.router, prefix="/api")
 app.include_router(wallet.router, prefix="/api")
 app.include_router(revenue_admin.router, prefix="/api")
+app.include_router(discovery.router, prefix="/api")
+app.include_router(catalog.router, prefix="/api")
 
 
 @app.get("/")

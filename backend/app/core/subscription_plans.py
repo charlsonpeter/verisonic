@@ -38,7 +38,7 @@ def _build_plans(*, monthly_paise: int, yearly_paise: int) -> Dict[PlanId, Subsc
             amount_paise=monthly_paise,
             currency="INR",
             duration_days=30,
-            description="Full lossless streaming, playlists, and premium quality for 30 days.",
+            description="Full lossless streaming, playlists, and premium quality. Renews on the same date each month.",
         ),
         "premium_yearly": SubscriptionPlan(
             id="premium_yearly",
@@ -48,7 +48,7 @@ def _build_plans(*, monthly_paise: int, yearly_paise: int) -> Dict[PlanId, Subsc
             amount_paise=yearly_paise,
             currency="INR",
             duration_days=365,
-            description="Full lossless streaming for 12 months — best value.",
+            description="Full lossless streaming for 12 months — best value. Renews on the same date each year.",
         ),
     }
 

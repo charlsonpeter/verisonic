@@ -132,17 +132,29 @@ class AlbumCreate(BaseModel):
     title: str
     release_year: Optional[int] = None
 
+class AlbumUpdate(BaseModel):
+    title: Optional[str] = None
+    release_year: Optional[int] = None
+
 class AlbumResponse(BaseModel):
     id: int
     title: str
     cover_art_url: Optional[str] = None
     release_year: Optional[int] = None
     artist_id: int
+    artist_name: Optional[str] = None
+    track_count: Optional[int] = 0
 
     class Config:
         from_attributes = True
 
 # --- Genre Schemas ---
+class GenreCreate(BaseModel):
+    name: str
+
+class GenreUpdate(BaseModel):
+    name: str
+
 class GenreResponse(BaseModel):
     id: int
     name: str
@@ -185,6 +197,8 @@ class TrackResponse(BaseModel):
     language: Optional[str] = None
     genres: Optional[List[str]] = []
     created_at: datetime
+    owner_name: Optional[str] = None
+    owner_email: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -389,3 +403,81 @@ class DashboardResponse(BaseModel):
     bandwidth_gb: float
     quality_distribution: QualityStats
     popular_tracks: List[PopularTrack]
+
+
+class TrackCommentCreate(BaseModel):
+    body: str
+
+class TrackCommentResponse(BaseModel):
+    id: int
+    track_id: int
+    user_id: int
+    author_name: Optional[str] = None
+    body: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ListeningHistoryEntryResponse(BaseModel):
+    id: int
+    played_at: datetime
+    track: TrackResponse
+
+
+class StudioBrowseResponse(BaseModel):
+    id: int
+    stage_name: str
+    bio: Optional[str] = None
+    category: Optional[str] = None
+    cover_art_url: Optional[str] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
+    track_count: int = 0
+
+
+class ArtistAlbumSummary(BaseModel):
+    title: str
+    cover_art_url: Optional[str] = None
+    release_year: Optional[int] = None
+    track_count: int
+
+
+class ArtistRelatedSummary(BaseModel):
+    name: str
+    track_count: int
+    cover_art_url: Optional[str] = None
+
+
+class ArtistDetailResponse(BaseModel):
+    name: str
+    track_count: int
+    studio: Optional[StudioBrowseResponse] = None
+    tracks: List[TrackResponse]
+    albums: List[ArtistAlbumSummary]
+    related_artists: List[ArtistRelatedSummary]
+
+
+class PaginatedTrackListResponse(BaseModel):
+    items: List[TrackResponse]
+    total: int
+    has_more: bool
+
+
+class PaginatedUserListResponse(BaseModel):
+    items: List[UserResponse]
+    total: int
+    has_more: bool
+
+
+class PaginatedArtistListResponse(BaseModel):
+    items: List[ArtistResponse]
+    total: int
+    has_more: bool
+
+
+class PaginatedRadioStationListResponse(BaseModel):
+    items: List[RadioStationResponse]
+    total: int
+    has_more: bool

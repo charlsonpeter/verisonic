@@ -189,7 +189,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
         method,
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token || localStorage.getItem('token') || ''}`
+          'Authorization': `Bearer ${token || ''}`
         },
         body: JSON.stringify(formValues)
       });
@@ -235,7 +235,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token || localStorage.getItem('token') || ''}`
+            'Authorization': `Bearer ${token || ''}`
           },
           body: JSON.stringify({
             reactivation_reason: reason,
@@ -303,7 +303,7 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
       const res = await fetch(`/api/radio/${stationId}/regenerate-key`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token || localStorage.getItem('token') || ''}`
+          'Authorization': `Bearer ${token || ''}`
         }
       });
       if (res.ok) {

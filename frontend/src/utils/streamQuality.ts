@@ -156,7 +156,8 @@ export function getStreamCandidatesForQuality(
 export async function resolveStreamUrl(path: string, track?: StreamQualityTrack): Promise<string> {
   if (isMasterStreamPath(path) && track?.id) {
     const ticket = await fetchStreamTicket(track.id);
-    return buildMasterStreamUrl(track.id, ticket) || path;
+    if (!ticket) return '';
+    return buildMasterStreamUrl(track.id, ticket) || '';
   }
   return path;
 }

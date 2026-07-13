@@ -1,10 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { SubscriptionDates } from '../components/subscription/SubscriptionDates';
 import { AppModal } from '../components/shared/AppModal';
 import { Users, Trash2, Eye, Pencil, Mail, Shield, Crown, Sparkles, UserCircle2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { showConfirm } from '../utils/swal';
 import { TableSkeleton, UserCardSkeleton } from '../components/shared/skeleton';
+import { useLazyList, DEFAULT_LAZY_PAGE_SIZE } from '../hooks/useLazyList';
+import { LazyListSentinel } from '../components/shared/LazyListSentinel';
+import { ListSearchInput } from '../components/shared/ListSearchInput';
 
 const roleBadgeClass = (role: string) => {
   switch (role) {
@@ -49,9 +52,29 @@ const parseUpgradeRequest = (bio?: string | null) => {
 
 export const UsersManagement: React.FC = () => {
   const { token, currentUser } = useAuth();
-  const [users, setUsers] = useState<any[]>([]);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const usersList = useLazyList<any>({
+    fetchPage: useCallback(async (offset, limit) => {
+      if (!token) return { items: [], hasMore: false };
+      const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      if (searchQuery.trim()) params.set('search', searchQuery.trim());
+      const res = await fetch(`/api/auth/admin/users?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return { items: [], hasMore: false };
+      const data = await res.json();
+      return { items: data.items, hasMore: data.has_more };
+    }, [token, searchQuery]),
+    resetKey: token ? `users-${searchQuery}` : null,
+    enabled: !!token,
+    pageSize: DEFAULT_LAZY_PAGE_SIZE,
+  });
+
+  const users = usersList.items;
+  const isLoading = usersList.loading;
+  const [isSaving, setIsSaving] = useState(false);
 
   // Modal State
   const [selectedUser, setSelectedUser] = useState<any | null>(null);
@@ -69,26 +92,7 @@ export const UsersManagement: React.FC = () => {
     setIsEditMode(false);
   };
 
-  const fetchUsers = async () => {
-    setIsLoading(true);
-    try {
-      const res = await fetch('/api/auth/admin/users', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setUsers(data);
-      }
-    } catch (e) {
-      console.error("Failed to fetch users:", e);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchUsers();
-  }, []);
+  const fetchUsers = () => usersList.reload();
 
   const handleOpenModal = (user: any) => {
     setSelectedUser(user);
@@ -105,7 +109,7 @@ export const UsersManagement: React.FC = () => {
   const handleSaveUser = async () => {
     if (!selectedUser) return;
     setMessage(null);
-    setIsLoading(true);
+    setIsSaving(true);
     try {
       // 1. Update basic details (email, full name) if changed
       if (editForm.fullName !== (selectedUser.full_name || '') || editForm.email !== selectedUser.email) {
@@ -123,7 +127,7 @@ export const UsersManagement: React.FC = () => {
         if (!detailsRes.ok) {
           const data = await detailsRes.json();
           setMessage({ type: 'error', text: data.detail || 'Failed to update user details.' });
-          setIsLoading(false);
+          setIsSaving(false);
           return;
         }
       }
@@ -137,7 +141,7 @@ export const UsersManagement: React.FC = () => {
         if (!roleRes.ok) {
           const data = await roleRes.json();
           setMessage({ type: 'error', text: data.detail || 'Failed to update user role.' });
-          setIsLoading(false);
+          setIsSaving(false);
           return;
         }
       }
@@ -158,7 +162,7 @@ export const UsersManagement: React.FC = () => {
         if (!subRes.ok) {
           const data = await subRes.json();
           setMessage({ type: 'error', text: data.detail || 'Failed to update subscription.' });
-          setIsLoading(false);
+          setIsSaving(false);
           return;
         }
       }
@@ -169,7 +173,7 @@ export const UsersManagement: React.FC = () => {
     } catch (e) {
       setMessage({ type: 'error', text: 'Connection failed.' });
     } finally {
-      setIsLoading(false);
+      setIsSaving(false);
     }
   };
 
@@ -212,6 +216,14 @@ export const UsersManagement: React.FC = () => {
           {message.text}
         </div>
       )}
+
+      <div className="flex justify-end">
+        <ListSearchInput
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder="Search by name or email..."
+        />
+      </div>
 
       <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
         {isLoading ? (
@@ -294,6 +306,11 @@ export const UsersManagement: React.FC = () => {
             </tbody>
           </table>
         )}
+        <LazyListSentinel
+          hasMore={usersList.hasMore}
+          loading={usersList.loadingMore}
+          onLoadMore={usersList.loadMore}
+        />
       </div>
 
       {/* Mobile card list */}
@@ -356,6 +373,11 @@ export const UsersManagement: React.FC = () => {
             </div>
           ))
         )}
+        <LazyListSentinel
+          hasMore={usersList.hasMore}
+          loading={usersList.loadingMore}
+          onLoadMore={usersList.loadMore}
+        />
       </div>
 
       <AppModal
@@ -405,7 +427,7 @@ export const UsersManagement: React.FC = () => {
               <button
                 type="button"
                 onClick={handleSaveUser}
-                disabled={isLoading}
+                disabled={isSaving}
                 className="px-5 py-2.5 bg-gradient-to-r from-rose-500 to-rose-600 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-lg shadow-rose-500/20 transition cursor-pointer"
               >
                 Save Changes

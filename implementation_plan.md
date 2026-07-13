@@ -2,6 +2,8 @@
 
 Living document describing what is **implemented today**, how the system works, and known gaps. Last aligned with the codebase: **July 2026**.
 
+> **Rebuilding this product?** Start with **[BUILD_GUIDE.md](BUILD_GUIDE.md)** — full layout, feature catalog, APIs, data model, build order, and acceptance checklist so nothing is missed.
+
 ---
 
 ## 1. Product overview
@@ -11,8 +13,8 @@ VeriSonic is a full-stack audio platform:
 1. **Music catalog** — lossless uploads, automated quality analysis, multi-bitrate transcoding, HLS VOD playback, ticketed master-stream delivery
 2. **Live radio** — desktop broadcaster ingest, real-time listener delivery, station profiles, program schedules, cover art in listings
 3. **Consumer experience** — web player with queue, lyrics, favorites, playlists, unified search (header + full page), mobile-first navigation, stream quality tiers
-4. **Monetization** — free trial + preview limits, Razorpay checkout for Premium (INR), admin-assigned Unlimited tier, **owner wallet & revenue sharing**
-5. **Administration** — user/role/subscription management, studio & station moderation (super-admin views), licence document review, revenue settings, withdrawal processing, analytics
+4. **Monetization** — free trial + preview limits, Razorpay checkout for Premium (INR), admin-assigned Unlimited tier, **owner wallet & revenue sharing** with **instant self-service withdrawals**
+5. **Administration** — user/role/subscription management, studio & station moderation, **Accounts** (owners / withdrawals / subscriptions / revenue settings + CSV exports), analytics
 
 ---
 
@@ -66,7 +68,7 @@ sequenceDiagram
 
 ### 2.4 Owner wallet & revenue (implemented)
 
-Premium subscription revenue is split between platform and content owners (studios + radio). Owners accrue balance from billable track plays and radio listen sessions; they withdraw to bank accounts after admin processing.
+Premium subscription revenue is split between platform and content owners (studios + radio). Owners accrue balance from billable track plays and radio listen sessions; they withdraw to bank accounts **instantly** (`status=paid` on create). Platform admins **view and export** withdrawals in Accounts — there is **no** admin approval queue.
 
 ```mermaid
 graph TD
@@ -76,17 +78,20 @@ graph TD
     Radio --> Session[radio_listen_sessions]
     Billable --> Wallet[owner_wallets + ledger]
     Session --> Wallet
-    Wallet --> Withdraw[withdrawal_requests]
-    Withdraw --> Admin[Admin process + UTR]
+    Wallet --> Withdraw[withdrawal_requests status=paid]
+    Withdraw --> Accounts[Admin Accounts view + CSV]
 ```
 
 ### 2.5 Frontend shell
 
-- Hash-based tab routing (`#home`, `#radio`, …) in `App.tsx` — no React Router
+- Hash-based tab routing (`#home`, `#radio`, `#accounts`, …) in `App.tsx` — no React Router
 - Global state: `AuthContext` (user, role, admin/listener mode, subscription, route guards), `AudioContext` (player, queue, favorites, quality, radio listen sessions)
 - Layout: `Header` (desktop nav + **HeaderSearch** dropdown), `MobileNav`, `AudioPlayer`, `OptionalPanel` (queue/programs)
 - Subscription UI: `SubscriptionPlans`, `PremiumModal`, `SubscriptionDates`, `SubscriptionQueueNotice`
-- Wallet UI: `Wallet`, `EarningsChart`, `WithdrawModal`, `RevenueSettingsPanel` (admin)
+- Wallet UI: `Wallet`, `EarningsChart`, `WithdrawModal`, `RevenueSettingsPanel` (admin / Accounts settings)
+- Accounts UI: `AccountsManagement` — Overview → Owners → Withdrawals → Subscriptions → Settings
+
+See **[BUILD_GUIDE.md](BUILD_GUIDE.md)** for the complete screen map and acceptance checklist.
 
 ---
 
@@ -127,6 +132,7 @@ Association table: `track_genres`
 | 018 | Licence document paths (studio + radio) |
 | 019 | Studio cover images (`artists.cover_image_path`) |
 | 020 | User profile images (`users.profile_image_path`) |
+| 021 | Track comments (`track_comments` table) |
 
 **Notable `User` fields:** `subscription`, `subscription_cycle`, `subscription_expires_at`, `subscription_activated_at`, `pending_plan_id`, `pending_plan_paid`, `subscription_cancel_at_period_end`, `stream_quality`, `must_reset_password`, `profile_image_path`
 
@@ -146,7 +152,9 @@ Association table: `track_genres`
 | `/api/analytics` | Admin dashboard metrics | ✅ |
 | `/api/subscriptions` | Plans, Razorpay checkout, verify, schedule change, cancel/reactivate | ✅ (requires Razorpay keys) |
 | `/api/wallet` | Summary, ledger, bank account, withdraw, withdrawal export | ✅ |
-| `/api/admin/revenue` | Revenue settings, withdrawal queue, process payouts | ✅ admin only |
+| `/api/admin/revenue` | Revenue settings, owners, subscribers, withdrawals view/export (Accounts) | ✅ admin only |
+| `/api/discovery` | Public studio browse, artist detail (tracks/albums/related) | ✅ |
+| `/api/albums`, `/api/genres` | Album list/detail/tracks CRUD (studio admin); genre admin CRUD | ✅ |
 
 ### 3.4 Profile & media uploads
 
@@ -235,7 +243,7 @@ Requires `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` in environment.
 | `GET /wallet/summary` | Balance, earnings breakdown |
 | `GET /wallet/ledger` | Ledger entries |
 | `GET/PUT/DELETE /wallet/bank-account` | Saved bank details (encrypted at rest) |
-| `POST /wallet/withdraw` | Request withdrawal |
+| `POST /wallet/withdraw` | Instant withdrawal (`status=paid`) |
 | `GET /wallet/withdrawals` | Withdrawal history |
 | `GET /wallet/withdrawals/export.csv` | CSV export |
 | `POST /wallet/withdrawals/export/email` | Email CSV export |
@@ -245,14 +253,19 @@ Requires `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` in environment.
 | Endpoint | Purpose |
 |----------|---------|
 | `GET/PUT /admin/revenue/settings` | Premium prices, revenue split BPS, min listen thresholds |
-| `GET /admin/revenue/withdrawals` | Pending/processed withdrawal queue |
-| `POST /admin/revenue/withdrawals/{id}/process` | Approve/reject + UTR reference |
+| `GET /admin/revenue/owners` (+ `/export.csv`, `/{id}`, `/{id}/export.csv`) | Owner accounts list/detail CSV |
+| `GET /admin/revenue/subscribers` (+ export / detail / detail export) | Subscriber list/detail; detail supports `from`/`to`/`search` |
+| `GET /admin/revenue/withdrawals/users` (+ `export.csv`) | Owners with withdrawal activity |
+| `GET /admin/revenue/withdrawals/users/{id}` (+ `export.csv`) | Paid withdrawals; `from`/`to`/`search`; CSV includes opening balance when From set |
+| `GET /admin/revenue/withdrawals` | Completed (`paid`) withdrawals (legacy list) |
 
 **Crediting:**
 - `POST /api/music/{id}/listen-progress` — billable track play when listened seconds ≥ `min_track_seconds`
-- Radio listen-session heartbeats — billable when session active and premium listener
+- Radio listen-session heartbeats — billable when session active and premium listener (row-locked)
 
-Services: `wallet_service.py`, `revenue_settings_service.py`, `withdrawal_export_service.py`, `field_encryption.py`
+Services: `wallet_service.py`, `revenue_settings_service.py`, `accounts_export_service.py`, `withdrawal_export_service.py`, `field_encryption.py`
+
+**Frontend Accounts tab order:** Overview → Owners → Withdrawals → Subscriptions → Settings.
 
 ### 3.9 Celery tasks
 
@@ -287,19 +300,25 @@ Services: `wallet_service.py`, `revenue_settings_service.py`, `withdrawal_export
 | `tracks` | TracksManagement | Upload queue, approval, acoustic reports |
 | `track-list` | StudioTrackList | Studio admin track library |
 | `users` | UsersManagement | Admin user CRUD + subscription assignment |
+| `accounts` | AccountsManagement | Admin finance: owners, withdrawals, subscriptions, settings + CSV |
 | `analytics` | AdminAnalytics | Metrics dashboard |
-| `wallet` | Wallet | Owner earnings, chart, withdraw, bank account |
+| `wallet` | Wallet | Owner earnings, chart, instant withdraw, bank account |
 | `reports` | Inline in App | Acoustic report viewer |
 | `contact` | Contact | Support & upgrade requests |
 | `broadcaster-download` | BroadcasterDownload | Desktop app download guide |
-| `auth` | AuthPage | Login / register / social stub |
+| `artist` | Artist | Dedicated artist browse (`GET /api/discovery/artists/{name}`) |
 | `admin-password-reset` | ForceAdminPasswordReset | Mandatory admin password change gate |
 
 **Role-specific profile tabs (same route, different component):**
 - `station-profile` → `RadioStationsManagement` for platform **admin**; `StationProfile` for **radio_admin**
 - `studio-profile` → `StudiosManagement` for platform **admin**; `StudioProfile` for **studio_admin**
 
-**Not wired:** `Artist.tsx` (mock data; no router case). `Sidebar.tsx` (legacy; navigation uses Header + MobileNav).
+**Artist page** (`Artist.tsx`):
+- Routed via `#artist` tab; opened from Search, Header search, Music Details, Home Popular Artists
+- Fetches `GET /api/discovery/artists/{name}` — tracks, albums, studio bio/cover, related artists
+- Play All queue support; studio cover shown in hero when artist matches a studio profile
+
+**Not wired:** `Sidebar.tsx` (legacy; navigation uses Header + MobileNav).
 
 ### 4.2 Search (implemented)
 
@@ -400,14 +419,8 @@ Lossless/hi-res playback uses short-lived stream tickets (`POST /api/music/{id}/
 |------|-----|
 | Radio schedule | Add-only API; no list/delete/reorder; no automated scheduled playback |
 | Playlists | `is_public` stored but no public discovery endpoint |
-| Artists page | `Artist.tsx` exists but not routed; artist browse is via Search detail view only |
-| Listening history | Written on play; no user-facing history API/page |
 | Google OAuth | Mock endpoint only; no real token verification |
 | Razorpay | Full flow implemented; disabled until server keys are configured |
-| Track comments | Client-side mock on MusicDetails; not persisted |
-| Album/genre CRUD | Models exist; no standalone management APIs |
-| Studio cover in listings | Stored and returned via API; not yet shown in consumer browse UI |
-| Header avatar | Generic user icon; uploaded profile photo shown on My Profile only |
 
 ---
 

@@ -27,7 +27,10 @@ interface HeaderSearchProps {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   setSelectedArtist: (artist: string | null) => void;
+  setSelectedAlbum: (album: string | null) => void;
+  setSelectedPlaylistId: (id: number | null) => void;
   setActiveTab: (tab: string) => void;
+  onOpenArtistPage?: (artistName: string) => void;
 }
 
 interface PlaylistPreview {
@@ -58,7 +61,10 @@ export const HeaderSearch: React.FC<HeaderSearchProps> = ({
   searchQuery,
   setSearchQuery,
   setSelectedArtist,
+  setSelectedAlbum,
+  setSelectedPlaylistId,
   setActiveTab,
+  onOpenArtistPage,
 }) => {
   const { token, canUsePlaylists } = useAuth();
   const { playTrack, playRadioStation } = useAudio();
@@ -205,6 +211,8 @@ export const HeaderSearch: React.FC<HeaderSearchProps> = ({
 
   const goToSearchPage = () => {
     setSelectedArtist(null);
+    setSelectedAlbum(null);
+    setSelectedPlaylistId(null);
     setActiveTab('search');
     setIsOpen(false);
   };
@@ -218,17 +226,28 @@ export const HeaderSearch: React.FC<HeaderSearchProps> = ({
         playRadioStation(item.station);
         break;
       case 'artist':
-        setSearchQuery(item.name);
-        setSelectedArtist(item.name);
-        setActiveTab('search');
+        if (onOpenArtistPage) {
+          onOpenArtistPage(item.name);
+        } else {
+          setSearchQuery(item.name);
+          setSelectedAlbum(null);
+          setSelectedPlaylistId(null);
+          setSelectedArtist(item.name);
+          setActiveTab('search');
+        }
         break;
       case 'album':
         setSearchQuery(item.title);
         setSelectedArtist(null);
+        setSelectedPlaylistId(null);
+        setSelectedAlbum(item.title);
         setActiveTab('search');
         break;
       case 'playlist':
-        setActiveTab('playlists');
+        setSelectedArtist(null);
+        setSelectedAlbum(null);
+        setSelectedPlaylistId(item.playlistId);
+        setActiveTab('search');
         break;
     }
     setIsOpen(false);
@@ -290,7 +309,7 @@ export const HeaderSearch: React.FC<HeaderSearchProps> = ({
 
   return (
     <div ref={containerRef} className="relative hidden md:block flex-shrink-0">
-      <div className="flex items-center gap-2 bg-slate-900/40 border border-white/5 rounded-xl px-2.5 lg:px-3 py-1.5 hover:border-slate-800 transition duration-300 w-28 lg:w-48">
+      <div className="flex items-center gap-2 bg-slate-900/40 border border-white/5 rounded-xl px-2.5 lg:px-3 py-1.5 hover:border-slate-800 transition duration-300 w-36 md:w-44 lg:w-56 xl:w-64">
         <Search className="w-4 h-4 text-slate-500 flex-shrink-0" />
         <input
           type="text"

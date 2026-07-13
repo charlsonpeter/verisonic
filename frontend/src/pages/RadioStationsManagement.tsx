@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Radio, Settings, Edit2, ArrowLeft, Ban, Check } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { showConfirm, showError, showSuccess } from '../utils/swal';
 import Swal from 'sweetalert2';
 import { TableSkeleton } from '../components/shared/skeleton';
 import { LicenceDocumentLink } from '../components/shared/LicenceDocumentUpload';
+import { useLazyList, DEFAULT_LAZY_PAGE_SIZE } from '../hooks/useLazyList';
+import { LazyListSentinel } from '../components/shared/LazyListSentinel';
 
 interface RadioStationRow {
   id: number;
@@ -72,8 +74,6 @@ const statusLabel = (station: RadioStationRow) => {
 
 export const RadioStationsManagement: React.FC = () => {
   const { token } = useAuth();
-  const [stations, setStations] = useState<RadioStationRow[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'list' | 'edit'>('list');
   const [editingStationId, setEditingStationId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -85,26 +85,28 @@ export const RadioStationsManagement: React.FC = () => {
 
   const authHeaders = {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${token || localStorage.getItem('token') || ''}`,
+    Authorization: `Bearer ${token || ''}`,
   };
 
-  const fetchStations = async () => {
-    setIsLoading(true);
-    try {
-      const res = await fetch('/api/radio', { headers: authHeaders });
-      if (res.ok) {
-        setStations(await res.json());
-      }
-    } catch (e) {
-      console.error('Failed to fetch stations:', e);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const stationsList = useLazyList<RadioStationRow>({
+    fetchPage: useCallback(async (offset, limit) => {
+      const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      if (searchQuery.trim()) params.set('search', searchQuery.trim());
+      if (statusFilter !== 'all') params.set('status', statusFilter);
+      const res = await fetch(`/api/radio/admin?${params}`, { headers: authHeaders });
+      if (!res.ok) return { items: [], hasMore: false };
+      const data = await res.json();
+      return { items: data.items, hasMore: data.has_more };
+    }, [token, searchQuery, statusFilter]),
+    resetKey: viewMode === 'list' ? `${searchQuery}-${statusFilter}` : null,
+    enabled: viewMode === 'list' && !!token,
+    pageSize: DEFAULT_LAZY_PAGE_SIZE,
+  });
 
-  useEffect(() => {
-    fetchStations();
-  }, []);
+  const stations = stationsList.items;
+  const isLoading = stationsList.loading;
+
+  const fetchStations = () => stationsList.reload();
 
   const handleEditClick = (station: RadioStationRow) => {
     setEditingStationId(station.id);
@@ -231,23 +233,7 @@ export const RadioStationsManagement: React.FC = () => {
     }
   };
 
-  const filteredStations = stations.filter((station) => {
-    const q = searchQuery.toLowerCase();
-    const matchesSearch =
-      station.name.toLowerCase().includes(q) ||
-      (station.category && station.category.toLowerCase().includes(q)) ||
-      (station.broadcast_frequency && station.broadcast_frequency.toLowerCase().includes(q)) ||
-      (station.licence && station.licence.toLowerCase().includes(q)) ||
-      (station.owner_name && station.owner_name.toLowerCase().includes(q)) ||
-      (station.owner_email && station.owner_email.toLowerCase().includes(q));
-
-    if (statusFilter === 'active') return matchesSearch && station.is_active;
-    if (statusFilter === 'disabled') return matchesSearch && !station.is_active;
-    if (statusFilter === 'pending') {
-      return matchesSearch && !station.is_active && station.reactivation_requested;
-    }
-    return matchesSearch;
-  });
+  const filteredStations = stations;
 
   return (
     <div className="space-y-8 w-full max-w-[90rem] animate-page-entry font-sans">
@@ -386,6 +372,11 @@ export const RadioStationsManagement: React.FC = () => {
                 </tbody>
               </table>
             )}
+            <LazyListSentinel
+              hasMore={stationsList.hasMore}
+              loading={stationsList.loadingMore}
+              onLoadMore={stationsList.loadMore}
+            />
           </div>
 
           <div className="md:hidden space-y-3">
@@ -440,6 +431,11 @@ export const RadioStationsManagement: React.FC = () => {
                 </div>
               ))
             )}
+            <LazyListSentinel
+              hasMore={stationsList.hasMore}
+              loading={stationsList.loadingMore}
+              onLoadMore={stationsList.loadMore}
+            />
           </div>
         </div>
       )}

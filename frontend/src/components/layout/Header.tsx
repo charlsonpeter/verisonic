@@ -2,26 +2,32 @@ import React, { useState, useRef, useEffect } from 'react';
 import { 
   Crown, Signal, User, ChevronDown,
   Compass, Radio, Heart, FolderHeart, UploadCloud,
-  ShieldCheck, BarChart2, Settings, LogOut, Disc, Mail, Laptop, Music, Wallet
+  ShieldCheck, BarChart2, Settings, LogOut, Disc, Mail, Laptop, Music, Wallet, Landmark,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useAudio } from '../../context/AudioContext';
 import { getPageTitle } from '../../utils/pageTitles';
 import { getAccountTierLabel, hasPaidSubscription, isOnFreeTrial } from '../../utils/accountTier';
 import { HeaderSearch } from './HeaderSearch';
+import { UserAvatar } from '../shared/UserAvatar';
 
 interface HeaderProps {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   selectedSearchArtist: string | null;
   setSelectedSearchArtist: (artist: string | null) => void;
+  setSelectedSearchAlbum: (album: string | null) => void;
+  setSelectedSearchPlaylistId: (id: number | null) => void;
   activeTab: string;
   setActiveTab: (tab: string) => void;
   pageTitleOverride?: string | null;
+  onOpenArtistPage?: (artistName: string) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({ 
-  searchQuery, setSearchQuery, selectedSearchArtist, setSelectedSearchArtist, activeTab, setActiveTab, pageTitleOverride
+  searchQuery, setSearchQuery, selectedSearchArtist, setSelectedSearchArtist,
+  setSelectedSearchAlbum, setSelectedSearchPlaylistId,
+  activeTab, setActiveTab, pageTitleOverride, onOpenArtistPage,
 }) => {
   const { currentUser, logout, token, userMode, switchUserMode, isSwitchingMode, isStaffInAdminMode, canUsePlaylists, canAccessPlatformSettings, canAccessStationProfile } = useAuth();
   const { setShowPremiumModal } = useAudio();
@@ -53,23 +59,27 @@ export const Header: React.FC<HeaderProps> = ({
   const isOnTrial = isOnFreeTrial(currentUser);
   const tierLabel = getAccountTierLabel(currentUser);
 
+  const isPlatformAdmin = currentUser?.role === 'admin';
+  const contactNavItem = { id: 'contact', label: 'Contact Us', icon: Mail };
+
   const navItems = isRadioAdminInAdminMode
     ? [
         { id: 'radio', label: 'Radio Stations', icon: Radio },
         { id: 'broadcaster-download', label: 'Broadcaster App', icon: Laptop },
-        { id: 'contact', label: 'Contact Us', icon: Mail }
+        ...(!isPlatformAdmin ? [contactNavItem] : []),
       ]
     : isStudioAdminInAdminMode
       ? [
           { id: 'track-list', label: 'Tracks List', icon: Music },
-          { id: 'contact', label: 'Contact Us', icon: Mail }
+          ...(!isPlatformAdmin ? [contactNavItem] : []),
         ]
       : [
         { id: 'home', label: 'Home Feed', icon: Compass },
         { id: 'radio', label: 'Radio Stations', icon: Radio },
         { id: 'favorites', label: 'Favorites', icon: Heart },
         ...(canUsePlaylists || !token ? [{ id: 'playlists', label: 'Playlists', icon: FolderHeart }] : []),
-        { id: 'contact', label: 'Contact Us', icon: Mail }
+        ...(isPlatformAdmin ? [{ id: 'accounts', label: 'Accounts', icon: Landmark }] : []),
+        ...(!isPlatformAdmin ? [contactNavItem] : []),
       ];
 
   const handleDropdownSelect = (tab: string) => {
@@ -160,7 +170,10 @@ export const Header: React.FC<HeaderProps> = ({
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
             setSelectedArtist={setSelectedSearchArtist}
+            setSelectedAlbum={setSelectedSearchAlbum}
+            setSelectedPlaylistId={setSelectedSearchPlaylistId}
             setActiveTab={setActiveTab}
+            onOpenArtistPage={onOpenArtistPage}
           />
         )}
         {/* VIP badge */}
@@ -267,10 +280,17 @@ export const Header: React.FC<HeaderProps> = ({
             <button 
               type="button"
               onClick={() => setDropdownOpen(!dropdownOpen)}
-              className="md:hidden w-9 h-9 rounded-full bg-slate-800/90 border border-white/10 flex items-center justify-center active:scale-95 transition-transform outline-none"
+              className="md:hidden active:scale-95 transition-transform outline-none"
               aria-label="Account menu"
             >
-              <User className="w-[18px] h-[18px] text-slate-300" />
+              <UserAvatar
+                fullName={currentUser.full_name}
+                email={currentUser.email}
+                imageUrl={currentUser.profile_image_url}
+                className="w-9 h-9"
+                fallbackIconClassName="w-[18px] h-[18px]"
+                initialsClassName="text-[11px]"
+              />
             </button>
 
             {/* Desktop — profile with chevron */}
@@ -279,9 +299,12 @@ export const Header: React.FC<HeaderProps> = ({
               onClick={() => setDropdownOpen(!dropdownOpen)}
               className="hidden md:flex items-center gap-1.5 p-1 bg-slate-900/50 hover:bg-slate-900 border border-white/5 rounded-2xl transition duration-305 outline-none"
             >
-              <div className="w-8 h-8 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300">
-                <User className="w-4 h-4" />
-              </div>
+              <UserAvatar
+                fullName={currentUser.full_name}
+                email={currentUser.email}
+                imageUrl={currentUser.profile_image_url}
+                className="w-8 h-8"
+              />
               <ChevronDown className={`w-3.5 h-3.5 text-slate-500 transition-transform ${dropdownOpen ? 'rotate-180 text-white' : ''}`} />
             </button>
 
@@ -290,9 +313,18 @@ export const Header: React.FC<HeaderProps> = ({
               <div className="absolute right-0 top-10 md:top-11 w-56 bg-slate-900 border border-white/5 rounded-2xl p-2 shadow-2xl z-40 space-y-0.5 backdrop-blur-xl">
                 
                 {/* User info */}
-                <div className="p-2.5 border-b border-white/3 mb-1.5">
-                  <p className="text-xs font-bold text-slate-200 truncate">{currentUser.full_name}</p>
-                  <p className="text-[10px] text-slate-500 truncate mt-0.5">{currentUser.email}</p>
+                <div className="p-2.5 border-b border-white/3 mb-1.5 flex items-center gap-2.5">
+                  <UserAvatar
+                    fullName={currentUser.full_name}
+                    email={currentUser.email}
+                    imageUrl={currentUser.profile_image_url}
+                    className="w-9 h-9"
+                    initialsClassName="text-[11px]"
+                  />
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-slate-200 truncate">{currentUser.full_name}</p>
+                    <p className="text-[10px] text-slate-500 truncate mt-0.5">{currentUser.email}</p>
+                  </div>
                 </div>
 
                 {/* Mobile User Mode Switcher inside dropdown */}
@@ -406,6 +438,16 @@ export const Header: React.FC<HeaderProps> = ({
                       Manage Users
                     </button>
                   </>
+                )}
+
+                {isPlatformAdmin && (
+                  <button
+                    onClick={() => handleDropdownSelect('accounts')}
+                    className="md:hidden w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
+                  >
+                    <Landmark className="w-4 h-4 text-slate-450" />
+                    Accounts
+                  </button>
                 )}
 
                 {currentUser && canAccessPlatformSettings && (

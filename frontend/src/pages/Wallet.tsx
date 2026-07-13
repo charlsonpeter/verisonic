@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   Wallet as WalletIcon,
   ArrowDownToLine,
@@ -17,7 +17,7 @@ import { WithdrawalsExportModal } from '../components/wallet/WithdrawalsExportMo
 import {
   deleteSavedBankAccount,
   fetchBankAccount,
-  fetchMyWithdrawals,
+  fetchMyWithdrawalsPage,
   fetchWalletSummary,
   formatInrFromPaise,
   requestWithdrawal,
@@ -25,12 +25,14 @@ import {
   type WalletSummary,
   type WithdrawalRequest,
 } from '../utils/wallet';
+import { formatLocalDate } from '../utils/dateTime';
 import { WalletSkeleton } from '../components/shared/skeleton';
+import { useLazyList, DEFAULT_LAZY_PAGE_SIZE } from '../hooks/useLazyList';
+import { LazyListSentinel } from '../components/shared/LazyListSentinel';
 
 export const Wallet: React.FC = () => {
   const { token, currentUser } = useAuth();
   const [summary, setSummary] = useState<WalletSummary | null>(null);
-  const [withdrawals, setWithdrawals] = useState<WithdrawalRequest[]>([]);
   const [savedBank, setSavedBank] = useState<BankAccount | null>(null);
   const [loading, setLoading] = useState(true);
   const [chartRefreshKey, setChartRefreshKey] = useState(0);
@@ -38,21 +40,33 @@ export const Wallet: React.FC = () => {
   const [withdrawOpen, setWithdrawOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
 
+  const withdrawalsList = useLazyList<WithdrawalRequest>({
+    fetchPage: useCallback(async (offset, limit) => {
+      if (!token) return { items: [], hasMore: false };
+      const page = await fetchMyWithdrawalsPage(token, limit, offset);
+      return { items: page.items, hasMore: page.has_more };
+    }, [token]),
+    resetKey: token,
+    enabled: !!token,
+    pageSize: DEFAULT_LAZY_PAGE_SIZE,
+  });
+
+  const withdrawals = withdrawalsList.items;
+
   const role = currentUser?.real_role || currentUser?.role;
 
   const reload = async () => {
     if (!token) return;
     setLoading(true);
     try {
-      const [sum, reqs, acct] = await Promise.all([
+      const [sum, acct] = await Promise.all([
         fetchWalletSummary(token),
-        fetchMyWithdrawals(token),
         fetchBankAccount(token),
       ]);
       setSummary(sum);
-      setWithdrawals(reqs.slice(0, 10));
       setSavedBank(acct);
       setChartRefreshKey((k) => k + 1);
+      await withdrawalsList.reload();
     } catch (err) {
       showError('Wallet', err instanceof Error ? err.message : 'Could not load wallet.');
     } finally {
@@ -183,7 +197,6 @@ export const Wallet: React.FC = () => {
           <h2 className="text-sm font-bold text-white mb-4 flex items-center gap-2 flex-shrink-0">
             <History className="w-4 h-4 text-slate-400" />
             Recent withdrawals
-            <span className="text-[10px] font-normal text-slate-500">Last 10</span>
             <button
               type="button"
               onClick={() => setExportOpen(true)}
@@ -193,7 +206,11 @@ export const Wallet: React.FC = () => {
               <Download className="w-3.5 h-3.5" />
             </button>
           </h2>
-          {withdrawals.length === 0 ? (
+          {withdrawalsList.loading && withdrawals.length === 0 ? (
+            <p className="text-xs text-slate-500 py-8 text-center border border-dashed border-white/10 rounded-xl flex-1 flex items-center justify-center">
+              Loading withdrawals…
+            </p>
+          ) : withdrawals.length === 0 ? (
             <p className="text-xs text-slate-500 py-8 text-center border border-dashed border-white/10 rounded-xl flex-1 flex items-center justify-center">
               No withdrawals yet.
             </p>
@@ -203,29 +220,27 @@ export const Wallet: React.FC = () => {
                 <thead className="sticky top-0 bg-slate-900/95 backdrop-blur-sm">
                   <tr className="text-left text-[10px] uppercase tracking-wider text-slate-500 border-b border-white/5">
                     <th className="pb-2 font-bold">Date</th>
-                    <th className="pb-2 font-bold">Amount</th>
-                    <th className="pb-2 font-bold text-right">Status</th>
+                    <th className="pb-2 font-bold text-right">Amount</th>
                   </tr>
                 </thead>
                 <tbody>
                   {withdrawals.map((row) => (
                     <tr key={row.id} className="border-b border-white/5 last:border-0">
                       <td className="py-2.5 text-slate-400">
-                        {new Date(row.created_at).toLocaleDateString('en-IN', {
-                          day: 'numeric',
-                          month: 'short',
-                        })}
+                        {formatLocalDate(row.created_at)}
                       </td>
-                      <td className="py-2.5 text-white font-bold">{formatInrFromPaise(row.amount_paise)}</td>
-                      <td className="py-2.5 text-right">
-                        <span className="inline-block px-2 py-0.5 rounded-md bg-slate-800 text-[10px] font-bold uppercase text-slate-300">
-                          {row.status}
-                        </span>
+                      <td className="py-2.5 text-white font-bold text-right">
+                        {formatInrFromPaise(row.amount_paise)}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              <LazyListSentinel
+                hasMore={withdrawalsList.hasMore}
+                loading={withdrawalsList.loadingMore}
+                onLoadMore={withdrawalsList.loadMore}
+              />
             </div>
           )}
         </div>

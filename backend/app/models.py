@@ -41,6 +41,7 @@ class User(Base):
     playlists = relationship("Playlist", back_populates="user")
     favorites = relationship("Favorite", back_populates="user")
     listening_history = relationship("ListeningHistory", back_populates="user")
+    track_comments = relationship("TrackComment", back_populates="user", cascade="all, delete-orphan")
     subscription_payments = relationship("SubscriptionPayment", back_populates="user")
     wallet = relationship("OwnerWallet", back_populates="user", uselist=False)
     bank_account = relationship("OwnerBankAccount", back_populates="user", uselist=False)
@@ -155,6 +156,7 @@ class Track(Base):
     playlist_tracks = relationship("PlaylistTrack", back_populates="track", cascade="all, delete-orphan")
     listening_history = relationship("ListeningHistory", back_populates="track", cascade="all, delete-orphan")
     favorites = relationship("Favorite", back_populates="track", cascade="all, delete-orphan")
+    comments = relationship("TrackComment", back_populates="track", cascade="all, delete-orphan")
 
 class Playlist(Base):
     __tablename__ = "playlists"
@@ -244,6 +246,17 @@ class ListeningHistory(Base):
 
     user = relationship("User", back_populates="listening_history")
     track = relationship("Track", back_populates="listening_history")
+
+class TrackComment(Base):
+    __tablename__ = "track_comments"
+    id = Column(Integer, primary_key=True, index=True)
+    track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    body = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    track = relationship("Track", back_populates="comments")
+    user = relationship("User", back_populates="track_comments")
 
 class Favorite(Base):
     __tablename__ = "favorites"

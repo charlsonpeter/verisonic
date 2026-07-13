@@ -134,6 +134,7 @@ interface AudioContextType {
   toggleShuffle: () => void;
   toggleFavorite: (trackId: number) => void;
   addToQueue: (track: Track) => void;
+  playQueueTracks: (tracks: Track[]) => void;
   removeFromQueue: (trackId: number) => void;
   clearQueue: () => void;
   reorderQueue: (startIndex: number, endIndex: number) => void;
@@ -166,6 +167,8 @@ const resolveStorageUrl = (url?: string): string => {
 
 const PREVIEW_LIMIT_SECONDS = 30;
 const RADIO_PREVIEW_LIMIT_SECONDS = 60;
+/** Max position jump counted as continuous playback between timeupdate samples. */
+const LISTEN_SAMPLE_MAX_DELTA_SEC = 5;
 
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { token, isPremium, canConfigureStreamQuality, userMode, serverUserMode, currentUser, isStaffInAdminMode, updateStreamQuality } = useAuth();
@@ -242,6 +245,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const playbackEpochRef = useRef(0);
   const ownedBlobUrlRef = useRef<string | null>(null);
   const walletBilledTrackRef = useRef<number | null>(null);
+  const accumulatedListenSecondsRef = useRef(0);
+  const lastListenSampleTimeRef = useRef<number | null>(null);
   const radioWalletSessionRef = useRef<{ stationId: number; token: string } | null>(null);
   const radioWalletHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isStaffInAdminModeRef = useRef(isStaffInAdminMode);
@@ -504,6 +509,23 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     walletBilledTrackRef.current = track.id;
     void reportTrackListenProgress(activeToken, track.id, listenedSeconds).catch(() => {});
   }, [canBillListenActivity]);
+
+  const resetListenTimeTracking = useCallback(() => {
+    accumulatedListenSecondsRef.current = 0;
+    lastListenSampleTimeRef.current = null;
+  }, []);
+
+  const sampleAccumulatedListenTime = useCallback((currentTime: number) => {
+    const last = lastListenSampleTimeRef.current;
+    if (last !== null) {
+      const delta = currentTime - last;
+      if (delta > 0 && delta <= LISTEN_SAMPLE_MAX_DELTA_SEC) {
+        accumulatedListenSecondsRef.current += delta;
+      }
+    }
+    lastListenSampleTimeRef.current = currentTime;
+    return accumulatedListenSecondsRef.current;
+  }, []);
   const maybeReportTrackListenProgressRef = useRef(maybeReportTrackListenProgress);
   useEffect(() => {
     maybeReportTrackListenProgressRef.current = maybeReportTrackListenProgress;
@@ -633,10 +655,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setIsPlaying(true);
       audio.playbackRate = playbackSpeedRef.current;
       const track = currentTrackRef.current;
-      if (track && token && !activeRadioStationRef.current && track.id < 100000) {
+      const activeToken = tokenRef.current;
+      if (track && activeToken && !activeRadioStationRef.current && track.id < 100000) {
         fetch(`${API_URL}/music/${track.id}/play`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${token}` }
+          headers: { Authorization: `Bearer ${activeToken}` }
         }).catch(() => {});
       }
       // Tell Chrome Android this page is actively playing media — required for background audio
@@ -706,8 +729,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       const track = currentTrackRef.current;
-      if (track && !activeRadioStationRef.current && track.id < 100000) {
-        maybeReportTrackListenProgressRef.current(track, audio.currentTime);
+      if (track && !activeRadioStationRef.current && track.id < 100000 && !audio.paused) {
+        const listened = sampleAccumulatedListenTime(audio.currentTime);
+        maybeReportTrackListenProgressRef.current(track, listened);
       }
     };
     const onDurationChange = () => setDuration(audio.duration || 0);
@@ -949,7 +973,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     } else {
       const queue = playQueueRef.current;
-      if (queue.length === 0 || currentQueueIndexRef.current >= queue.length - 1) {
+      const atEnd = queue.length === 0 || currentQueueIndexRef.current >= queue.length - 1;
+      if (atEnd && repeatModeRef.current !== 'all') {
         setIsPlaying(false);
         if (activeRadioStationRef.current) {
           setActiveRadioStation(null);
@@ -993,6 +1018,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setActiveRadioStation(null);
       setIsRadioSync(false);
       walletBilledTrackRef.current = null;
+      resetListenTimeTracking();
     }
 
     let trackToPlay = track;
@@ -1323,6 +1349,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       navigator.mediaSession.setActionHandler('seekto', (details) => {
         if (audioRef.current && details.seekTime !== undefined) {
           audioRef.current.currentTime = details.seekTime;
+          lastListenSampleTimeRef.current = details.seekTime;
         }
       });
     }
@@ -1668,6 +1695,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!audioRef.current || isRadioSync) return; // Prevent live stream seeking
     audioRef.current.currentTime = time;
     setCurrentTime(time);
+    lastListenSampleTimeRef.current = time;
   };
 
   const adjustVolume = (vol: number) => {
@@ -1739,6 +1767,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
       return [...prev, track];
     });
+  };
+
+  const playQueueTracks = (tracks: Track[]) => {
+    if (tracks.length === 0) return;
+    setPlayQueue(tracks);
+    setCurrentQueueIndex(0);
+    void playTrack(tracks[0]);
   };
 
   const removeFromQueue = (trackId: number) => {
@@ -1877,6 +1912,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       toggleShuffle,
       toggleFavorite,
       addToQueue,
+      playQueueTracks,
       removeFromQueue,
       clearQueue,
       reorderQueue,

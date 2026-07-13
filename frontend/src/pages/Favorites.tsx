@@ -22,26 +22,36 @@ export const Favorites: React.FC<FavoritesProps> = ({ onViewDetails }) => {
       return;
     }
 
+    let cancelled = false;
     const loadFavoriteTracks = async () => {
-      setIsLoading(true);
+      const showSkeleton = favoriteTracks.length === 0;
+      if (showSkeleton) setIsLoading(true);
       try {
         const res = await fetch('/api/favorites', {
           headers: { Authorization: `Bearer ${token}` },
         });
+        if (cancelled) return;
         if (res.ok) {
           setFavoriteTracks(await res.json());
         } else {
           setFavoriteTracks([]);
         }
       } catch (e) {
-        console.error('Failed to load favorite tracks:', e);
-        setFavoriteTracks([]);
+        if (!cancelled) {
+          console.error('Failed to load favorite tracks:', e);
+          setFavoriteTracks([]);
+        }
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
 
-    loadFavoriteTracks();
+    void loadFavoriteTracks();
+    return () => {
+      cancelled = true;
+    };
+    // Re-fetch when favorite ids change, but avoid dependency on favoriteTracks length
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, favorites]);
 
   if (!token) {

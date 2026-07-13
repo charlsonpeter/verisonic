@@ -1,12 +1,13 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header, Request, Response, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Request, Response, File, UploadFile, Query
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import or_
 from jose import jwt, JWTError
 from typing import List, Optional
 
 from app.db.session import get_db
 from app.models import User, Artist
-from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, UserSettingsUpdate, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, StudioProfileUpdate, RequestReactivationSchema, SwitchModeRequest
+from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, UserSettingsUpdate, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, StudioProfileUpdate, RequestReactivationSchema, SwitchModeRequest, PaginatedUserListResponse, PaginatedArtistListResponse
 from app.core.security import (
     verify_password, get_password_hash, create_access_token, create_refresh_token,
     validate_refresh_token, revoke_refresh_token, ALGORITHM, REFRESH_COOKIE_NAME,
@@ -157,6 +158,9 @@ def _resolve_authenticated_user(token: str, db: Session, *, enforce_password_res
     )
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        token_type = payload.get("type")
+        if token_type in ("refresh", "stream"):
+            raise credentials_exception
         user_id: str = payload.get("sub")
         if user_id is None:
             raise credentials_exception
@@ -182,6 +186,8 @@ def get_optional_current_user(
     token = credentials.credentials
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") in ("refresh", "stream"):
+            return None
         user_id: str = payload.get("sub")
         if user_id is None:
             return None
@@ -291,37 +297,12 @@ def login(user_in: UserLogin, request: Request, response: Response, db: Session 
 
 @router.post("/google", response_model=Token)
 def login_google(body: dict, request: Request, response: Response, db: Session = Depends(get_db)):
-    """
-    Log in using Google Sign-In. Mocks backend OAuth verification for simple integration.
-    """
+    """Google Sign-In requires verified ID tokens — mock email login is disabled."""
     enforce_rate_limit(request, "google")
-    # Accept user info sent directly or decoded from mock id token
-    email = body.get("email")
-    name = body.get("name", "Google User")
-    
-    if not email:
-        raise HTTPException(status_code=400, detail="Google authentication payload must include email")
-        
-    user = db.query(User).filter(User.email == email).first()
-    if not user:
-        # Register new listener automatically
-        hashed_pwd = get_password_hash("GOOGLE_MOCK_LOGIN_SECRET_12345")
-        user = User(
-            email=email,
-            hashed_password=hashed_pwd,
-            full_name=name,
-            role="listener"
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-    elif not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Inactive user"
-        )
-        
-    return _issue_token_response(user, response)
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Google Sign-In is not configured. Use email and password.",
+    )
 
 def _user_response(user: User) -> UserResponse:
     real_role = getattr(user, "_real_role", None) or user.role
@@ -424,8 +405,14 @@ def request_artist(
     db: Session = Depends(get_db)
 ):
     """
-    Submit or update artist details for the currently logged-in user (listener).
+    Submit a studio-admin upgrade request (artist/studio profile pending approval).
+    Radio-admin upgrades must use /request-radio-admin.
     """
+    if (artist_in.bio or "").upper().find("[REQUESTING RADIO ADMIN") >= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Use the radio admin upgrade request for radio station promotions.",
+        )
     artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
     if artist:
         artist.stage_name = artist_in.stage_name.strip()
@@ -440,6 +427,50 @@ def request_artist(
     
     db.commit()
     db.refresh(artist)
+    db.refresh(current_user)
+    return current_user
+
+
+@router.post("/request-radio-admin", response_model=UserResponse)
+def request_radio_admin(
+    body: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Queue a radio-admin upgrade request without creating a studio Artist profile."""
+    from app.models import RadioStation
+
+    station_name = (body.get("station_name") or body.get("stage_name") or "").strip()
+    message = (body.get("message") or body.get("bio") or "").strip()
+    if not station_name:
+        raise HTTPException(status_code=400, detail="Station name is required.")
+    if not message:
+        raise HTTPException(status_code=400, detail="Message is required.")
+
+    note = f"[RADIO_ADMIN_ROLE_REQUEST] {message}"
+    existing = (
+        db.query(RadioStation)
+        .filter(RadioStation.owner_id == current_user.id)
+        .order_by(RadioStation.id.asc())
+        .first()
+    )
+    if existing:
+        existing.name = station_name
+        existing.description = note
+        existing.is_active = False
+        existing.disabled_reason = "Pending radio admin role approval"
+    else:
+        db.add(
+            RadioStation(
+                owner_id=current_user.id,
+                name=station_name,
+                description=note,
+                is_active=False,
+                disabled_reason="Pending radio admin role approval",
+            )
+        )
+
+    db.commit()
     db.refresh(current_user)
     return current_user
 
@@ -532,15 +563,33 @@ async def upload_studio_cover(
     return _user_response(db_user)
 
 
-@router.get("/admin/users", response_model=List[UserResponse])
+@router.get("/admin/users", response_model=PaginatedUserListResponse)
 def get_users_admin(
+    search: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
     """
-    Admin user management: list all users.
+    Admin user management: list users with pagination.
     """
-    return db.query(User).all()
+    query = db.query(User).order_by(User.id.desc())
+    if search and search.strip():
+        pattern = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                User.full_name.ilike(pattern),
+                User.email.ilike(pattern),
+            )
+        )
+    total = query.count()
+    users = query.offset(offset).limit(limit).all()
+    return PaginatedUserListResponse(
+        items=[_user_response(u) for u in users],
+        total=total,
+        has_more=offset + len(users) < total,
+    )
 
 
 @router.put("/admin/users/{user_id}/role", response_model=UserResponse)
@@ -791,19 +840,55 @@ def refresh_token(
     revoke_refresh_token(user.id)
     return _issue_token_response(user, response)
 
-@router.get("/admin/studios", response_model=List[ArtistResponse])
+def _apply_studio_status_filter(query, status: Optional[str]):
+    if status == "active":
+        return query.filter(Artist.is_active == True)
+    if status == "disabled":
+        return query.filter(Artist.is_active == False, Artist.reactivation_requested == False)
+    if status == "pending":
+        return query.filter(Artist.is_active == False, Artist.reactivation_requested == True)
+    return query
+
+
+def _apply_studio_search_filter(query, search: Optional[str]):
+    if not search or not search.strip():
+        return query
+    pattern = f"%{search.strip()}%"
+    return query.join(User, Artist.user_id == User.id).filter(
+        or_(
+            Artist.stage_name.ilike(pattern),
+            Artist.city.ilike(pattern),
+            Artist.country.ilike(pattern),
+            Artist.licence.ilike(pattern),
+            User.full_name.ilike(pattern),
+            User.email.ilike(pattern),
+        )
+    )
+
+
+@router.get("/admin/studios", response_model=PaginatedArtistListResponse)
 def get_studios_admin(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
     current_user: User = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
     """
-    Admin studio (artist) management: list all studios.
+    Admin studio (artist) management: list studios with pagination and filters.
     """
-    artists = db.query(Artist).options(joinedload(Artist.user)).all()
-    results = []
-    for artist in artists:
-        results.append(_serialize_artist_response(artist, artist.user))
-    return results
+    query = db.query(Artist).options(joinedload(Artist.user))
+    query = _apply_studio_search_filter(query, search)
+    query = _apply_studio_status_filter(query, status)
+    total = query.count()
+    artists = query.order_by(Artist.id.desc()).offset(offset).limit(limit).all()
+    items = [_serialize_artist_response(artist, artist.user) for artist in artists]
+    return PaginatedArtistListResponse(
+        items=items,
+        total=total,
+        has_more=offset + len(artists) < total,
+    )
 
 @router.put("/admin/studios/{artist_id}", response_model=ArtistResponse)
 def update_studio_admin(

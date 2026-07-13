@@ -96,7 +96,7 @@ export const StudioProfile: React.FC<{ onNavigate?: (tab: string) => void }> = (
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token || localStorage.getItem('token') || ''}`,
+          Authorization: `Bearer ${token || ''}`,
         },
         body: JSON.stringify(formValues),
       });
@@ -136,7 +136,7 @@ export const StudioProfile: React.FC<{ onNavigate?: (tab: string) => void }> = (
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${token || localStorage.getItem('token') || ''}`,
+            Authorization: `Bearer ${token || ''}`,
           },
           body: JSON.stringify({ reason }),
         });

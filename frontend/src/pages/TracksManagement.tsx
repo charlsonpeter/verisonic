@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Music, Trash2, CheckCircle2, XCircle, RefreshCw, Star, Play, Ban, Check, Edit3, X, UploadCloud, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
@@ -7,6 +7,9 @@ import { showError, showConfirm } from '../utils/swal';
 import { trackHasPlayableStream } from '../utils/streamQuality';
 import { createAuthenticatedWebSocket } from '../utils/authTokens';
 import { TableSkeleton, TrackCardSkeleton } from '../components/shared/skeleton';
+import { useLazyList, DEFAULT_LAZY_PAGE_SIZE } from '../hooks/useLazyList';
+import { LazyListSentinel } from '../components/shared/LazyListSentinel';
+import { ListSearchInput } from '../components/shared/ListSearchInput';
 
 interface UploadQueueItem {
   id: string;
@@ -31,13 +34,46 @@ interface TracksManagementProps {
   onViewReport?: (track: any) => void;
 }
 
+const formatTrackOwnerName = (track: { owner_name?: string | null; owner_email?: string | null }) =>
+  track.owner_name || track.owner_email?.split('@')[0] || 'Unknown Owner';
+
 export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport }) => {
   const { token, currentUser, fetchCurrentUser, isStaffInAdminMode } = useAuth();
   const { playTrack, currentTrack, isPlaying, updateTrackMetadata } = useAudio();
   
-  const [tracks, setTracks] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const isPlatformAdmin = currentUser?.role === 'admin';
+  const isStudioAdmin = currentUser?.role === 'studio_admin';
+
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const tracksList = useLazyList<any>({
+    fetchPage: useCallback(async (offset, limit) => {
+      if (!token) return { items: [], hasMore: false };
+      const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      if (searchQuery.trim()) params.set('search', searchQuery.trim());
+      const res = await fetch(`/api/music/manage?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        if (offset === 0) {
+          const errorData = await res.json().catch(() => ({}));
+          setMessage({ type: 'error', text: errorData.detail || 'Failed to fetch tracks.' });
+        }
+        return { items: [], hasMore: false };
+      }
+      const data = await res.json();
+      return { items: data.items, hasMore: data.has_more };
+    }, [token, searchQuery]),
+    resetKey: token && (isStaffInAdminMode || isPlatformAdmin) ? `tracks-${searchQuery}` : null,
+    enabled: !!(token && (isStaffInAdminMode || isPlatformAdmin)),
+    pageSize: DEFAULT_LAZY_PAGE_SIZE,
+  });
+
+  const tracks = tracksList.items;
+  const isLoading = tracksList.loading;
+  const fetchTracks = (_silent = false) => { void tracksList.reload(); };
+
   const [selectedTrackIds, setSelectedTrackIds] = useState<number[]>([]);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
@@ -260,34 +296,8 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     fetchTracks(true);
   };
 
-  const fetchTracks = async (silent = false) => {
-    if (!silent) setIsLoading(true);
-    try {
-      const res = await fetch('/api/music/manage', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setTracks(data);
-      } else if (!silent) {
-        const errorData = await res.json();
-        setMessage({ type: 'error', text: errorData.detail || 'Failed to fetch tracks.' });
-      }
-    } catch (e) {
-      console.error("Failed to fetch tracks:", e);
-      if (!silent) {
-        setMessage({ type: 'error', text: 'Connection failed.' });
-      }
-    } finally {
-      if (!silent) setIsLoading(false);
-    }
-  };
-
-  const isPlatformAdmin = currentUser?.role === 'admin';
-
   useEffect(() => {
     if (token && (isStaffInAdminMode || isPlatformAdmin)) {
-      fetchTracks();
       fetchSuggestions();
     }
   }, [token, isStaffInAdminMode, isPlatformAdmin]);
@@ -315,14 +325,12 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
         const data = JSON.parse(event.data);
         if (data.type === 'status_updates') {
           const updates = data.tracks;
-          setTracks((prevTracks) => {
-            const hasNewTracks = updates.some((u: any) => 
+          tracksList.setItems((prevTracks) => {
+            const hasNewTracks = updates.some((u: any) =>
               !prevTracks.some((t: any) => t.id === u.track_id)
             );
             if (hasNewTracks) {
-              setTimeout(() => {
-                fetchTracks(true);
-              }, 0);
+              setTimeout(() => tracksList.reload(), 0);
             }
             return prevTracks.map((track) => {
               const update = updates.find((u: any) => u.track_id === track.id);
@@ -331,7 +339,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                   ...track,
                   quality_score: update.quality_score,
                   quality_level: update.quality_level,
-                  approved: update.approved
+                  approved: update.approved,
                 };
               }
               return track;
@@ -342,7 +350,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
             u.status === 'completed' || u.status === 'rejected' || u.status === 'failed'
           );
           if (hasTerminalUpdate) {
-            fetchTracks(true);
+            tracksList.reload();
             fetchSuggestions();
           }
         }
@@ -988,6 +996,18 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
         </div>
       )}
 
+      <div className="flex justify-end">
+        <ListSearchInput
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder={
+            isPlatformAdmin
+              ? 'Search by title, owner, or album...'
+              : 'Search by title, artist, or album...'
+          }
+        />
+      </div>
+
       <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
         {isLoading && tracks.length === 0 ? (
           <TableSkeleton rows={8} variant="tracks-admin" />
@@ -1010,7 +1030,8 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                   />
                 </th>
                 <th className="p-5">Track Details</th>
-                {currentUser?.role === 'admin' && <th className="p-5">Artist</th>}
+                {isPlatformAdmin && <th className="p-5">Owner</th>}
+                {isStudioAdmin && <th className="p-5">Artist</th>}
                 <th className="p-5">Acoustic Specs</th>
                 <th className="p-5">Score</th>
                 <th className="p-5">Live Status</th>
@@ -1036,7 +1057,15 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                       <div className="font-bold text-slate-200">{t.title}</div>
                       {t.album_title && <div className="text-[10px] text-slate-455 mt-0.5">Album: {t.album_title}</div>}
                     </td>
-                    {currentUser?.role === 'admin' && (
+                    {isPlatformAdmin && (
+                      <td className="p-5">
+                        <div className="font-semibold text-slate-350">{formatTrackOwnerName(t)}</div>
+                        {t.owner_email && (
+                          <div className="text-[10px] text-slate-500 mt-0.5">{t.owner_email}</div>
+                        )}
+                      </td>
+                    )}
+                    {isStudioAdmin && (
                       <td className="p-5 font-semibold text-slate-350">
                         {t.artist_name || 'Unknown Artist'}
                       </td>
@@ -1140,6 +1169,11 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
             </tbody>
           </table>
         )}
+        <LazyListSentinel
+          hasMore={tracksList.hasMore}
+          loading={tracksList.loadingMore}
+          onLoadMore={tracksList.loadMore}
+        />
       </div>
 
       <div className="md:hidden space-y-3">
@@ -1181,7 +1215,13 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                     {t.album_title && (
                       <div className="text-[10px] text-slate-455 truncate mt-0.5">Album: {t.album_title}</div>
                     )}
-                    {currentUser?.role === 'admin' && (
+                    {isPlatformAdmin && (
+                      <div className="text-[10px] text-slate-350 truncate mt-0.5">
+                        {formatTrackOwnerName(t)}
+                        {t.owner_email ? ` · ${t.owner_email}` : ''}
+                      </div>
+                    )}
+                    {isStudioAdmin && (
                       <div className="text-[10px] text-slate-350 truncate mt-0.5">
                         {t.artist_name || 'Unknown Artist'}
                       </div>
@@ -1287,6 +1327,11 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
             );
           })
         )}
+        <LazyListSentinel
+          hasMore={tracksList.hasMore}
+          loading={tracksList.loadingMore}
+          onLoadMore={tracksList.loadMore}
+        />
       </div>
 
       {editingTrack && (

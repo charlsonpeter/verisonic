@@ -8,7 +8,7 @@ import random
 import secrets
 import asyncio
 from collections import deque
-from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Header, Request, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Header, Request, File, UploadFile, Query
 from pydantic import BaseModel
 
 try:
@@ -22,6 +22,7 @@ except ImportError:
         pass
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import List, Dict, Set, Optional
 
 from app.db.session import get_db
@@ -34,6 +35,7 @@ from app.schemas import (
     RadioScheduleResponse,
     VerifyBroadcastKeyRequest,
     VerifyBroadcastKeyResponse,
+    PaginatedRadioStationListResponse,
 )
 from app.api.auth import get_current_admin, get_current_user, get_current_radio_admin, get_optional_current_user
 from app.core.rate_limit import enforce_rate_limit
@@ -676,6 +678,54 @@ async def upload_station_cover(
     db.commit()
     db.refresh(station)
     return serialize_station(station, db, viewer=current_user, include_stream_key=True)
+
+
+def _apply_radio_status_filter(query, status: Optional[str]):
+    if status == "active":
+        return query.filter(RadioStation.is_active == True)
+    if status == "disabled":
+        return query.filter(RadioStation.is_active == False, RadioStation.reactivation_requested == False)
+    if status == "pending":
+        return query.filter(RadioStation.is_active == False, RadioStation.reactivation_requested == True)
+    return query
+
+
+def _apply_radio_search_filter(query, search: Optional[str]):
+    if not search or not search.strip():
+        return query
+    pattern = f"%{search.strip()}%"
+    return query.outerjoin(User, RadioStation.owner_id == User.id).filter(
+        or_(
+            RadioStation.name.ilike(pattern),
+            RadioStation.category.ilike(pattern),
+            RadioStation.broadcast_frequency.ilike(pattern),
+            RadioStation.licence.ilike(pattern),
+            User.full_name.ilike(pattern),
+            User.email.ilike(pattern),
+        )
+    )
+
+
+@router.get("/admin", response_model=PaginatedRadioStationListResponse)
+def list_radio_stations_admin(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin),
+):
+    query = db.query(RadioStation)
+    query = _apply_radio_search_filter(query, search)
+    query = _apply_radio_status_filter(query, status)
+    total = query.count()
+    stations = query.order_by(RadioStation.id.desc()).offset(offset).limit(limit).all()
+    items = [serialize_station(s, db, viewer=current_user) for s in stations]
+    return PaginatedRadioStationListResponse(
+        items=items,
+        total=total,
+        has_more=offset + len(stations) < total,
+    )
 
 
 @router.get("", response_model=List[RadioStationResponse])

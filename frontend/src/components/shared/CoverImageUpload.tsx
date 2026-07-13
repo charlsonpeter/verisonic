@@ -42,7 +42,7 @@ export const CoverImageUpload: React.FC<CoverImageUploadProps> = ({
       const res = await fetch(uploadUrl, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${token || localStorage.getItem('token') || ''}`,
+          Authorization: `Bearer ${token || ''}`,
         },
         body: formData,
       });

@@ -17,6 +17,7 @@ export function getUserInitials(fullName?: string | null, email?: string): strin
 interface UserAvatarProps {
   fullName?: string | null;
   email?: string;
+  imageUrl?: string | null;
   className?: string;
   fallbackIconClassName?: string;
   initialsClassName?: string;
@@ -25,11 +26,22 @@ interface UserAvatarProps {
 export const UserAvatar: React.FC<UserAvatarProps> = ({
   fullName,
   email,
+  imageUrl,
   className = 'w-8 h-8',
   fallbackIconClassName = 'w-4 h-4',
   initialsClassName = 'text-[10px]',
 }) => {
   const initials = getUserInitials(fullName, email);
+
+  if (imageUrl) {
+    return (
+      <img
+        src={imageUrl}
+        alt=""
+        className={`rounded-full object-cover flex-shrink-0 border border-white/10 ${className}`}
+      />
+    );
+  }
 
   return (
     <div

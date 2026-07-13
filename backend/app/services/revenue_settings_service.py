@@ -15,15 +15,32 @@ def get_revenue_settings(db: Session) -> PlatformRevenueSettings:
     return row
 
 
-def validate_revenue_settings_payload(data: dict[str, Any]) -> None:
-    share_fields = ("company_share_bps", "owner_share_bps")
-    if all(k in data for k in share_fields):
-        if data["company_share_bps"] + data["owner_share_bps"] != 10000:
-            raise ValueError("Company and owner shares must total 100%.")
-    pool_fields = ("studio_pool_bps", "radio_pool_bps")
-    if all(k in data for k in pool_fields):
-        if data["studio_pool_bps"] + data["radio_pool_bps"] != 10000:
-            raise ValueError("Studio and radio pool shares must total 100% of the owner pool.")
+def validate_revenue_settings_payload(
+    data: dict[str, Any],
+    *,
+    current: PlatformRevenueSettings | None = None,
+) -> None:
+    company = data.get(
+        "company_share_bps",
+        current.company_share_bps if current is not None else None,
+    )
+    owner = data.get(
+        "owner_share_bps",
+        current.owner_share_bps if current is not None else None,
+    )
+    if company is not None and owner is not None and int(company) + int(owner) != 10000:
+        raise ValueError("Company and owner shares must total 100%.")
+
+    studio = data.get(
+        "studio_pool_bps",
+        current.studio_pool_bps if current is not None else None,
+    )
+    radio = data.get(
+        "radio_pool_bps",
+        current.radio_pool_bps if current is not None else None,
+    )
+    if studio is not None and radio is not None and int(studio) + int(radio) != 10000:
+        raise ValueError("Studio and radio pool shares must total 100% of the owner pool.")
 
     positive_int_fields = (
         "premium_monthly_paise",
@@ -40,8 +57,8 @@ def validate_revenue_settings_payload(data: dict[str, Any]) -> None:
 
 
 def update_revenue_settings(db: Session, data: dict[str, Any]) -> PlatformRevenueSettings:
-    validate_revenue_settings_payload(data)
     settings = get_revenue_settings(db)
+    validate_revenue_settings_payload(data, current=settings)
     allowed = {
         "premium_monthly_paise",
         "premium_yearly_paise",

@@ -37,8 +37,8 @@ VeriSonic is a high-fidelity audio platform for **lossless music streaming**, **
 - **Studios Management** and **Radio Stations Management** — moderation, licence doc review
 - Analytics dashboard (plays, bandwidth, quality distribution)
 - Acoustic quality reports with admin approve/reject
-- **Revenue settings** — premium pricing, revenue split, listen thresholds
-- Withdrawal processing with UTR reference
+- **Accounts** — overview, owners, withdrawals (view/export + date filters), subscriptions (view/export + date filters), revenue settings
+- Owner withdrawals are **instant self-service** (Accounts is view-only for payouts)
 - Mandatory password reset gate for seeded admin account
 
 ### Subscriptions
@@ -46,7 +46,7 @@ VeriSonic is a high-fidelity audio platform for **lossless music streaming**, **
 - **Premium** — full playback, higher quality streams (MP3 320, AAC 256, lossless master)
   - Self-service via Razorpay: Premium Monthly (₹99) or Premium Yearly (₹999)
   - Plan changes can be queued for end of billing period; cancel-at-period-end supported
-- **Unlimited** — admin-assigned only (no checkout)
+- **Unlimited** — admin-assigned only (no checkout; never auto-downgraded on payment failure)
 - Checkout UI: Landing page pricing, Settings, and in-player Premium modal
 
 ### Account & profiles
@@ -93,7 +93,7 @@ graph TD
 
 **Music path:** Upload → Celery analyze → quality score → transcode → S3 → HLS/MP3/AAC playback. Lossless master streams use short-lived tickets.
 
-**Revenue path:** Premium listens → billable track plays / radio sessions → owner wallet → withdrawal requests → admin payout.
+**Revenue path:** Premium listens → billable track plays / radio sessions → owner wallet → **instant withdrawal** (paid) → Accounts admin view/export.
 
 **Subscription path:** Client → Razorpay Checkout → `POST /api/subscriptions/verify` → plan activated.
 
@@ -103,18 +103,19 @@ graph TD
 
 ```text
 verisonic/
+├── BUILD_GUIDE.md           # Full rebuild blueprint (layout + every feature)
 ├── backend/                 # FastAPI API, WebSockets, Celery tasks, services
 │   ├── app/
 │   │   ├── api/             # auth, music, radio, playlist, favorites, analytics,
-│   │   │                    # subscriptions, wallet, revenue_admin
+│   │   │                    # subscriptions, wallet, revenue_admin, discovery, catalog
 │   │   ├── core/            # config, premium gating, subscription plans, security, upload validation
-│   │   ├── db/              # migrations runner (001–020)
-│   │   ├── services/        # storage, live_stream, wallet, razorpay, cover/licence uploads
+│   │   ├── db/              # migrations runner
+│   │   ├── services/        # storage, live_stream, wallet, razorpay, accounts CSV export
 │   │   └── tasks/           # Celery analyze + transcode
-│   └── tests/
+│   └── scripts/             # seed_accounts_test_data, reset helpers
 ├── frontend/                # Vite + React + TypeScript + Tailwind
 │   └── src/
-│       ├── pages/           # Home, Radio, Search, Wallet, admin pages, profiles, …
+│       ├── pages/           # Home, Radio, Search, Wallet, Accounts, admin pages, …
 │       ├── components/      # player, layout (HeaderSearch), wallet, subscription, shared UI
 │       ├── context/         # AuthContext, AudioContext
 │       └── utils/           # searchMatch, subscriptionCheckout, streamQuality, wallet
@@ -122,7 +123,8 @@ verisonic/
 ├── .github/workflows/       # backend-tests.yml, build-broadcaster.yml
 ├── docker-compose.yml
 ├── nginx.conf
-└── implementation_plan.md   # Living spec & implementation status
+├── implementation_plan.md   # Living spec & implementation status
+└── task.md                  # Feature checklist
 ```
 
 ---
@@ -181,6 +183,15 @@ RAZORPAY_KEY_SECRET: your_key_secret
 
 Without keys, plan listing works but checkout returns a configuration error.
 
+### 5. Accounts demo data (optional)
+
+```bash
+docker exec -w /app verisonic_backend env PYTHONPATH=/app \
+  python scripts/seed_accounts_test_data.py
+```
+
+Use `--reset` to wipe prior demo users first. Demo emails use `@accounts-demo.verisonic.local` (password `demo12345`).
+
 ---
 
 ## Development
@@ -209,11 +220,11 @@ Key backend settings (see `docker-compose.yml` and `backend/app/core/config.py`)
 
 - `POSTGRES_*`, `REDIS_HOST`, `S3_ENDPOINT_URL`
 - `SECRET_KEY` — required in production (32+ characters)
-- `ENVIRONMENT` — set to `production` in deployed environments
+- `ENVIRONMENT` — set to `production` in deployed environments (forces Redis for refresh tokens)
 - `CORS_ORIGINS` — comma-separated allowed web origins
 - `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` — enable Premium checkout (INR)
 - `OPENAI_API_KEY` (optional, for lyrics transcription)
-- Email settings (optional, for withdrawal CSV export)
+- Email settings (optional, for withdrawal CSV email export)
 
 **Production checklist:** set `ENVIRONMENT=production`, a strong `SECRET_KEY`, strong database/MinIO credentials, Razorpay live keys, and restrict service ports.
 
@@ -226,7 +237,7 @@ Key backend settings (see `docker-compose.yml` and `backend/app/core/config.py`)
 | `listener` | Browse, play, favorites, playlists, search, subscribe |
 | `studio_admin` | Upload/manage tracks, studio profile, cover & licence uploads, wallet |
 | `radio_admin` | Own station(s), live broadcast, station cover & licence, program schedule, wallet |
-| `admin` | Full platform management, studios/stations moderation, revenue settings, withdrawals |
+| `admin` | Users, Accounts, studios/stations moderation, analytics, reports, revenue settings |
 
 Staff roles support **Admin mode** vs **Listen mode** (toggle in header). Playlists and header search are disabled in admin mode.
 
@@ -248,6 +259,7 @@ Radio station covers appear in browse and search listings automatically.
 
 | Document | Purpose |
 |----------|---------|
+| **[BUILD_GUIDE.md](BUILD_GUIDE.md)** | **Complete rebuild blueprint** — same layout, every role/feature, APIs, data model, build order, acceptance checklist |
 | [implementation_plan.md](implementation_plan.md) | Technical spec, API summary, migrations, implementation status, gaps |
 | [task.md](task.md) | Completed feature checklist and open items |
 | [walkthrough.md](walkthrough.md) | Live broadcaster setup walkthrough |

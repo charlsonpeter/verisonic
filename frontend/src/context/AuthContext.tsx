@@ -68,6 +68,7 @@ interface AuthContextType {
   userMode: 'admin' | 'listener';
   serverUserMode: 'admin' | 'listener';
   canUsePlaylists: boolean;
+  canAccessListeningHistory: boolean;
   isStaffInAdminMode: boolean;
   isSwitchingMode: boolean;
   mustResetPassword: boolean;
@@ -291,24 +292,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAuthError(null);
     setIsLoading(true);
     try {
-      const email = `${provider}.user@verisonic.com`;
-      const name = `${provider.charAt(0).toUpperCase() + provider.slice(1)} User`;
-      const res = await fetch(`${API_URL}/auth/google`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ email, name })
-      });
-      const data = await res.json();
-      if (res.ok && data.access_token) {
-        setAuthTokens(data.access_token, data.refresh_token);
-        setToken(data.access_token);
-        return true;
-      }
-      setAuthError('Social login failed.');
-      return false;
-    } catch {
-      setAuthError('Could not connect to auth service.');
+      setAuthError(
+        `${provider === 'google' ? 'Google' : 'Apple'} Sign-In is not available yet. Please use email and password.`,
+      );
       return false;
     } finally {
       setIsLoading(false);
@@ -395,6 +381,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     !!currentUser &&
     (userRole === 'admin' || (userRole === 'radio_admin' && serverUserMode === 'admin'));
   const canUsePlaylists = !!token && !isStaffInAdminMode;
+  const canAccessListeningHistory = !!token && !isStaffInAdminMode;
   const mustResetPassword = !!(
     currentUser?.role === 'admin' && currentUser?.must_reset_password
   );
@@ -413,6 +400,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       userMode,
       serverUserMode,
       canUsePlaylists,
+      canAccessListeningHistory,
       isStaffInAdminMode,
       isSwitchingMode,
       mustResetPassword,

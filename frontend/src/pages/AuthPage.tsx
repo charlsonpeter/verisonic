@@ -172,11 +172,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onSuccess }) => {
         {/* Social Buttons */}
         <div className="flex justify-center">
           <button
-            onClick={() => handleSocialClick('google')}
-            className="w-full py-2.5 bg-white hover:bg-slate-100 text-slate-900 font-bold text-[10px] uppercase rounded-xl transition flex items-center justify-center gap-1.5"
+            type="button"
+            disabled
+            title="Google Sign-In is not available yet"
+            className="w-full py-2.5 bg-white/40 text-slate-500 font-bold text-[10px] uppercase rounded-xl flex items-center justify-center gap-1.5 cursor-not-allowed"
           >
-            <Crown className="w-3.5 h-3.5 text-slate-900 fill-slate-900" />
-            Continue with Google
+            <Crown className="w-3.5 h-3.5 text-slate-500 fill-slate-500" />
+            Continue with Google (coming soon)
           </button>
         </div>
 

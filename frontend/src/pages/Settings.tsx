@@ -24,7 +24,6 @@ import {
   supportsSelectAudioOutput,
   type AudioOutputDeviceInfo,
 } from '../utils/audioOutputDevices';
-import { RevenueSettingsPanel } from './RevenueSettings';
 
 function getDeviceIcon(device: AudioOutputDeviceInfo) {
   if (device.type === 'HDMI / Display') return Monitor;
@@ -306,12 +305,6 @@ export const Settings: React.FC = () => {
     </section>
   );
 
-  const revenueSection = (
-    <section className="bg-slate-900/10 border border-white/3 p-6 rounded-3xl shadow-inner lg:sticky lg:top-6 min-w-0">
-      <RevenueSettingsPanel />
-    </section>
-  );
-
   return (
     <div className="space-y-10 w-full max-w-none pb-10">
       <div className="hidden md:block">
@@ -321,7 +314,7 @@ export const Settings: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 xl:gap-10 w-full items-start">
-        {isSuperAdmin ? revenueSection : subscriptionSection}
+        {!isSuperAdmin && subscriptionSection}
 
         <div className="space-y-10 min-w-0">
           {streamQualitySection}

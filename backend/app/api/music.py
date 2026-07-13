@@ -6,13 +6,14 @@ from fastapi import Request, APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import or_
 from typing import List, Optional, Tuple
 from jose import jwt, JWTError
 from pydantic import BaseModel
 
 from app.db.session import get_db, SessionLocal
-from app.models import Track, Artist, Album, Genre, AudioAnalysisReport, ListeningHistory, StreamingLog
-from app.schemas import TrackResponse, AudioAnalysisReportResponse, QualityReportDetailResponse, ScoreBreakdownItem, QualityScoreTier
+from app.models import Track, Artist, Album, Genre, AudioAnalysisReport, ListeningHistory, StreamingLog, TrackComment, User
+from app.schemas import TrackResponse, AudioAnalysisReportResponse, QualityReportDetailResponse, ScoreBreakdownItem, QualityScoreTier, TrackCommentCreate, TrackCommentResponse, ListeningHistoryEntryResponse, PaginatedTrackListResponse
 from app.api.auth import get_current_user, get_current_studio_admin, get_current_admin, get_optional_current_user
 from app.services.storage import (
     generate_presigned_url,
@@ -182,7 +183,7 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
 
     quality_score, quality_level = _resolve_quality_score(track, db)
 
-    return {
+    payload = {
         "id": track.id,
         "title": track.title,
         "artist_id": track.artist_id,
@@ -211,8 +212,18 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
         "year": track.year,
         "language": track.language,
         "genres": [g.name for g in track.genres] if track.genres else [],
-        "created_at": track.created_at
+        "created_at": track.created_at,
     }
+
+    if viewer and viewer.role == "admin" and track.artist:
+        owner = track.artist.user
+        if owner is None and track.artist.user_id:
+            owner = db.query(User).filter(User.id == track.artist.user_id).first()
+        if owner:
+            payload["owner_name"] = owner.full_name or owner.email.split("@")[0]
+            payload["owner_email"] = owner.email
+
+    return payload
 
 def transcribe_audio(file_path: str, language: Optional[str] = None, track_title: str = "Unknown", artist_name: str = "Unknown") -> str:
     """
@@ -338,9 +349,15 @@ async def upload_music(
             detail=f"Unsupported format. Allowed lossless: {allowed_exts}, restricted (accepted only for analysis): {restricted_exts}"
         )
         
-    # Get or create artist profile for current user
+    # Get or create artist profile for studio admins only (not platform admin).
     artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
     if not artist:
+        real_role = getattr(current_user, "_real_role", None) or current_user.role
+        if real_role == "admin":
+            raise HTTPException(
+                status_code=400,
+                detail="Platform admins cannot upload tracks under their own account. Use a studio admin account or assign the track to a studio.",
+            )
         artist = Artist(user_id=current_user.id, stage_name=current_user.full_name or "Unknown Artist")
         db.add(artist)
         db.commit()
@@ -600,9 +617,34 @@ def list_tracks(
     return [serialize_track(t, db, viewer=current_user) for t in tracks]
 
 
-@router.get("/manage", response_model=List[TrackResponse])
+def _apply_manage_track_search(query, search: Optional[str], *, include_owner: bool = False):
+    if not search or not search.strip():
+        return query
+    search_pattern = f"%{search.strip()}%"
+    query = query.outerjoin(Artist, Track.artist_id == Artist.id).outerjoin(
+        Album, Track.album_id == Album.id
+    )
+    filters = [
+        Track.title.ilike(search_pattern),
+        Track.artist_name_override.ilike(search_pattern),
+        Artist.stage_name.ilike(search_pattern),
+        Album.title.ilike(search_pattern),
+    ]
+    if include_owner:
+        query = query.outerjoin(User, Artist.user_id == User.id)
+        filters.extend([
+            User.full_name.ilike(search_pattern),
+            User.email.ilike(search_pattern),
+        ])
+    return query.filter(or_(*filters))
+
+
+@router.get("/manage", response_model=PaginatedTrackListResponse)
 def manage_tracks(
     approved_only: bool = False,
+    search: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     current_user = Depends(get_current_studio_admin)
 ):
@@ -612,11 +654,14 @@ def manage_tracks(
     Studio admin sees their own tracks; use approved_only=true for the tracks list tab.
     """
     if current_user.role == "admin":
-        query = db.query(Track).options(joinedload(Track.analysis_report))
+        query = db.query(Track).options(
+            joinedload(Track.analysis_report),
+            joinedload(Track.artist).joinedload(Artist.user),
+        )
     else:
         artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
         if not artist:
-            return []
+            return PaginatedTrackListResponse(items=[], total=0, has_more=False)
         query = (
             db.query(Track)
             .options(joinedload(Track.analysis_report))
@@ -625,13 +670,81 @@ def manage_tracks(
         if approved_only:
             query = query.filter(Track.approved == True)
 
-    tracks = query.order_by(Track.created_at.desc()).all()
+    query = _apply_manage_track_search(query, search, include_owner=current_user.role == "admin")
+
+    total = query.count()
+    tracks = query.order_by(Track.created_at.desc()).offset(offset).limit(limit).all()
 
     for t in tracks:
         _resolve_quality_score(t, db, persist=True)
     db.commit()
 
-    return [serialize_track(t, db, viewer=current_user) for t in tracks]
+    items = [serialize_track(t, db, viewer=current_user) for t in tracks]
+    return PaginatedTrackListResponse(
+        items=items,
+        total=total,
+        has_more=offset + len(tracks) < total,
+    )
+
+
+def _serialize_comment(comment: TrackComment) -> dict:
+    return {
+        "id": comment.id,
+        "track_id": comment.track_id,
+        "user_id": comment.user_id,
+        "author_name": comment.user.full_name if comment.user else None,
+        "body": comment.body,
+        "created_at": comment.created_at,
+    }
+
+
+@router.get("/listening-history", response_model=List[ListeningHistoryEntryResponse])
+def get_listening_history(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    scan_limit = max((offset + limit) * 3, 50)
+    rows = (
+        db.query(ListeningHistory)
+        .options(
+            joinedload(ListeningHistory.track)
+            .joinedload(Track.artist),
+            joinedload(ListeningHistory.track)
+            .joinedload(Track.album),
+            joinedload(ListeningHistory.track)
+            .joinedload(Track.genres),
+        )
+        .filter(ListeningHistory.user_id == current_user.id)
+        .order_by(ListeningHistory.played_at.desc())
+        .limit(min(scan_limit, 300))
+        .all()
+    )
+
+    seen_track_ids: set[int] = set()
+    entries = []
+    skipped = 0
+    for row in rows:
+        if row.track_id in seen_track_ids:
+            continue
+        seen_track_ids.add(row.track_id)
+        if not row.track or not row.track.approved:
+            continue
+        if skipped < offset:
+            skipped += 1
+            continue
+        entries.append(
+            {
+                "id": row.id,
+                "played_at": row.played_at,
+                "track": serialize_track(row.track, db, viewer=current_user),
+            }
+        )
+        if len(entries) >= limit:
+            break
+    return entries
+
 
 @router.post("/{id}/stream/ticket")
 def issue_stream_ticket(
@@ -1207,3 +1320,46 @@ async def update_track(
     db.commit()
     db.refresh(track)
     return serialize_track(track, db)
+
+
+@router.get("/{track_id}/comments", response_model=List[TrackCommentResponse])
+def list_track_comments(
+    track_id: int,
+    db: Session = Depends(get_db),
+):
+    track = db.query(Track).filter(Track.id == track_id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+    comments = (
+        db.query(TrackComment)
+        .options(joinedload(TrackComment.user))
+        .filter(TrackComment.track_id == track_id)
+        .order_by(TrackComment.created_at.desc())
+        .all()
+    )
+    return [_serialize_comment(c) for c in comments]
+
+
+@router.post("/{track_id}/comments", response_model=TrackCommentResponse, status_code=status.HTTP_201_CREATED)
+def create_track_comment(
+    track_id: int,
+    comment_in: TrackCommentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    track = db.query(Track).filter(Track.id == track_id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+    if not track.approved:
+        raise HTTPException(status_code=403, detail="Comments are only available on approved tracks")
+    body = comment_in.body.strip()
+    if not body:
+        raise HTTPException(status_code=400, detail="Comment cannot be empty")
+    if len(body) > 2000:
+        raise HTTPException(status_code=400, detail="Comment is too long (max 2000 characters)")
+    comment = TrackComment(track_id=track_id, user_id=current_user.id, body=body)
+    db.add(comment)
+    db.commit()
+    db.refresh(comment)
+    comment.user = current_user
+    return _serialize_comment(comment)

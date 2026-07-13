@@ -1,6 +1,6 @@
 # Tasks — VeriSonic
 
-> **Living status:** see [implementation_plan.md](implementation_plan.md) for the full technical spec, API summary, and remaining gaps.
+> **Living status:** see [implementation_plan.md](implementation_plan.md) for the technical spec. To rebuild the full app (layout + every feature), use **[BUILD_GUIDE.md](BUILD_GUIDE.md)**.
 
 ---
 
@@ -14,6 +14,8 @@
 
 ---
 
+
+
 ## Subscriptions (complete)
 
 - [x] Backend — Razorpay orders, payment verify, plan queue/cancel/reactivate (`/api/subscriptions`)
@@ -22,6 +24,8 @@
 - [x] Frontend — `SubscriptionPlans`, Settings/Landing checkout, `PremiumModal`, admin tier assignment
 
 ---
+
+
 
 ## Search (complete)
 
@@ -34,6 +38,8 @@
 
 ---
 
+
+
 ## Profiles, covers & documents (complete)
 
 - [x] User display picture — hover camera on My Profile initials; `POST /api/auth/profile/avatar`
@@ -44,13 +50,33 @@
 
 ---
 
+
+
 ## Wallet & revenue (complete)
 
 - [x] Database — wallets, ledger, bank accounts (encrypted), withdrawals, billable plays, radio listen sessions (migration 014+)
-- [x] Owner API — `/api/wallet` (summary, withdraw, bank account, export)
-- [x] Admin API — `/api/admin/revenue` (settings, process withdrawals)
-- [x] Crediting — track `listen-progress`, radio listen-session heartbeats
-- [x] Frontend — `Wallet.tsx`, `RevenueSettingsPanel` in Settings (admin)
+- [x] Owner API — `/api/wallet` (summary, **instant** withdraw, bank account, export)
+- [x] Admin API — `/api/admin/revenue` (settings, owners, subscribers, withdrawals view/export)
+- [x] Accounts UI — Overview → Owners → Withdrawals → Subscriptions → Settings; date filters; opening balance on filtered withdrawal CSV
+- [x] Crediting — track `listen-progress`, radio listen-session heartbeats (row locks)
+- [x] Frontend — `Wallet.tsx`, `AccountsManagement.tsx`, `RevenueSettingsPanel`
+
+---
+
+## Consumer discovery & engagement (complete)
+
+- [x] Artists page — `#artist` route, `Artist.tsx`, `GET /api/discovery/artists/{name}`
+- [x] Recently played on Home — mobile 3×3 horizontal pages + desktop 3×9 vertical scroll, lazy-loaded via `GET /api/music/listening-history`
+- [x] Track comments — `track_comments` table, `GET/POST /api/music/{id}/comments`, MusicDetails wired
+- [x] Album/genre CRUD — `/api/albums`, `/api/genres` (studio admin + platform admin)
+- [x] Studio cover in browse — Home Popular Artists + Artist page via `/api/discovery/studios`
+- [x] Header avatar — `UserAvatar` with `profile_image_url` in header + dropdown
+
+---
+
+## Rebuild documentation (complete)
+
+- [x] [BUILD_GUIDE.md](BUILD_GUIDE.md) — full application blueprint (layout, features, APIs, build order, acceptance)
 
 ---
 
@@ -58,10 +84,5 @@
 
 - [ ] Radio schedule — list/delete/reorder API; no automated scheduled playback
 - [ ] Playlists — public discovery endpoint
-- [ ] Artists page — route `Artist.tsx`; dedicated artist browse beyond Search detail
-- [ ] Listening history — user-facing API/page
-- [ ] Google OAuth — real token verification
-- [ ] Track comments — persist beyond client mock
-- [ ] Album/genre — standalone CRUD APIs
-- [ ] Studio cover — surface in consumer browse UI
-- [ ] Header menu — show uploaded profile photo (currently My Profile only)
+- [ ] Google OAuth — real token verification (mock login disabled)
+- [ ] General Contact mailbox API (upgrade request paths work)

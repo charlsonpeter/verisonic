@@ -84,6 +84,12 @@ class WithdrawalResponse(BaseModel):
     admin_note: Optional[str]
 
 
+class PaginatedWithdrawalListResponse(BaseModel):
+    items: List[WithdrawalResponse]
+    total: int
+    has_more: bool
+
+
 class WithdrawalsExportBody(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -125,21 +131,12 @@ def wallet_summary(
 ):
     _require_owner(current_user)
     wallet = get_or_create_wallet(db, current_user.id)
-    pending_rows = (
-        db.query(WithdrawalRequest)
-        .filter(
-            WithdrawalRequest.user_id == current_user.id,
-            WithdrawalRequest.status == "pending",
-        )
-        .all()
-    )
-    pending = sum(row.amount_paise for row in pending_rows)
     revenue_settings = get_revenue_settings(db)
     saved = get_saved_bank_account(db, current_user.id)
     return WalletSummaryResponse(
         balance_paise=wallet.balance_paise,
         balance_rupees=wallet.balance_paise / 100,
-        pending_withdrawal_paise=pending,
+        pending_withdrawal_paise=0,
         available_paise=wallet.balance_paise,
         min_withdrawal_paise=revenue_settings.min_withdrawal_paise,
         has_saved_bank_account=saved is not None,
@@ -258,20 +255,22 @@ def create_withdrawal(
     )
 
 
-@router.get("/withdrawals", response_model=List[WithdrawalResponse])
+@router.get("/withdrawals", response_model=PaginatedWithdrawalListResponse)
 def list_my_withdrawals(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     _require_owner(current_user)
-    rows = (
+    query = (
         db.query(WithdrawalRequest)
         .filter(WithdrawalRequest.user_id == current_user.id)
         .order_by(WithdrawalRequest.created_at.desc())
-        .limit(10)
-        .all()
     )
-    return [
+    total = query.count()
+    rows = query.offset(offset).limit(limit).all()
+    items = [
         WithdrawalResponse(
             id=row.id,
             amount_paise=row.amount_paise,
@@ -282,6 +281,11 @@ def list_my_withdrawals(
         )
         for row in rows
     ]
+    return PaginatedWithdrawalListResponse(
+        items=items,
+        total=total,
+        has_more=offset + len(rows) < total,
+    )
 
 
 @router.get("/withdrawals/export.csv")

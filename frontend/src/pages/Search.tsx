@@ -29,6 +29,11 @@ interface SearchProps {
   setSearchQuery: (query: string) => void;
   selectedArtist: string | null;
   setSelectedArtist: (name: string | null) => void;
+  selectedAlbum: string | null;
+  setSelectedAlbum: (name: string | null) => void;
+  selectedPlaylistId: number | null;
+  setSelectedPlaylistId: (id: number | null) => void;
+  onOpenArtistPage?: (artistName: string) => void;
 }
 
 interface SearchPlaylist {
@@ -39,10 +44,9 @@ interface SearchPlaylist {
 
 type SearchFilter = 'all' | 'tracks' | 'albums' | 'radio' | 'artists' | 'playlists';
 
-function playAllTracks(tracks: Track[], playTrack: (t: Track) => void, addToQueue: (t: Track) => void) {
+function playAllTracks(tracks: Track[], playQueueTracks: (t: Track[]) => void) {
   if (tracks.length === 0) return;
-  tracks.forEach((track) => addToQueue(track));
-  playTrack(tracks[0]);
+  playQueueTracks(tracks);
 }
 
 const PlayAllButton: React.FC<{ onClick: () => void; disabled?: boolean }> = ({ onClick, disabled }) => (
@@ -59,9 +63,10 @@ const PlayAllButton: React.FC<{ onClick: () => void; disabled?: boolean }> = ({ 
 
 export const Search: React.FC<SearchProps> = ({
   onViewDetails, searchQuery, setSearchQuery, selectedArtist, setSelectedArtist,
+  selectedAlbum, setSelectedAlbum, selectedPlaylistId, setSelectedPlaylistId, onOpenArtistPage,
 }) => {
   const { token, canUsePlaylists } = useAuth();
-  const { playTrack, addToQueue } = useAudio();
+  const { playQueueTracks } = useAudio();
 
   const [activeFilter, setActiveFilter] = useState<SearchFilter>('all');
   const [recentSearches, setRecentSearches] = useState<string[]>(['Beethoven', 'Sarah Jenkins', 'Lossless Jazz']);
@@ -70,7 +75,6 @@ export const Search: React.FC<SearchProps> = ({
   const [filteredRadio, setFilteredRadio] = useState<RadioStation[]>([]);
   const [filteredArtists, setFilteredArtists] = useState<ArtistCandidate[]>([]);
   const [filteredPlaylists, setFilteredPlaylists] = useState<SearchPlaylist[]>([]);
-  const [selectedAlbum, setSelectedAlbum] = useState<string | null>(null);
   const [selectedPlaylist, setSelectedPlaylist] = useState<SearchPlaylist | null>(null);
   const [artistTracks, setArtistTracks] = useState<Track[]>([]);
   const [albumTracks, setAlbumTracks] = useState<Track[]>([]);
@@ -87,10 +91,11 @@ export const Search: React.FC<SearchProps> = ({
     setSelectedArtist(null);
     setSelectedAlbum(null);
     setSelectedPlaylist(null);
+    setSelectedPlaylistId(null);
   };
 
   const handlePlayAll = (tracks: Track[]) => {
-    playAllTracks(tracks, playTrack, addToQueue);
+    playAllTracks(tracks, playQueueTracks);
   };
 
   useEffect(() => {
@@ -214,6 +219,10 @@ export const Search: React.FC<SearchProps> = ({
   };
 
   const handleArtistSelect = (artist: ArtistCandidate) => {
+    if (onOpenArtistPage) {
+      onOpenArtistPage(artist.name);
+      return;
+    }
     clearDetailViews();
     setSelectedArtist(artist.name);
     setSearchQuery(artist.name);
@@ -230,9 +239,28 @@ export const Search: React.FC<SearchProps> = ({
   const handlePlaylistSelect = (playlist: SearchPlaylist) => {
     clearDetailViews();
     setSelectedPlaylist(playlist);
+    setSelectedPlaylistId(playlist.id);
     setSearchQuery(playlist.name);
     setActiveFilter('playlists');
   };
+
+  useEffect(() => {
+    if (!selectedPlaylistId || !token) return;
+    if (selectedPlaylist?.id === selectedPlaylistId) return;
+    const load = async () => {
+      try {
+        const res = await fetch(`/api/playlist/${selectedPlaylistId}`, { headers: authHeaders() });
+        if (!res.ok) return;
+        const data = await res.json();
+        setSelectedPlaylist({ id: data.id, name: data.name, tracks: data.tracks || [] });
+        setSearchQuery(data.name || searchQuery);
+        setActiveFilter('playlists');
+      } catch (e) {
+        console.error('Failed to open playlist from header search:', e);
+      }
+    };
+    void load();
+  }, [selectedPlaylistId, token, authHeaders, selectedPlaylist?.id]);
 
   const handlePlayArtistFromList = async (artist: ArtistCandidate, e: React.MouseEvent) => {
     e.stopPropagation();

@@ -1,10 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Music, RefreshCw, Play } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
 import { trackHasPlayableStream } from '../utils/streamQuality';
 import { createAuthenticatedWebSocket } from '../utils/authTokens';
 import { TableSkeleton, TrackCardSkeleton } from '../components/shared/skeleton';
+import { formatLocalDate } from '../utils/dateTime';
+import { useLazyList, DEFAULT_LAZY_PAGE_SIZE } from '../hooks/useLazyList';
+import { LazyListSentinel } from '../components/shared/LazyListSentinel';
 
 function getStatusDetails(t: {
   quality_score: number | null;
@@ -26,39 +29,38 @@ function getStatusDetails(t: {
 export const StudioTrackList: React.FC = () => {
   const { token, isStaffInAdminMode, isSwitchingMode } = useAuth();
   const { playTrack, currentTrack, isPlaying } = useAudio();
-  const [tracks, setTracks] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
-  const fetchTracks = async (silent = false) => {
-    if (!silent) setIsLoading(true);
-    setFetchError(null);
-    try {
-      const res = await fetch('/api/music/manage?approved_only=true', {
+  const tracksList = useLazyList<any>({
+    fetchPage: useCallback(async (offset, limit) => {
+      if (!token) return { items: [], hasMore: false };
+      const params = new URLSearchParams({
+        approved_only: 'true',
+        limit: String(limit),
+        offset: String(offset),
+      });
+      const res = await fetch(`/api/music/manage?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) {
-        setTracks(await res.json());
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setFetchError(data.detail || 'Could not load tracks.');
-        setTracks([]);
+      if (!res.ok) {
+        if (offset === 0) {
+          const data = await res.json().catch(() => ({}));
+          setFetchError(data.detail || 'Could not load tracks.');
+        }
+        return { items: [], hasMore: false };
       }
-    } catch (e) {
-      console.error('Failed to fetch tracks:', e);
-      setFetchError('Could not load tracks.');
-    } finally {
-      if (!silent) setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (!token || !isStaffInAdminMode) {
       setFetchError(null);
-      return;
-    }
-    fetchTracks();
-  }, [token, isStaffInAdminMode]);
+      const data = await res.json();
+      return { items: data.items, hasMore: data.has_more };
+    }, [token]),
+    resetKey: token && isStaffInAdminMode ? 'studio-tracks' : null,
+    enabled: !!(token && isStaffInAdminMode),
+    pageSize: DEFAULT_LAZY_PAGE_SIZE,
+  });
+
+  const tracks = tracksList.items;
+  const isLoading = tracksList.loading;
+  const fetchTracks = () => { void tracksList.reload(); };
 
   useEffect(() => {
     if (!token) return;
@@ -74,12 +76,12 @@ export const StudioTrackList: React.FC = () => {
         if (data.type !== 'status_updates') return;
 
         const updates = data.tracks;
-        setTracks((prev) => {
+        tracksList.setItems((prev) => {
           const hasNew = updates.some((u: { track_id: number }) =>
             !prev.some((t) => t.id === u.track_id)
           );
           if (hasNew) {
-            setTimeout(() => fetchTracks(true), 0);
+            setTimeout(() => tracksList.reload(), 0);
           }
           return prev.map((track) => {
             const update = updates.find((u: { track_id: number }) => u.track_id === track.id);
@@ -216,13 +218,7 @@ export const StudioTrackList: React.FC = () => {
                       </div>
                     </td>
                     <td className="p-5 text-slate-450 text-[10px] font-medium">
-                      {t.created_at
-                        ? new Date(t.created_at).toLocaleDateString(undefined, {
-                            year: 'numeric',
-                            month: 'short',
-                            day: 'numeric',
-                          })
-                        : '—'}
+                      {t.created_at ? formatLocalDate(t.created_at) : '—'}
                     </td>
                     <td className="p-5 text-center">
                       <button
@@ -240,6 +236,11 @@ export const StudioTrackList: React.FC = () => {
             </tbody>
           </table>
         )}
+        <LazyListSentinel
+          hasMore={tracksList.hasMore}
+          loading={tracksList.loadingMore}
+          onLoadMore={tracksList.loadMore}
+        />
       </div>
 
       <div className="md:hidden space-y-3">
@@ -313,13 +314,7 @@ export const StudioTrackList: React.FC = () => {
                     {status.label}
                   </span>
                   <span className="text-[10px] text-slate-500">
-                    {t.created_at
-                      ? new Date(t.created_at).toLocaleDateString(undefined, {
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric',
-                        })
-                      : '—'}
+                    {t.created_at ? formatLocalDate(t.created_at) : '—'}
                   </span>
                 </div>
 
@@ -328,6 +323,11 @@ export const StudioTrackList: React.FC = () => {
             );
           })
         )}
+        <LazyListSentinel
+          hasMore={tracksList.hasMore}
+          loading={tracksList.loadingMore}
+          onLoadMore={tracksList.loadMore}
+        />
       </div>
     </div>
   );

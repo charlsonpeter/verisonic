@@ -96,16 +96,30 @@ def qualifies_track_play(
     if listened_seconds < min_track_seconds:
         return False
     if track_duration and track_duration > 0:
+        if listened_seconds > track_duration + 2:
+            return False
         return listened_seconds >= track_duration * 0.5
     return True
 
 
-def get_or_create_wallet(db: Session, user_id: int) -> OwnerWallet:
-    wallet = db.query(OwnerWallet).filter(OwnerWallet.user_id == user_id).first()
+def get_or_create_wallet(db: Session, user_id: int, *, for_update: bool = False) -> OwnerWallet:
+    query = db.query(OwnerWallet).filter(OwnerWallet.user_id == user_id)
+    if for_update:
+        query = query.with_for_update()
+    wallet = query.first()
     if wallet is None:
         wallet = OwnerWallet(user_id=user_id, balance_paise=0)
         db.add(wallet)
         db.flush()
+        if for_update:
+            locked = (
+                db.query(OwnerWallet)
+                .filter(OwnerWallet.user_id == user_id)
+                .with_for_update()
+                .first()
+            )
+            if locked is not None:
+                return locked
     return wallet
 
 
@@ -121,7 +135,7 @@ def credit_wallet(
 ) -> None:
     if amount_paise <= 0:
         return
-    wallet = get_or_create_wallet(db, owner_user_id)
+    wallet = get_or_create_wallet(db, owner_user_id, for_update=True)
     wallet.balance_paise += amount_paise
     wallet.updated_at = utcnow()
     db.add(
@@ -238,6 +252,7 @@ def heartbeat_radio_listen_session(
             RadioListenSession.listener_user_id == listener.id,
             RadioListenSession.is_active.is_(True),
         )
+        .with_for_update()
         .first()
     )
     if session is None:
@@ -426,7 +441,7 @@ def request_withdrawal(
     if amount_paise < settings.min_withdrawal_paise:
         raise ValueError(f"Minimum withdrawal is ₹{settings.min_withdrawal_paise / 100:.2f}.")
 
-    wallet = get_or_create_wallet(db, user.id)
+    wallet = get_or_create_wallet(db, user.id, for_update=True)
     if amount_paise > wallet.balance_paise:
         raise ValueError("Insufficient balance.")
 
@@ -482,6 +497,7 @@ def process_withdrawal(
     admin: User,
     action: str,
     admin_note: Optional[str] = None,
+    utr_reference: Optional[str] = None,
 ) -> WithdrawalRequest:
     req = db.query(WithdrawalRequest).filter(WithdrawalRequest.id == withdrawal_id).first()
     if req is None:
@@ -491,23 +507,23 @@ def process_withdrawal(
 
     now = utcnow()
     if action == "paid":
-        wallet = get_or_create_wallet(db, req.user_id)
-        if req.amount_paise > wallet.balance_paise:
-            raise ValueError("Owner no longer has sufficient balance.")
-        wallet.balance_paise -= req.amount_paise
+        req.status = "paid"
+        if utr_reference and utr_reference.strip():
+            req.utr_reference = utr_reference.strip()
+    elif action == "rejected":
+        wallet = get_or_create_wallet(db, req.user_id, for_update=True)
+        wallet.balance_paise += req.amount_paise
         wallet.updated_at = now
         db.add(
             WalletLedgerEntry(
                 wallet_id=wallet.id,
-                amount_paise=-req.amount_paise,
-                entry_type="withdrawal",
-                description="Manual bank withdrawal",
-                reference_id=f"withdrawal:{req.id}",
+                amount_paise=req.amount_paise,
+                entry_type="adjustment",
+                description="Withdrawal rejected — balance restored",
+                reference_id=f"withdrawal:{req.id}:rejected",
                 listener_user_id=None,
             )
         )
-        req.status = "paid"
-    elif action == "rejected":
         req.status = "rejected"
     else:
         raise ValueError("Invalid withdrawal action.")

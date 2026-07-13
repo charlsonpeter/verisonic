@@ -17,8 +17,8 @@ def playlist_tracks_ordered(playlist) -> list:
     )
     return ordered
 
-def serialize_playlist(playlist, db: Session) -> dict:
-    tracks = [serialize_track(pt.track, db) for pt in playlist_tracks_ordered(playlist)]
+def serialize_playlist(playlist, db: Session, viewer=None) -> dict:
+    tracks = [serialize_track(pt.track, db, viewer=viewer) for pt in playlist_tracks_ordered(playlist)]
     return {
         "id": playlist.id,
         "name": playlist.name,
@@ -62,7 +62,7 @@ def list_playlists(
     
     response = []
     for p in playlists:
-        response.append(serialize_playlist(p, db))
+        response.append(serialize_playlist(p, db, viewer=current_user))
     return response
 
 @router.get("/{id}", response_model=PlaylistResponse)
@@ -74,15 +74,7 @@ def get_playlist(id: int, db: Session = Depends(get_db), current_user = Depends(
     if p.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Playlist not found or you are not the owner")
         
-    tracks = [serialize_track(pt.track, db) for pt in playlist_tracks_ordered(p)]
-    return {
-        "id": p.id,
-        "name": p.name,
-        "user_id": p.user_id,
-        "is_public": p.is_public,
-        "created_at": p.created_at,
-        "tracks": tracks
-    }
+    return serialize_playlist(p, db, viewer=current_user)
 
 @router.post("/{id}/track", response_model=PlaylistResponse)
 def add_track_to_playlist(
@@ -106,7 +98,7 @@ def add_track_to_playlist(
         PlaylistTrack.track_id == track.id,
     ).first()
     if existing:
-        return serialize_playlist(playlist, db)
+        return serialize_playlist(playlist, db, viewer=current_user)
 
     # Calculate position
     max_pos = 0
@@ -122,7 +114,7 @@ def add_track_to_playlist(
     db.add(playlist_track)
     db.commit()
     db.refresh(playlist)
-    return serialize_playlist(playlist, db)
+    return serialize_playlist(playlist, db, viewer=current_user)
 
 @router.put("/{id}/tracks/reorder", response_model=PlaylistResponse)
 def reorder_playlist_tracks(
@@ -148,7 +140,7 @@ def reorder_playlist_tracks(
 
     db.commit()
     db.refresh(playlist)
-    return serialize_playlist(playlist, db)
+    return serialize_playlist(playlist, db, viewer=current_user)
 
 @router.delete("/{id}", status_code=status.HTTP_200_OK)
 def delete_playlist(
@@ -185,4 +177,4 @@ def remove_track_from_playlist(
         db.commit()
         
     db.refresh(playlist)
-    return serialize_playlist(playlist, db)
+    return serialize_playlist(playlist, db, viewer=current_user)

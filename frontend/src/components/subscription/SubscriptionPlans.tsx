@@ -8,6 +8,8 @@ import {
   fetchSubscriptionPlans,
   fetchSubscriptionStatus,
   formatExpiryDate,
+  enrichSubscriptionMessage,
+  subscriptionEndsLabel,
   formatInr,
   openSubscriptionCheckout,
   planIdForCycle,
@@ -130,7 +132,14 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
       });
       await fetchCurrentUser();
       await reload();
-      showSuccess(result.queued ? 'Plan scheduled' : 'Subscription activated', result.message);
+      showSuccess(
+        result.queued ? 'Plan scheduled' : 'Subscription activated',
+        enrichSubscriptionMessage(
+          result.message,
+          result.subscription_expires_at,
+          result.queued ? 'ends' : 'renew',
+        ),
+      );
       onSuccess?.();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Checkout failed.';
@@ -154,10 +163,9 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
     if (action.disabled) return;
 
     if (action.mode === 'schedule-switch') {
-      const expiry = formatExpiryDate(effectiveStatus?.subscription_expires_at);
       const confirmed = await showConfirm(
         'Switch to Monthly',
-        `Your yearly plan stays active until ${expiry || 'the end of your billing period'}. After that, you'll move to Monthly. You can prepay Monthly anytime to avoid interruption.`,
+        `Your yearly plan stays active until ${subscriptionEndsLabel(effectiveStatus?.subscription_expires_at)}. After that, you'll move to Monthly. You can prepay Monthly anytime to avoid interruption.`,
         'Schedule switch',
       );
       if (!confirmed) return;
@@ -167,7 +175,10 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
         const result = await scheduleSubscriptionChange(plan.id, token);
         await fetchCurrentUser();
         await reload();
-        showSuccess('Plan scheduled', result.message);
+        showSuccess(
+          'Plan scheduled',
+          enrichSubscriptionMessage(result.message, result.subscription_expires_at, 'ends'),
+        );
         onSuccess?.();
       } catch (err) {
         showError('Could not schedule', err instanceof Error ? err.message : 'Try again.');
@@ -219,7 +230,10 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
       const result = await cancelSubscription(token);
       await fetchCurrentUser();
       await reload();
-      showSuccess('Cancellation scheduled', result.message);
+      showSuccess(
+        'Cancellation scheduled',
+        enrichSubscriptionMessage(result.message, result.subscription_expires_at, 'continues'),
+      );
       onSuccess?.();
     } catch (err) {
       showError('Could not cancel', err instanceof Error ? err.message : 'Try again.');

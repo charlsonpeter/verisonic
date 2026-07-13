@@ -270,7 +270,7 @@ export const Radio: React.FC = () => {
   const fetchRadioStations = async () => {
     setIsLoading(true);
     try {
-      const authToken = token || localStorage.getItem('token');
+      const authToken = token;
       const headers: HeadersInit = authToken ? { Authorization: `Bearer ${authToken}` } : {};
       const res = await fetch(`${API_URL}/radio`, { headers });
       if (res.ok) {

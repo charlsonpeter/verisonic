@@ -60,6 +60,155 @@ export interface AdminWithdrawal extends WithdrawalRequest {
   account_number_masked: string | null;
   account_number?: string | null;
   ifsc_code: string | null;
+  utr_reference?: string | null;
+}
+
+export interface AccountsSummary {
+  subscription_revenue_paise: number;
+  owners_revenue_paise: number;
+  total_withdrawn_paise: number;
+  total_balance_paise: number;
+  studio_count: number;
+  station_count: number;
+  premium_subscriber_count: number;
+  pending_subscription_count: number;
+}
+
+export interface AdminWallet {
+  user_id: number;
+  user_email: string;
+  user_name: string | null;
+  role: string;
+  balance_paise: number;
+  updated_at: string | null;
+}
+
+export interface OwnerAccount {
+  user_id: number;
+  email: string;
+  owner_name: string;
+  account_type: string;
+  total_revenue_paise: number;
+  total_withdrawals_paise: number;
+  balance_paise: number;
+}
+
+export interface StudioRevenueDetail {
+  studio_id: number;
+  stage_name: string;
+  track_revenue_paise: number;
+  qualifying_plays: number;
+}
+
+export interface TrackRevenueDetail {
+  track_id: number;
+  title: string;
+  revenue_paise: number;
+  play_count: number;
+}
+
+export interface StationRevenueDetail {
+  station_id: number;
+  name: string;
+  revenue_paise: number;
+  listen_seconds: number;
+  session_count: number;
+}
+
+export interface OwnerAccountDetail extends OwnerAccount {
+  studio?: StudioRevenueDetail | null;
+  tracks: TrackRevenueDetail[];
+  stations: StationRevenueDetail[];
+  list_total?: number;
+  has_more?: boolean;
+}
+
+export interface WithdrawalUser {
+  user_id: number;
+  email: string;
+  owner_name: string;
+  account_type: string;
+  total_withdrawals_paise: number;
+  withdrawal_count: number;
+  balance_paise: number;
+  last_withdrawal_at: string | null;
+}
+
+export interface WithdrawalUserItem {
+  id: number;
+  amount_paise: number;
+  status: string;
+  admin_note: string | null;
+  utr_reference: string | null;
+  created_at: string;
+  processed_at: string | null;
+  account_holder_name: string | null;
+  bank_name: string | null;
+  account_number_masked: string | null;
+  ifsc_code: string | null;
+}
+
+export interface WithdrawalUserDetail extends WithdrawalUser {
+  withdrawals: WithdrawalUserItem[];
+  withdrawals_total?: number;
+  has_more_withdrawals?: boolean;
+}
+
+export interface AdminSubscriptionPayment {
+  id: number;
+  user_id: number;
+  user_email: string;
+  user_name: string | null;
+  plan_id: string;
+  amount_paise: number;
+  status: string;
+  razorpay_order_id: string;
+  razorpay_payment_id: string | null;
+  created_at: string;
+  paid_at: string | null;
+}
+
+export interface AdminSubscriber {
+  user_id: number;
+  user_email: string;
+  user_name: string | null;
+  subscription: string;
+  subscription_cycle: string | null;
+  subscription_status: string;
+  next_payment_at: string | null;
+  last_amount_paise: number | null;
+  last_payment_status: string;
+  last_payment_at: string | null;
+}
+
+export interface AdminSubscriberPaymentItem {
+  id: number;
+  plan_id: string;
+  plan_label: string;
+  amount_paise: number;
+  status: string;
+  razorpay_order_id: string;
+  razorpay_payment_id: string | null;
+  created_at: string;
+  paid_at: string | null;
+}
+
+export interface AdminSubscriberDetail {
+  user_id: number;
+  user_email: string;
+  user_name: string | null;
+  subscription: string;
+  subscription_cycle: string | null;
+  subscription_status: string;
+  subscription_activated_at: string | null;
+  subscription_expires_at: string | null;
+  next_payment_at: string | null;
+  pending_plan_id: string | null;
+  pending_plan_label: string | null;
+  pending_plan_paid: boolean;
+  payments: AdminSubscriberPaymentItem[];
+  payments_total?: number;
+  has_more_payments?: boolean;
 }
 
 export function formatInrFromPaise(paise: number): string {
@@ -443,15 +592,160 @@ export async function requestWithdrawal(
   return parseJson(res);
 }
 
-export async function fetchMyWithdrawals(token: string): Promise<WithdrawalRequest[]> {
-  const res = await fetch(`${API}/wallet/withdrawals`, {
+export async function fetchMyWithdrawalsPage(
+  token: string,
+  limit = 20,
+  offset = 0,
+): Promise<{ items: WithdrawalRequest[]; total: number; has_more: boolean }> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  const res = await fetch(`${API}/wallet/withdrawals?${params}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   return parseJson(res);
 }
 
+export async function fetchMyWithdrawals(token: string): Promise<WithdrawalRequest[]> {
+  const page = await fetchMyWithdrawalsPage(token, 100, 0);
+  return page.items;
+}
+
 export function clientTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+}
+
+async function downloadRevenueAdminCsv(
+  token: string,
+  path: string,
+  fallbackFilename: string,
+): Promise<void> {
+  const params = new URLSearchParams({
+    timezone: clientTimezone(),
+    locale: typeof navigator !== 'undefined' ? navigator.language : 'en-US',
+  });
+  const joiner = path.includes('?') ? '&' : '?';
+  const res = await fetch(`${API}${path}${joiner}${params}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || 'Could not download export.');
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition');
+  const match = disposition?.match(/filename="([^"]+)"/);
+  const filename = match?.[1] ?? fallbackFilename;
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+export async function downloadOwnerAccountsCsv(token: string): Promise<void> {
+  await downloadRevenueAdminCsv(token, '/admin/revenue/owners/export.csv', 'verisonic-owner-accounts.csv');
+}
+
+export async function downloadOwnerAccountDetailCsv(token: string, userId: number): Promise<void> {
+  await downloadRevenueAdminCsv(
+    token,
+    `/admin/revenue/owners/${userId}/export.csv`,
+    'verisonic-owner-detail.csv',
+  );
+}
+
+export async function downloadSubscribersCsv(token: string, status?: string): Promise<void> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : '';
+  await downloadRevenueAdminCsv(
+    token,
+    `/admin/revenue/subscribers/export.csv${query}`,
+    'verisonic-subscribers.csv',
+  );
+}
+
+export async function downloadSubscriberDetailCsv(
+  token: string,
+  userId: number,
+  fromDate?: string,
+  toDate?: string,
+  search?: string,
+): Promise<void> {
+  const params = new URLSearchParams({
+    timezone: clientTimezone(),
+    locale: typeof navigator !== 'undefined' ? navigator.language : 'en-US',
+  });
+  if (fromDate?.trim()) params.set('from', fromDate.trim());
+  if (toDate?.trim()) params.set('to', toDate.trim());
+  if (search?.trim()) params.set('search', search.trim());
+  const res = await fetch(
+    `${API}/admin/revenue/subscribers/${userId}/export.csv?${params}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || 'Could not download export.');
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition');
+  const match = disposition?.match(/filename="([^"]+)"/);
+  const filename = match?.[1] ?? 'verisonic-subscriber.csv';
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+export async function downloadWithdrawalUsersCsv(token: string): Promise<void> {
+  await downloadRevenueAdminCsv(
+    token,
+    '/admin/revenue/withdrawals/users/export.csv',
+    'verisonic-withdrawals.csv',
+  );
+}
+
+export async function downloadWithdrawalUserDetailCsv(
+  token: string,
+  userId: number,
+  fromDate?: string,
+  toDate?: string,
+  search?: string,
+): Promise<void> {
+  const params = new URLSearchParams({
+    timezone: clientTimezone(),
+    locale: typeof navigator !== 'undefined' ? navigator.language : 'en-US',
+  });
+  if (fromDate?.trim()) params.set('from', fromDate.trim());
+  if (toDate?.trim()) params.set('to', toDate.trim());
+  if (search?.trim()) params.set('search', search.trim());
+  const res = await fetch(
+    `${API}/admin/revenue/withdrawals/users/${userId}/export.csv?${params}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.detail || 'Could not download export.');
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition');
+  const match = disposition?.match(/filename="([^"]+)"/);
+  const filename = match?.[1] ?? 'verisonic-withdrawals-detail.csv';
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 }
 
 export async function downloadWithdrawalsCsv(
@@ -523,30 +817,193 @@ export async function saveRevenueSettings(
   return parseJson(res);
 }
 
-export async function fetchAdminWithdrawals(
-  token: string,
-  status?: string,
-): Promise<AdminWithdrawal[]> {
-  const query = status ? `?status=${encodeURIComponent(status)}` : '';
-  const res = await fetch(`${API}/admin/revenue/withdrawals${query}`, {
+export async function fetchAccountsSummary(token: string): Promise<AccountsSummary> {
+  const res = await fetch(`${API}/admin/revenue/summary`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   return parseJson(res);
 }
 
-export async function processAdminWithdrawal(
+export interface Paginated<T> {
+  items: T[];
+  total: number;
+  has_more: boolean;
+}
+
+export const ACCOUNTS_LIST_PAGE_SIZE = 20;
+
+function paginatedQuery(limit: number, offset: number, search?: string): string {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (search?.trim()) params.set('search', search.trim());
+  return params.toString();
+}
+
+export async function fetchOwnerAccountsPage(
   token: string,
-  withdrawalId: number,
-  action: 'paid' | 'rejected',
-  adminNote?: string,
-): Promise<AdminWithdrawal> {
-  const res = await fetch(`${API}/admin/revenue/withdrawals/${withdrawalId}/process`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ action, admin_note: adminNote || null }),
+  limit: number,
+  offset: number,
+  search?: string,
+): Promise<Paginated<OwnerAccount>> {
+  const res = await fetch(`${API}/admin/revenue/owners?${paginatedQuery(limit, offset, search)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return parseJson(res);
+}
+
+export async function fetchOwnerAccounts(token: string): Promise<OwnerAccount[]> {
+  const all: OwnerAccount[] = [];
+  let offset = 0;
+  const limit = 100;
+  while (true) {
+    const page = await fetchOwnerAccountsPage(token, limit, offset);
+    all.push(...page.items);
+    if (!page.has_more) break;
+    offset += page.items.length;
+  }
+  return all;
+}
+
+export async function fetchOwnerAccountDetail(
+  token: string,
+  userId: number,
+  limit = ACCOUNTS_LIST_PAGE_SIZE,
+  offset = 0,
+  search?: string,
+): Promise<OwnerAccountDetail> {
+  const res = await fetch(
+    `${API}/admin/revenue/owners/${userId}?${paginatedQuery(limit, offset, search)}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  return parseJson(res);
+}
+
+/** @deprecated Use fetchOwnerAccounts */
+export async function fetchAdminWallets(token: string): Promise<AdminWallet[]> {
+  const res = await fetch(`${API}/admin/revenue/owners`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const owners = (await parseJson(res)) as OwnerAccount[];
+  return owners.map((owner) => ({
+    user_id: owner.user_id,
+    user_email: owner.email,
+    user_name: owner.owner_name,
+    role: owner.account_type,
+    balance_paise: owner.balance_paise,
+    updated_at: null,
+  }));
+}
+
+export async function fetchAdminSubscribersPage(
+  token: string,
+  limit: number,
+  offset: number,
+  status?: string,
+  search?: string,
+): Promise<Paginated<AdminSubscriber>> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (status) params.set('status', status);
+  if (search?.trim()) params.set('search', search.trim());
+  const res = await fetch(`${API}/admin/revenue/subscribers?${params}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return parseJson(res);
+}
+
+export async function fetchAdminSubscribers(
+  token: string,
+  status?: string,
+): Promise<AdminSubscriber[]> {
+  const all: AdminSubscriber[] = [];
+  let offset = 0;
+  const limit = 100;
+  while (true) {
+    const page = await fetchAdminSubscribersPage(token, limit, offset, status);
+    all.push(...page.items);
+    if (!page.has_more) break;
+    offset += page.items.length;
+  }
+  return all;
+}
+
+export async function fetchAdminSubscriberDetail(
+  token: string,
+  userId: number,
+  limit = ACCOUNTS_LIST_PAGE_SIZE,
+  offset = 0,
+  search?: string,
+  fromDate?: string,
+  toDate?: string,
+): Promise<AdminSubscriberDetail> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (search?.trim()) params.set('search', search.trim());
+  if (fromDate?.trim()) params.set('from', fromDate.trim());
+  if (toDate?.trim()) params.set('to', toDate.trim());
+  const res = await fetch(
+    `${API}/admin/revenue/subscribers/${userId}?${params}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  return parseJson(res);
+}
+
+export async function fetchWithdrawalUsersPage(
+  token: string,
+  limit: number,
+  offset: number,
+  search?: string,
+): Promise<Paginated<WithdrawalUser>> {
+  const res = await fetch(
+    `${API}/admin/revenue/withdrawals/users?${paginatedQuery(limit, offset, search)}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  return parseJson(res);
+}
+
+export async function fetchWithdrawalUserDetail(
+  token: string,
+  userId: number,
+  limit = ACCOUNTS_LIST_PAGE_SIZE,
+  offset = 0,
+  search?: string,
+  fromDate?: string,
+  toDate?: string,
+): Promise<WithdrawalUserDetail> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  if (search?.trim()) params.set('search', search.trim());
+  if (fromDate?.trim()) params.set('from', fromDate.trim());
+  if (toDate?.trim()) params.set('to', toDate.trim());
+  const res = await fetch(
+    `${API}/admin/revenue/withdrawals/users/${userId}?${params}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+  return parseJson(res);
+}
+
+export async function fetchAdminSubscriptionPayments(
+  token: string,
+  status?: string,
+): Promise<AdminSubscriptionPayment[]> {
+  const query = status ? `?status=${encodeURIComponent(status)}` : '';
+  const res = await fetch(`${API}/admin/revenue/subscription-payments${query}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return parseJson(res);
+}
+
+export async function fetchAdminWithdrawals(token: string): Promise<AdminWithdrawal[]> {
+  const res = await fetch(`${API}/admin/revenue/withdrawals`, {
+    headers: { Authorization: `Bearer ${token}` },
   });
   return parseJson(res);
 }

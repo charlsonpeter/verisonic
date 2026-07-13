@@ -1,14 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Play, Heart, Share2, Music, AlignLeft, Disc,
   MessageSquare, Send
 } from 'lucide-react';
 import { useAudio, Track } from '../context/AudioContext';
 import { useAuth } from '../context/AuthContext';
+import { formatLocalDateTime } from '../utils/dateTime';
 
 interface MusicDetailsProps {
   track: Track | null;
   onNavigate: (tab: string) => void;
+  onArtistClick?: (artistName: string) => void;
 }
 
 function formatDuration(seconds: number): string {
@@ -44,15 +46,42 @@ function buildTrackMetadata(track: Track): { label: string; value: string }[] {
   return rows;
 }
 
-export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate }) => {
+export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate, onArtistClick }) => {
   const { playTrack, favorites, toggleFavorite } = useAudio();
-  const { currentUser } = useAuth();
-  
-  const [comments, setComments] = useState([
-    { author: "Alexander P.", text: "The treble resolution in this master is unbelievable. No harsh sibilance at all.", time: "2 hours ago" },
-    { author: "Dmitri K.", text: "Beautiful dynamics throughout. One of my favorites on the platform.", time: "1 day ago" }
-  ]);
+  const { currentUser, token } = useAuth();
+
+  interface CommentItem {
+    id: number;
+    author_name?: string | null;
+    body: string;
+    created_at: string;
+  }
+
+  const [comments, setComments] = useState<CommentItem[]>([]);
+  const [isLoadingComments, setIsLoadingComments] = useState(false);
+  const [isPostingComment, setIsPostingComment] = useState(false);
   const [newComment, setNewComment] = useState('');
+
+  useEffect(() => {
+    if (!track?.id) {
+      setComments([]);
+      return;
+    }
+    const loadComments = async () => {
+      setIsLoadingComments(true);
+      try {
+        const res = await fetch(`/api/music/${track.id}/comments`);
+        if (res.ok) {
+          setComments(await res.json());
+        }
+      } catch {
+        setComments([]);
+      } finally {
+        setIsLoadingComments(false);
+      }
+    };
+    void loadComments();
+  }, [track?.id]);
 
   if (!track) {
     return (
@@ -68,19 +97,30 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate })
 
   const isFav = favorites.includes(track.id);
 
-  const handleAddComment = (e: React.FormEvent) => {
+  const handleAddComment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newComment.trim()) return;
-    setComments([
-      ...comments,
-      {
-        author: currentUser?.full_name || "Guest listener",
-        text: newComment,
-        time: "Just now"
+    if (!newComment.trim() || !token) return;
+    setIsPostingComment(true);
+    try {
+      const res = await fetch(`/api/music/${track.id}/comments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ body: newComment.trim() }),
+      });
+      if (res.ok) {
+        const created = await res.json();
+        setComments((prev) => [created, ...prev]);
+        setNewComment('');
       }
-    ]);
-    setNewComment('');
+    } finally {
+      setIsPostingComment(false);
+    }
   };
+
+  const formatCommentTime = (value: string) => formatLocalDateTime(value) || value;
 
   const metadataRows = buildTrackMetadata(track);
 
@@ -112,7 +152,14 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate })
               {track.title}
             </h1>
             <p className="text-sm text-slate-350 font-bold">
-              Artist: <span className="text-slate-100">{track.artist_name}</span>
+              Artist:{' '}
+              <button
+                type="button"
+                onClick={() => onArtistClick?.(track.artist_name)}
+                className="text-slate-100 hover:text-rose-400 transition underline-offset-2 hover:underline"
+              >
+                {track.artist_name}
+              </button>
             </p>
             {track.album_title && (
               <p className="text-xs text-slate-450 font-semibold">Album: {track.album_title}</p>
@@ -191,14 +238,16 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate })
         <form onSubmit={handleAddComment} className="flex gap-3 items-center bg-slate-950 border border-white/5 rounded-2xl p-2.5">
           <input
             type="text"
-            placeholder="Share your thoughts..."
+            placeholder={token ? 'Share your thoughts...' : 'Log in to comment'}
             value={newComment}
             onChange={(e) => setNewComment(e.target.value)}
-            className="bg-transparent text-xs text-slate-200 outline-none w-full px-3 placeholder-slate-500"
+            disabled={!token || isPostingComment}
+            className="bg-transparent text-xs text-slate-200 outline-none w-full px-3 placeholder-slate-500 disabled:opacity-50"
           />
           <button 
             type="submit"
-            className="p-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl transition flex-shrink-0"
+            disabled={!token || isPostingComment}
+            className="p-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white rounded-xl transition flex-shrink-0"
             title="Post Comment"
           >
             <Send className="w-4 h-4" />
@@ -206,15 +255,21 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate })
         </form>
 
         <div className="space-y-3">
-          {comments.map((c, idx) => (
-            <div key={idx} className="bg-slate-900/25 border border-white/5 rounded-2xl px-4 py-3 space-y-2">
-              <div className="flex justify-between items-center gap-3 text-[10px] font-bold">
-                <span className="text-slate-200 truncate">{c.author}</span>
-                <span className="text-slate-500 flex-shrink-0">{c.time}</span>
+          {isLoadingComments ? (
+            <p className="text-xs text-slate-500">Loading comments...</p>
+          ) : comments.length === 0 ? (
+            <p className="text-xs text-slate-500">No comments yet. Be the first to share your thoughts.</p>
+          ) : (
+            comments.map((c) => (
+              <div key={c.id} className="bg-slate-900/25 border border-white/5 rounded-2xl px-4 py-3 space-y-2">
+                <div className="flex justify-between items-center gap-3 text-[10px] font-bold">
+                  <span className="text-slate-200 truncate">{c.author_name || 'Listener'}</span>
+                  <span className="text-slate-500 flex-shrink-0">{formatCommentTime(c.created_at)}</span>
+                </div>
+                <p className="text-xs text-slate-400 leading-relaxed font-medium">{c.body}</p>
               </div>
-              <p className="text-xs text-slate-400 leading-relaxed font-medium">{c.text}</p>
-            </div>
-          ))}
+            ))
+          )}
         </div>
       </section>
 

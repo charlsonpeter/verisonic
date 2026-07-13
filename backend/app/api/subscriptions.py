@@ -99,6 +99,7 @@ class SubscriptionStatusResponse(BaseModel):
 
 class SubscriptionActionResponse(BaseModel):
     message: str
+    subscription_expires_at: Optional[datetime.datetime] = None
     pending_plan_id: Optional[str] = None
     pending_plan_paid: bool = False
     cancel_at_period_end: bool = False
@@ -258,8 +259,7 @@ def verify_subscription_payment(
     if premium_is_active(current_user):
         queue_plan_change(current_user, plan, prepaid=True)
         message = (
-            f"{plan.label} is scheduled to start when your current subscription ends on "
-            f"{current_user.subscription_expires_at.strftime('%d %b %Y')}."
+            f"{plan.label} is scheduled to start when your current subscription ends."
         )
         queued = True
     else:
@@ -331,12 +331,12 @@ def schedule_subscription_change(
     db.commit()
 
     expiry = current_user.subscription_expires_at
-    expiry_label = expiry.strftime("%d %b %Y") if expiry else "the end of your billing period"
     return SubscriptionActionResponse(
         message=(
-            f"Your plan will switch to {plan.label} on {expiry_label}. "
+            f"Your plan will switch to {plan.label} at the end of your current billing period. "
             "Subscribe to Monthly before then to avoid interruption, or prepay from the plan card."
         ),
+        subscription_expires_at=expiry,
         pending_plan_id=current_user.pending_plan_id,
         pending_plan_paid=False,
         cancel_at_period_end=False,
@@ -356,9 +356,9 @@ def cancel_subscription(
     db.commit()
 
     expiry = current_user.subscription_expires_at
-    expiry_label = expiry.strftime("%d %b %Y") if expiry else "the end of your billing period"
     return SubscriptionActionResponse(
-        message=f"Your subscription will end on {expiry_label}. Premium access continues until then.",
+        message="Your subscription will end at the close of your current billing period. Premium access continues until then.",
+        subscription_expires_at=expiry,
         pending_plan_id=None,
         pending_plan_paid=False,
         cancel_at_period_end=True,
