@@ -102,7 +102,7 @@ export function formatMasterStreamLabel(
   return parts.join(' · ');
 }
 
-/** Studio/admin preview: prefer quality HLS paths, then original master. */
+/** Studio/admin preview: quality HLS paths only (no full-file master). */
 export function getOwnerStreamCandidates(track: StreamQualityTrack): string[] {
   return uniquePaths([
     track.hls_hires_path,
@@ -110,13 +110,10 @@ export function getOwnerStreamCandidates(track: StreamQualityTrack): string[] {
     track.hls_high_path,
     track.hls_normal_path,
     track.hls_playlist_path,
-    track.id && track.original_file_path
-      ? `/api/music/${track.id}/stream/master`
-      : undefined,
   ]);
 }
 
-/** True when any quality HLS playlist (or legacy stream) is available. */
+/** True when any quality HLS playlist (or legacy free preview) is available. */
 export function trackHasPlayableStream(track: StreamQualityTrack): boolean {
   return !!(
     track.hls_normal_path ||
@@ -131,38 +128,51 @@ export function trackHasPlayableStream(track: StreamQualityTrack): boolean {
 
 /**
  * Resolve stream candidates for the user's quality setting.
- * Primary playback is always HLS segments — never full progressive files.
+ * Primary playback is HLS segments. Progressive AAC 128 is only a temporary
+ * free/normal migration fallback until four-tier HLS backfill completes.
+ * FLAC tiers fall back to high/normal HLS if the browser cannot play FLAC-in-HLS.
  */
 export function getStreamCandidatesForQuality(
   track: StreamQualityTrack,
   quality: QualityLevelSetting,
   isPremium: boolean,
-  allowMasterFallback = false,
 ): string[] {
   if (!isPremium) {
-    return uniquePaths([track.hls_normal_path]);
+    // Free tier: normal HLS, then legacy progressive AAC 128 during migration
+    return uniquePaths([track.hls_normal_path, track.aac_128_path]);
   }
 
   let primary: Array<string | undefined | null> = [];
   switch (quality) {
     case 'lossless':
-      primary = [track.hls_lossless_path];
+      primary = [
+        track.hls_lossless_path,
+        track.hls_high_path,
+        track.hls_playlist_path,
+        track.hls_normal_path,
+      ];
       break;
     case 'hires':
-      primary = [track.hls_hires_path];
+      primary = [
+        track.hls_hires_path,
+        track.hls_lossless_path,
+        track.hls_high_path,
+        track.hls_playlist_path,
+        track.hls_normal_path,
+      ];
       break;
     case 'high':
-      primary = [track.hls_high_path, track.hls_playlist_path];
+      primary = [
+        track.hls_high_path,
+        track.hls_playlist_path,
+        track.hls_normal_path,
+      ];
       break;
     case 'normal':
-      primary = [track.hls_normal_path];
+      primary = [track.hls_normal_path, track.aac_128_path];
       break;
     default:
-      primary = [track.hls_normal_path];
-  }
-
-  if (allowMasterFallback && track.id && track.original_file_path) {
-    primary.push(`/api/music/${track.id}/stream/master`);
+      primary = [track.hls_normal_path, track.aac_128_path];
   }
 
   return uniquePaths(primary);

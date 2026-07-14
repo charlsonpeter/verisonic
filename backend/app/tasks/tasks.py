@@ -2,11 +2,12 @@ import os
 import shutil
 import tempfile
 import subprocess
+import uuid
 from celery_worker import celery_app
 from app.db.session import SessionLocal
 from app.models import Track, AudioAnalysisReport
 from app.services.audio import extract_metadata, analyze_audio_spectral, calculate_quality_score
-from app.services.storage import upload_file_path, upload_file, delete_prefix
+from app.services.storage import upload_file_path, upload_file, delete_prefix_except
 from sqlalchemy import or_
 
 
@@ -236,10 +237,7 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
         upload_file_path(aac_128_path, aac_128_key, content_type="audio/aac")
         track.aac_128_path = aac_128_key
 
-        # Replace any previous HLS trees for this track
-        delete_prefix(f"hls/{track_id}/")
-
-        # 1) Normal — AAC 128 HLS
+        # Encode all four HLS tiers locally first — never wipe S3 until encodes succeed.
         normal_dir = os.path.join(temp_dir, "hls_normal")
         _ffmpeg_hls(
             input_file_path,
@@ -247,9 +245,7 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
             ["-codec:a", "aac", "-b:a", "128k"],
             segment_type="mpegts",
         )
-        track.hls_normal_path = _upload_hls_directory(normal_dir, f"hls/{track_id}/normal")
 
-        # 2) High — AAC 256 HLS
         high_dir = os.path.join(temp_dir, "hls_high")
         _ffmpeg_hls(
             input_file_path,
@@ -257,9 +253,7 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
             ["-codec:a", "aac", "-b:a", "256k"],
             segment_type="mpegts",
         )
-        track.hls_high_path = _upload_hls_directory(high_dir, f"hls/{track_id}/high")
 
-        # 3) Lossless — FLAC CD quality (16-bit / 44.1 kHz) fMP4 HLS
         lossless_dir = os.path.join(temp_dir, "hls_lossless")
         _ffmpeg_hls(
             input_file_path,
@@ -267,9 +261,7 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
             ["-codec:a", "flac", "-sample_fmt", "s16", "-ar", "44100"],
             segment_type="fmp4",
         )
-        track.hls_lossless_path = _upload_hls_directory(lossless_dir, f"hls/{track_id}/lossless")
 
-        # 4) Hi-Res Master — FLAC at original sample rate / bit depth fMP4 HLS
         hires_dir = os.path.join(temp_dir, "hls_hires")
         _ffmpeg_hls(
             input_file_path,
@@ -277,11 +269,26 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
             ["-codec:a", "flac"],
             segment_type="fmp4",
         )
-        track.hls_hires_path = _upload_hls_directory(hires_dir, f"hls/{track_id}/hires")
 
+        # Publish under a new generation prefix, then point DB at it, then clean old trees.
+        gen = uuid.uuid4().hex[:12]
+        gen_root = f"hls/{track_id}/{gen}"
+
+        hls_normal_key = _upload_hls_directory(normal_dir, f"{gen_root}/normal")
+        hls_high_key = _upload_hls_directory(high_dir, f"{gen_root}/high")
+        hls_lossless_key = _upload_hls_directory(lossless_dir, f"{gen_root}/lossless")
+        hls_hires_key = _upload_hls_directory(hires_dir, f"{gen_root}/hires")
+
+        track.hls_normal_path = hls_normal_key
+        track.hls_high_path = hls_high_key
+        track.hls_lossless_path = hls_lossless_key
+        track.hls_hires_path = hls_hires_key
         # Legacy field points at high-quality HLS for readiness filters
-        track.hls_playlist_path = track.hls_high_path
+        track.hls_playlist_path = hls_high_key
         db.commit()
+
+        # Best-effort: remove prior generations / legacy flat HLS after DB points at the new tree
+        delete_prefix_except(f"hls/{track_id}/", f"{gen_root}/")
         
         return {"status": "success", "track_id": track_id}
         

@@ -1175,14 +1175,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     playingOwnUploadRef.current = canPlayOriginalMaster;
 
-    // Determine stream candidates from quality preference (HLS segments only)
+    // Determine stream candidates from quality preference (HLS segments)
     const candidates = isRadio
       ? [trackToPlay.stream_url || trackToPlay.hls_playlist_path || ''].filter(Boolean)
       : getStreamCandidatesForQuality(
             trackToPlay,
             getEffectiveQuality(qualityLevelSettingRef.current, canConfigureStreamQualityRef.current),
             isPremiumRef.current || canPlayOriginalMaster,
-            canPlayOriginalMaster,
           );
 
     if (!isRadio && candidates.length === 0) {

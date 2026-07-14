@@ -227,7 +227,7 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
         hls_high_url = None
         hls_lossless_url = None
         hls_hires_url = None
-        # Free tier keeps normal HLS (and legacy AAC 128 during migration)
+        # Free tier keeps normal HLS (+ legacy AAC 128 in track payload for migration fallback)
 
     quality_score, quality_level = _resolve_quality_score(track, db)
 
