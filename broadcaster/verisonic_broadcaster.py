@@ -643,6 +643,7 @@ class PyQtBroadcasterApp(QMainWindow):
         self.login_email = QLineEdit()
         self.login_email.setPlaceholderText("your-email@verisonic.com")
         self.login_email.setText(self.saved_email)
+        self.login_email.returnPressed.connect(self.handle_login)
         card_layout.addWidget(self.login_email)
         
         pass_lbl = QLabel("PASSWORD")
@@ -653,6 +654,7 @@ class PyQtBroadcasterApp(QMainWindow):
         self.login_password = QLineEdit()
         self.login_password.setPlaceholderText("••••••••")
         self.login_password.setEchoMode(QLineEdit.Password)
+        self.login_password.returnPressed.connect(self.handle_login)
         card_layout.addWidget(self.login_password)
         
         # Error text
