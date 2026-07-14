@@ -999,7 +999,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     autoplayRefillInFlightRef.current = true;
     try {
       const queue = playQueueRef.current;
+      const current = currentTrackRef.current;
+      // Always exclude the seed, everything already queued, and the track currently playing
+      // so a second prefetch cannot re-append the song that is still playing.
       const exclude = new Set<number>([seed.id, ...queue.map((t) => t.id)]);
+      if (current?.id != null && current.id < 100000) {
+        exclude.add(current.id);
+      }
       const params = new URLSearchParams({ limit: String(AUTOPLAY_BATCH_SIZE) });
       if (exclude.size > 0) {
         params.set('exclude_ids', Array.from(exclude).join(','));
@@ -1027,18 +1033,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       const prev = playQueueRef.current;
       const seen = new Set(prev.map((t) => t.id));
+      if (current?.id != null) seen.add(current.id);
       const toAppend = fresh.filter((t) => !seen.has(t.id));
       if (toAppend.length === 0) {
         autoplayLastFailedSeedRef.current = seed.id;
         return [];
       }
 
-      const nextQueue = prev.length === 0 ? toAppend : [...prev, ...toAppend];
+      const nextQueue = [...prev, ...toAppend];
       playQueueRef.current = nextQueue;
-      if (prev.length === 0) {
-        currentQueueIndexRef.current = -1;
-        setCurrentQueueIndex(-1);
-      }
       setPlayQueue(nextQueue);
       autoplayLastFailedSeedRef.current = null;
       return toAppend;
@@ -1114,6 +1117,34 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
   handleTrackEndedRef.current = handleTrackEnded;
 
+  /** Keep Now Playing aligned with what is actually playing (avoids phantom/duplicate rows). */
+  const ensurePlayingTrackQueued = (t: Track) => {
+    const queue = playQueueRef.current;
+    const idx = currentQueueIndexRef.current;
+    if (idx >= 0 && idx < queue.length && queue[idx].id === t.id) {
+      const next = queue.map((item, i) => (i === idx ? { ...item, ...t } : item));
+      playQueueRef.current = next;
+      setPlayQueue(next);
+      return;
+    }
+    const foundIdx = queue.findIndex((item) => item.id === t.id);
+    if (foundIdx >= 0) {
+      currentQueueIndexRef.current = foundIdx;
+      setCurrentQueueIndex(foundIdx);
+      const next = queue.map((item, i) => (i === foundIdx ? { ...item, ...t } : item));
+      playQueueRef.current = next;
+      setPlayQueue(next);
+      return;
+    }
+    // New playback context: start the queue with this track so autoplay appends after it
+    autoplayLastFailedSeedRef.current = null;
+    const nextQueue = [t];
+    playQueueRef.current = nextQueue;
+    currentQueueIndexRef.current = 0;
+    setPlayQueue(nextQueue);
+    setCurrentQueueIndex(0);
+  };
+
   const playTrack = async (track: Track, isRadio = false, autoPlay = true) => {
     if (!audioRef.current) return;
     const epoch = playbackEpochRef.current;
@@ -1158,10 +1189,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
         if (res.ok) {
           trackToPlay = await res.json();
-          // Keep queue entries from holding stale HLS generation URLs
-          setPlayQueue((prev) =>
-            prev.map((item) => (item.id === trackToPlay.id ? { ...item, ...trackToPlay } : item)),
-          );
         }
       } catch (e) {
         console.warn("Failed to fetch fresh metadata, playing with local cache:", e);
@@ -1169,6 +1196,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     if (epoch !== playbackEpochRef.current) return;
+
+    // Library tracks must live in the queue at the current index (not as a UI-only prepend)
+    if (!isRadio) {
+      ensurePlayingTrackQueued(trackToPlay);
+    }
 
     const role = currentUser?.real_role || currentUser?.role;
     const isOwnUpload =
@@ -1944,28 +1976,39 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const addToQueue = (track: Track) => {
     setPlayQueue(prev => {
       if (prev.some(t => t.id === track.id)) return prev;
+      const next = [...prev, track];
+      playQueueRef.current = next;
       if (prev.length === 0) {
+        currentQueueIndexRef.current = 0;
         setCurrentQueueIndex(0);
         playTrack(track);
       }
-      return [...prev, track];
+      return next;
     });
   };
 
   const playQueueTracks = (tracks: Track[]) => {
     if (tracks.length === 0) return;
     autoplayLastFailedSeedRef.current = null;
+    playQueueRef.current = tracks;
+    currentQueueIndexRef.current = 0;
     setPlayQueue(tracks);
     setCurrentQueueIndex(0);
     void playTrack(tracks[0]);
   };
 
   const removeFromQueue = (trackId: number) => {
-    setPlayQueue(prev => prev.filter(t => t.id !== trackId));
+    setPlayQueue(prev => {
+      const next = prev.filter(t => t.id !== trackId);
+      playQueueRef.current = next;
+      return next;
+    });
   };
 
   const clearQueue = () => {
     autoplayLastFailedSeedRef.current = null;
+    playQueueRef.current = [];
+    currentQueueIndexRef.current = -1;
     setPlayQueue([]);
     setCurrentQueueIndex(-1);
     setCurrentTrack(null);
