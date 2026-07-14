@@ -223,3 +223,26 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
         shutil.rmtree(temp_dir, ignore_errors=True)
         if local_file_path and os.path.exists(local_file_path):
             os.remove(local_file_path)
+
+
+@celery_app.task(name="app.tasks.tasks.settle_daily_revenue_task")
+def settle_daily_revenue_task(settlement_date: str | None = None):
+    """Settle previous UTC day (or an explicit YYYY-MM-DD) into owner wallets."""
+    from app.services.daily_settlement_service import settle_day, settle_previous_utc_day
+
+    db = SessionLocal()
+    try:
+        if settlement_date:
+            run = settle_day(db, settlement_date)
+        else:
+            run = settle_previous_utc_day(db)
+        return {
+            "status": run.status,
+            "settlement_date": run.settlement_date,
+            "listeners_processed": run.listeners_processed,
+            "owners_credited": run.owners_credited,
+            "total_credited_paise": run.total_credited_paise,
+            "error_message": run.error_message,
+        }
+    finally:
+        db.close()

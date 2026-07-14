@@ -1178,7 +1178,8 @@ class RadioListenHeartbeatRequest(BaseModel):
 
 
 class RadioListenHeartbeatResponse(BaseModel):
-    total_credit_paise: int = 0
+    total_credit_paise: int = 0  # always 0; credits come from daily settlement
+    total_seconds: int = 0
 
 
 class RadioListenEndRequest(BaseModel):
@@ -1213,12 +1214,15 @@ def heartbeat_radio_listen_billing(
 ):
     from app.services.wallet_service import heartbeat_radio_listen_session
 
-    total_credit = heartbeat_radio_listen_session(
+    total_seconds = heartbeat_radio_listen_session(
         db,
         listener=current_user,
         session_token=body.session_token,
     )
-    return RadioListenHeartbeatResponse(total_credit_paise=total_credit or 0)
+    return RadioListenHeartbeatResponse(
+        total_credit_paise=0,
+        total_seconds=total_seconds or 0,
+    )
 
 
 @router.post("/{id}/listen-session/end", status_code=status.HTTP_204_NO_CONTENT)

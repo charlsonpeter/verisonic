@@ -12,12 +12,14 @@ from app.db.session import get_db
 from app.models import (
     Artist,
     BillableTrackPlay,
+    DailySettlementRun,
     OwnerWallet,
     RadioListenSession,
     RadioStation,
     SubscriptionPayment,
     Track,
     User,
+    WalletLedgerEntry,
     WithdrawalRequest,
 )
 from app.core.subscription_plans import get_plan
@@ -28,6 +30,14 @@ from app.services.accounts_export_service import (
     build_subscribers_list_csv,
     build_withdrawal_user_detail_csv,
     build_withdrawals_users_list_csv,
+)
+from app.services.owner_revenue_service import (
+    owner_financials as _owner_financials_svc,
+    station_listen_stats,
+    station_revenue_by_id,
+    total_owners_earned_paise,
+    track_play_counts,
+    track_revenue_by_id,
 )
 from app.services.revenue_settings_service import get_revenue_settings, update_revenue_settings
 from app.services.wallet_service import (
@@ -61,6 +71,8 @@ class RevenueSettingsResponse(BaseModel):
     estimated_qualifying_plays_per_day: int
     estimated_radio_minutes_per_day: int
     min_withdrawal_paise: int
+    daily_settlement_enabled: bool = True
+    min_valid_daily_listen_seconds: int = 1
     updated_at: Optional[datetime] = None
 
 
@@ -76,6 +88,8 @@ class RevenueSettingsUpdate(BaseModel):
     estimated_qualifying_plays_per_day: Optional[int] = Field(default=None, ge=1)
     estimated_radio_minutes_per_day: Optional[int] = Field(default=None, ge=1)
     min_withdrawal_paise: Optional[int] = Field(default=None, ge=1)
+    daily_settlement_enabled: Optional[bool] = None
+    min_valid_daily_listen_seconds: Optional[int] = Field(default=None, ge=1)
 
 
 class AdminWithdrawalResponse(BaseModel):
@@ -282,6 +296,8 @@ def _serialize_settings(settings) -> RevenueSettingsResponse:
         estimated_qualifying_plays_per_day=settings.estimated_qualifying_plays_per_day,
         estimated_radio_minutes_per_day=settings.estimated_radio_minutes_per_day,
         min_withdrawal_paise=settings.min_withdrawal_paise,
+        daily_settlement_enabled=bool(getattr(settings, "daily_settlement_enabled", True)),
+        min_valid_daily_listen_seconds=int(getattr(settings, "min_valid_daily_listen_seconds", 1) or 1),
         updated_at=settings.updated_at,
     )
 
@@ -359,30 +375,7 @@ def _owner_display_name(
 
 
 def _owner_financials(db: Session, user_id: int) -> tuple[int, int, int]:
-    wallet = db.query(OwnerWallet).filter(OwnerWallet.user_id == user_id).first()
-    balance = int(wallet.balance_paise) if wallet else 0
-
-    withdrawn = int(
-        db.query(func.coalesce(func.sum(WithdrawalRequest.amount_paise), 0))
-        .filter(WithdrawalRequest.user_id == user_id, WithdrawalRequest.status == "paid")
-        .scalar()
-        or 0
-    )
-
-    track_revenue = int(
-        db.query(func.coalesce(func.sum(BillableTrackPlay.credit_paise), 0))
-        .filter(BillableTrackPlay.owner_user_id == user_id)
-        .scalar()
-        or 0
-    )
-    radio_revenue = int(
-        db.query(func.coalesce(func.sum(RadioListenSession.total_credit_paise), 0))
-        .filter(RadioListenSession.owner_user_id == user_id)
-        .scalar()
-        or 0
-    )
-    total_revenue = track_revenue + radio_revenue
-    return total_revenue, withdrawn, balance
+    return _owner_financials_svc(db, user_id)
 
 
 def _owner_user_ids(db: Session) -> List[int]:
@@ -394,25 +387,11 @@ def _owner_user_ids(db: Session) -> List[int]:
     ]
 
 
-def _station_revenue_stats(db: Session, station_id: int) -> tuple[int, int, int]:
-    revenue = int(
-        db.query(func.coalesce(func.sum(RadioListenSession.total_credit_paise), 0))
-        .filter(RadioListenSession.station_id == station_id)
-        .scalar()
-        or 0
-    )
-    listen_seconds = int(
-        db.query(func.coalesce(func.sum(RadioListenSession.total_seconds), 0))
-        .filter(RadioListenSession.station_id == station_id)
-        .scalar()
-        or 0
-    )
-    session_count = int(
-        db.query(func.count(RadioListenSession.id))
-        .filter(RadioListenSession.station_id == station_id)
-        .scalar()
-        or 0
-    )
+def _station_revenue_stats(db: Session, station_id: int, *, owner_user_id: int, revenue_map: dict[int, int] | None = None) -> tuple[int, int, int]:
+    listen_seconds, session_count = station_listen_stats(db, station_id)
+    if revenue_map is None:
+        revenue_map = station_revenue_by_id(db, owner_user_id=owner_user_id)
+    revenue = int(revenue_map.get(station_id, 0))
     return revenue, listen_seconds, session_count
 
 
@@ -455,12 +434,6 @@ def accounts_summary(
         .scalar()
         or 0
     )
-    track_owner_revenue = int(
-        db.query(func.coalesce(func.sum(BillableTrackPlay.credit_paise), 0)).scalar() or 0
-    )
-    radio_owner_revenue = int(
-        db.query(func.coalesce(func.sum(RadioListenSession.total_credit_paise), 0)).scalar() or 0
-    )
     studio_count = int(
         db.query(func.count(User.id)).filter(User.role == "studio_admin").scalar() or 0
     )
@@ -468,7 +441,7 @@ def accounts_summary(
     pending_subscription_count = _pending_subscription_count(db)
     return AccountsSummaryResponse(
         subscription_revenue_paise=sub_revenue,
-        owners_revenue_paise=track_owner_revenue + radio_owner_revenue,
+        owners_revenue_paise=total_owners_earned_paise(db),
         total_withdrawn_paise=withdrawn_paise,
         total_balance_paise=total_balance,
         studio_count=studio_count,
@@ -713,32 +686,24 @@ def get_owner_account_detail(
     studio_detail = None
     track_details: List[TrackRevenueDetail] = []
     if user.role == "studio_admin" and artist is not None:
-        track_rows = (
-            db.query(
-                Track.id,
-                Track.title,
-                func.coalesce(func.sum(BillableTrackPlay.credit_paise), 0),
-                func.count(BillableTrackPlay.id),
-            )
-            .outerjoin(
-                BillableTrackPlay,
-                (BillableTrackPlay.track_id == Track.id)
-                & (BillableTrackPlay.owner_user_id == user_id),
-            )
+        rev_map = track_revenue_by_id(db, owner_user_id=user_id, artist_id=artist.id)
+        play_map = track_play_counts(db, owner_user_id=user_id, artist_id=artist.id)
+        tracks = (
+            db.query(Track.id, Track.title)
             .filter(Track.artist_id == artist.id)
-            .group_by(Track.id, Track.title)
-            .order_by(func.coalesce(func.sum(BillableTrackPlay.credit_paise), 0).desc(), Track.title.asc())
+            .order_by(Track.title.asc())
             .all()
         )
         track_details = [
             TrackRevenueDetail(
                 track_id=int(track_id),
                 title=title,
-                revenue_paise=int(revenue or 0),
-                play_count=int(play_count or 0),
+                revenue_paise=int(rev_map.get(int(track_id), 0)),
+                play_count=int(play_map.get(int(track_id), 0)),
             )
-            for track_id, title, revenue, play_count in track_rows
+            for track_id, title in tracks
         ]
+        track_details.sort(key=lambda row: (-row.revenue_paise, (row.title or "").lower()))
         if query := _normalize_search(search):
             track_details = [
                 row for row in track_details if query in (row.title or "").lower()
@@ -762,8 +727,11 @@ def get_owner_account_detail(
 
     station_details: List[StationRevenueDetail] = []
     if user.role == "radio_admin":
+        station_rev = station_revenue_by_id(db, owner_user_id=user_id)
         for station in stations:
-            revenue, listen_seconds, session_count = _station_revenue_stats(db, station.id)
+            revenue, listen_seconds, session_count = _station_revenue_stats(
+                db, station.id, owner_user_id=user_id, revenue_map=station_rev
+            )
             station_details.append(
                 StationRevenueDetail(
                     station_id=station.id,
@@ -773,6 +741,7 @@ def get_owner_account_detail(
                     session_count=session_count,
                 )
             )
+        station_details.sort(key=lambda row: (-row.revenue_paise, (row.name or "").lower()))
 
     if query := _normalize_search(search):
         station_details = [
@@ -1070,6 +1039,69 @@ def save_revenue_settings(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _serialize_settings(settings)
+
+
+class SettlementRunResponse(BaseModel):
+    settlement_date: str
+    status: str
+    listeners_processed: int
+    owners_credited: int
+    total_credited_paise: int
+    error_message: Optional[str] = None
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+
+
+@router.post("/settle", response_model=SettlementRunResponse)
+def run_daily_settlement(
+    settlement_date: Optional[date] = Query(
+        default=None,
+        description="UTC date to settle (YYYY-MM-DD). Defaults to yesterday UTC.",
+    ),
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_admin),
+):
+    from app.services.daily_settlement_service import settle_day, settle_previous_utc_day
+
+    try:
+        run = settle_day(db, settlement_date) if settlement_date else settle_previous_utc_day(db)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return SettlementRunResponse(
+        settlement_date=run.settlement_date,
+        status=run.status,
+        listeners_processed=run.listeners_processed,
+        owners_credited=run.owners_credited,
+        total_credited_paise=run.total_credited_paise,
+        error_message=run.error_message,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+    )
+
+
+@router.get("/settle/{settlement_date}", response_model=SettlementRunResponse)
+def get_daily_settlement_run(
+    settlement_date: date,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_admin),
+):
+    run = (
+        db.query(DailySettlementRun)
+        .filter(DailySettlementRun.settlement_date == settlement_date.isoformat())
+        .first()
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="Settlement run not found")
+    return SettlementRunResponse(
+        settlement_date=run.settlement_date,
+        status=run.status,
+        listeners_processed=run.listeners_processed,
+        owners_credited=run.owners_credited,
+        total_credited_paise=run.total_credited_paise,
+        error_message=run.error_message,
+        started_at=run.started_at,
+        finished_at=run.finished_at,
+    )
 
 
 @router.get("/withdrawals/users", response_model=PaginatedAdminWithdrawalUsersResponse)

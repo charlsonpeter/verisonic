@@ -59,6 +59,9 @@ class SubscriptionPayment(Base):
     status = Column(String, default="created")  # created, paid, failed
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     paid_at = Column(DateTime, nullable=True)
+    # Inclusive calendar start / exclusive end of the billing period this payment covers (when known)
+    billing_period_start = Column(DateTime, nullable=True)
+    billing_period_end = Column(DateTime, nullable=True)
 
     user = relationship("User", back_populates="subscription_payments")
 
@@ -299,6 +302,7 @@ class PlatformRevenueSettings(Base):
     premium_yearly_paise = Column(Integer, default=99900, nullable=False)
     company_share_bps = Column(Integer, default=3000, nullable=False)
     owner_share_bps = Column(Integer, default=7000, nullable=False)
+    # Legacy estimate-pool fields (unused by daily settlement; kept for schema compatibility)
     studio_pool_bps = Column(Integer, default=6000, nullable=False)
     radio_pool_bps = Column(Integer, default=4000, nullable=False)
     min_track_seconds = Column(Integer, default=30, nullable=False)
@@ -306,6 +310,8 @@ class PlatformRevenueSettings(Base):
     estimated_qualifying_plays_per_day = Column(Integer, default=10, nullable=False)
     estimated_radio_minutes_per_day = Column(Integer, default=60, nullable=False)
     min_withdrawal_paise = Column(Integer, default=10000, nullable=False)
+    daily_settlement_enabled = Column(Boolean, default=True, nullable=False)
+    min_valid_daily_listen_seconds = Column(Integer, default=1, nullable=False)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
 
@@ -368,6 +374,7 @@ class WithdrawalRequest(Base):
 
 
 class BillableTrackPlay(Base):
+    """Valid track listen for a listener/track/UTC day. Credits are applied by daily settlement."""
     __tablename__ = "billable_track_plays"
     __table_args__ = (
         UniqueConstraint("listener_user_id", "track_id", "play_date", name="uq_billable_track_plays_listener_track_day"),
@@ -377,8 +384,8 @@ class BillableTrackPlay(Base):
     track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False, index=True)
     owner_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     listened_seconds = Column(Float, nullable=False)
-    credit_paise = Column(Integer, nullable=False)
-    play_date = Column(String, nullable=False)  # YYYY-MM-DD UTC
+    credit_paise = Column(Integer, nullable=False, default=0)  # legacy realtime; new model keeps 0
+    play_date = Column(String, nullable=False, index=True)  # YYYY-MM-DD UTC
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
@@ -390,8 +397,40 @@ class RadioListenSession(Base):
     station_id = Column(Integer, ForeignKey("radio_stations.id", ondelete="CASCADE"), nullable=False, index=True)
     owner_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     total_seconds = Column(Integer, default=0, nullable=False)
-    total_credit_paise = Column(Integer, default=0, nullable=False)
+    total_credit_paise = Column(Integer, default=0, nullable=False)  # legacy; settlement uses total_seconds
     is_active = Column(Boolean, default=True, nullable=False)
     started_at = Column(DateTime, default=datetime.datetime.utcnow)
     ended_at = Column(DateTime, nullable=True)
     last_heartbeat_at = Column(DateTime, nullable=True)
+
+
+class DailySettlementRun(Base):
+    """One idempotent settlement pass per UTC calendar date."""
+    __tablename__ = "daily_settlement_runs"
+    id = Column(Integer, primary_key=True, index=True)
+    settlement_date = Column(String, unique=True, nullable=False, index=True)  # YYYY-MM-DD UTC
+    status = Column(String, nullable=False, default="pending")  # pending, running, completed, failed, skipped
+    listeners_processed = Column(Integer, default=0, nullable=False)
+    owners_credited = Column(Integer, default=0, nullable=False)
+    total_credited_paise = Column(Integer, default=0, nullable=False)
+    error_message = Column(String, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    credits = relationship("DailySettlementCredit", back_populates="run", cascade="all, delete-orphan")
+
+
+class DailySettlementCredit(Base):
+    __tablename__ = "daily_settlement_credits"
+    __table_args__ = (
+        UniqueConstraint("settlement_date", "owner_user_id", name="uq_daily_settlement_credits_date_owner"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    run_id = Column(Integer, ForeignKey("daily_settlement_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    settlement_date = Column(String, nullable=False, index=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    amount_paise = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    run = relationship("DailySettlementRun", back_populates="credits")

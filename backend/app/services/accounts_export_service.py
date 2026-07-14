@@ -21,6 +21,13 @@ from app.models import (
     WalletLedgerEntry,
     WithdrawalRequest,
 )
+from app.services.owner_revenue_service import (
+    owner_financials as _owner_financials,
+    station_listen_stats,
+    station_revenue_by_id,
+    track_play_counts,
+    track_revenue_by_id,
+)
 from app.services.wallet_service import decrypt_withdrawal_bank_snapshot
 from app.services.withdrawal_export_service import resolve_export_timezone
 
@@ -125,30 +132,6 @@ def _owner_display_name(
     return user.email
 
 
-def _owner_financials(db: Session, user_id: int) -> tuple[int, int, int]:
-    wallet = db.query(OwnerWallet).filter(OwnerWallet.user_id == user_id).first()
-    balance = int(wallet.balance_paise) if wallet else 0
-    withdrawn = int(
-        db.query(func.coalesce(func.sum(WithdrawalRequest.amount_paise), 0))
-        .filter(WithdrawalRequest.user_id == user_id, WithdrawalRequest.status == "paid")
-        .scalar()
-        or 0
-    )
-    track_revenue = int(
-        db.query(func.coalesce(func.sum(BillableTrackPlay.credit_paise), 0))
-        .filter(BillableTrackPlay.owner_user_id == user_id)
-        .scalar()
-        or 0
-    )
-    radio_revenue = int(
-        db.query(func.coalesce(func.sum(RadioListenSession.total_credit_paise), 0))
-        .filter(RadioListenSession.owner_user_id == user_id)
-        .scalar()
-        or 0
-    )
-    return track_revenue + radio_revenue, withdrawn, balance
-
-
 def _owner_user_ids(db: Session) -> List[int]:
     return [
         row[0]
@@ -158,26 +141,11 @@ def _owner_user_ids(db: Session) -> List[int]:
     ]
 
 
-def _station_revenue_stats(db: Session, station_id: int) -> tuple[int, int, int]:
-    revenue = int(
-        db.query(func.coalesce(func.sum(RadioListenSession.total_credit_paise), 0))
-        .filter(RadioListenSession.station_id == station_id)
-        .scalar()
-        or 0
-    )
-    listen_seconds = int(
-        db.query(func.coalesce(func.sum(RadioListenSession.total_seconds), 0))
-        .filter(RadioListenSession.station_id == station_id)
-        .scalar()
-        or 0
-    )
-    session_count = int(
-        db.query(func.count(RadioListenSession.id))
-        .filter(RadioListenSession.station_id == station_id)
-        .scalar()
-        or 0
-    )
-    return revenue, listen_seconds, session_count
+def _station_revenue_stats(db: Session, station_id: int, *, owner_user_id: int, revenue_map: dict | None = None) -> tuple[int, int, int]:
+    listen_seconds, session_count = station_listen_stats(db, station_id)
+    if revenue_map is None:
+        revenue_map = station_revenue_by_id(db, owner_user_id=owner_user_id)
+    return int(revenue_map.get(station_id, 0)), listen_seconds, session_count
 
 
 def _plan_label(plan_id: str, db: Session) -> str:
@@ -258,33 +226,34 @@ def build_owner_detail_csv(
     account_type = _resolve_account_type(user)
 
     if account_type == "studio" and artist is not None:
-        track_rows = (
-            db.query(
-                Track.id,
-                Track.title,
-                func.coalesce(func.sum(BillableTrackPlay.credit_paise), 0),
-                func.count(BillableTrackPlay.id),
-            )
-            .outerjoin(
-                BillableTrackPlay,
-                (BillableTrackPlay.track_id == Track.id)
-                & (BillableTrackPlay.owner_user_id == user_id),
-            )
+        rev_map = track_revenue_by_id(db, owner_user_id=user_id, artist_id=artist.id)
+        play_map = track_play_counts(db, owner_user_id=user_id, artist_id=artist.id)
+        tracks = (
+            db.query(Track.id, Track.title)
             .filter(Track.artist_id == artist.id)
-            .group_by(Track.id, Track.title)
-            .order_by(func.coalesce(func.sum(BillableTrackPlay.credit_paise), 0).desc(), Track.title.asc())
+            .order_by(Track.title.asc())
             .all()
         )
         rows = [
-            [title, _rupees_from_paise(int(revenue or 0)), int(play_count or 0)]
-            for _, title, revenue, play_count in track_rows
+            [
+                title,
+                _rupees_from_paise(int(rev_map.get(int(track_id), 0))),
+                int(play_map.get(int(track_id), 0)),
+            ]
+            for track_id, title in sorted(
+                tracks,
+                key=lambda row: (-int(rev_map.get(int(row[0]), 0)), (row[1] or "").lower()),
+            )
         ]
         content = _write_csv_section(["Track", "Total earned (INR)", "Play count"], rows)
         return content, _filename_with_timestamp(f"verisonic-owner-{slug}-tracks", tz)
 
     station_rows = []
+    station_rev = station_revenue_by_id(db, owner_user_id=user_id)
     for station in stations:
-        revenue, listen_seconds, session_count = _station_revenue_stats(db, station.id)
+        revenue, listen_seconds, session_count = _station_revenue_stats(
+            db, station.id, owner_user_id=user_id, revenue_map=station_rev
+        )
         station_rows.append(
             [
                 station.name,

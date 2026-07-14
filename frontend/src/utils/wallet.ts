@@ -48,6 +48,8 @@ export interface RevenueSettings {
   estimated_qualifying_plays_per_day: number;
   estimated_radio_minutes_per_day: number;
   min_withdrawal_paise: number;
+  daily_settlement_enabled: boolean;
+  min_valid_daily_listen_seconds: number;
   updated_at: string | null;
 }
 

@@ -233,6 +233,53 @@ MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS ix_track_comments_track_id ON track_comments (track_id);
         CREATE INDEX IF NOT EXISTS ix_track_comments_user_id ON track_comments (user_id);
     """),
+    ("022_daily_settlement", """
+        ALTER TABLE platform_revenue_settings
+            ADD COLUMN IF NOT EXISTS daily_settlement_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+        ALTER TABLE platform_revenue_settings
+            ADD COLUMN IF NOT EXISTS min_valid_daily_listen_seconds INTEGER NOT NULL DEFAULT 1;
+
+        ALTER TABLE subscription_payments
+            ADD COLUMN IF NOT EXISTS billing_period_start TIMESTAMP;
+        ALTER TABLE subscription_payments
+            ADD COLUMN IF NOT EXISTS billing_period_end TIMESTAMP;
+
+        CREATE INDEX IF NOT EXISTS ix_billable_track_plays_play_date
+            ON billable_track_plays (play_date);
+        CREATE INDEX IF NOT EXISTS ix_billable_track_plays_listener_date
+            ON billable_track_plays (listener_user_id, play_date);
+
+        CREATE TABLE IF NOT EXISTS daily_settlement_runs (
+            id SERIAL PRIMARY KEY,
+            settlement_date VARCHAR NOT NULL UNIQUE,
+            status VARCHAR NOT NULL DEFAULT 'pending',
+            listeners_processed INTEGER NOT NULL DEFAULT 0,
+            owners_credited INTEGER NOT NULL DEFAULT 0,
+            total_credited_paise INTEGER NOT NULL DEFAULT 0,
+            error_message VARCHAR,
+            started_at TIMESTAMP,
+            finished_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS ix_daily_settlement_runs_settlement_date
+            ON daily_settlement_runs (settlement_date);
+
+        CREATE TABLE IF NOT EXISTS daily_settlement_credits (
+            id SERIAL PRIMARY KEY,
+            run_id INTEGER NOT NULL REFERENCES daily_settlement_runs(id) ON DELETE CASCADE,
+            settlement_date VARCHAR NOT NULL,
+            owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            amount_paise INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT uq_daily_settlement_credits_date_owner UNIQUE (settlement_date, owner_user_id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_daily_settlement_credits_run_id
+            ON daily_settlement_credits (run_id);
+        CREATE INDEX IF NOT EXISTS ix_daily_settlement_credits_owner
+            ON daily_settlement_credits (owner_user_id);
+        CREATE INDEX IF NOT EXISTS ix_daily_settlement_credits_date
+            ON daily_settlement_credits (settlement_date);
+    """),
 ]
 
 

@@ -264,6 +264,9 @@ def verify_subscription_payment(
         queued = True
     else:
         apply_plan_immediately(current_user, plan)
+        from app.services.billing_period import stamp_payment_billing_period
+
+        stamp_payment_billing_period(payment, current_user)
         message = f"{plan.label} activated successfully."
         queued = False
 

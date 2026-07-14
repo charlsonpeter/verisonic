@@ -31,28 +31,32 @@ def validate_revenue_settings_payload(
     if company is not None and owner is not None and int(company) + int(owner) != 10000:
         raise ValueError("Company and owner shares must total 100%.")
 
-    studio = data.get(
-        "studio_pool_bps",
-        current.studio_pool_bps if current is not None else None,
-    )
-    radio = data.get(
-        "radio_pool_bps",
-        current.radio_pool_bps if current is not None else None,
-    )
-    if studio is not None and radio is not None and int(studio) + int(radio) != 10000:
-        raise ValueError("Studio and radio pool shares must total 100% of the owner pool.")
+    # Legacy pool fields: still optional to update, but if both provided must sum to 100%.
+    if "studio_pool_bps" in data or "radio_pool_bps" in data:
+        studio = data.get(
+            "studio_pool_bps",
+            current.studio_pool_bps if current is not None else None,
+        )
+        radio = data.get(
+            "radio_pool_bps",
+            current.radio_pool_bps if current is not None else None,
+        )
+        if studio is not None and radio is not None and int(studio) + int(radio) != 10000:
+            raise ValueError("Studio and radio pool shares must total 100% of the owner pool.")
 
     positive_int_fields = (
         "premium_monthly_paise",
         "premium_yearly_paise",
         "min_track_seconds",
         "min_radio_heartbeat_sec",
+        "min_withdrawal_paise",
+        "min_valid_daily_listen_seconds",
+        # legacy estimate fields (optional updates)
         "estimated_qualifying_plays_per_day",
         "estimated_radio_minutes_per_day",
-        "min_withdrawal_paise",
     )
     for field in positive_int_fields:
-        if field in data and int(data[field]) <= 0:
+        if field in data and data[field] is not None and int(data[field]) <= 0:
             raise ValueError(f"{field} must be greater than zero.")
 
 
@@ -71,9 +75,15 @@ def update_revenue_settings(db: Session, data: dict[str, Any]) -> PlatformRevenu
         "estimated_qualifying_plays_per_day",
         "estimated_radio_minutes_per_day",
         "min_withdrawal_paise",
+        "daily_settlement_enabled",
+        "min_valid_daily_listen_seconds",
     }
     for key, value in data.items():
-        if key in allowed and value is not None:
+        if key not in allowed or value is None:
+            continue
+        if key == "daily_settlement_enabled":
+            setattr(settings, key, bool(value))
+        else:
             setattr(settings, key, int(value))
     db.commit()
     db.refresh(settings)

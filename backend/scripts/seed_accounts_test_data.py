@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Seed demo data for the Accounts admin page (owners, subscriptions, withdrawals).
 
+Listens are recorded without realtime credits. Daily settlement distributes each
+subscriber's creator pool by listen duration, then wallets are credited.
+
 Usage (Docker):
   docker exec -w /app verisonic_backend env PYTHONPATH=/app python scripts/seed_accounts_test_data.py
   docker exec -w /app verisonic_backend env PYTHONPATH=/app python scripts/seed_accounts_test_data.py --reset
@@ -16,12 +19,16 @@ import argparse
 import datetime
 import uuid
 
+from sqlalchemy import func
+
 from app.core.security import get_password_hash
 from app.core.subscription_plans import get_plan
 from app.db.session import SessionLocal
 from app.models import (
     Artist,
     BillableTrackPlay,
+    DailySettlementCredit,
+    DailySettlementRun,
     OwnerBankAccount,
     OwnerWallet,
     RadioListenSession,
@@ -29,8 +36,12 @@ from app.models import (
     SubscriptionPayment,
     Track,
     User,
+    WalletLedgerEntry,
     WithdrawalRequest,
 )
+from app.services.billing_period import stamp_payment_billing_period
+from app.services.daily_settlement_service import settle_day
+from app.services.revenue_settings_service import get_revenue_settings
 from app.services.subscription_service import apply_admin_subscription
 from app.services.wallet_service import (
     BankDetails,
@@ -41,6 +52,11 @@ from app.services.wallet_service import (
 
 DEMO_DOMAIN = "accounts-demo.verisonic.local"
 DEMO_PASSWORD = "demo12345"
+# Multiple days of listens so daily settlement produces visible owner balances.
+TRACK_PLAY_DAY_COUNT = 45
+# Premium must start before the earliest seeded play date (exclusive of expiry).
+PREMIUM_ACTIVE_DAYS = TRACK_PLAY_DAY_COUNT + 5
+PREMIUM_REMAINING_DAYS = 10
 
 
 def demo_email(local: str) -> str:
@@ -59,6 +75,29 @@ def days_ago(n: int) -> datetime.datetime:
     return utcnow() - datetime.timedelta(days=n)
 
 
+def play_dates(count: int, *, end_days_ago: int = 1) -> list[str]:
+    """Ascending ISO dates ending `end_days_ago` days before today."""
+    end = (utcnow() - datetime.timedelta(days=end_days_ago)).date()
+    start = end - datetime.timedelta(days=count - 1)
+    return [(start + datetime.timedelta(days=i)).isoformat() for i in range(count)]
+
+
+def dates_while_premium(listener: User, dates: list[str]) -> list[str]:
+    """Keep only UTC dates the listener was premium (same gate as settlement)."""
+    activated = listener.subscription_activated_at
+    expires = listener.subscription_expires_at
+    out: list[str] = []
+    for play_date in dates:
+        day = datetime.date.fromisoformat(play_date)
+        day_start = datetime.datetime.combine(day, datetime.time.min)
+        if activated is not None and activated.date() > day:
+            continue
+        if expires is not None and expires <= day_start:
+            continue
+        out.append(play_date)
+    return out
+
+
 def reset_demo_data(db) -> int:
     demo_users = db.query(User).filter(User.email.like(f"%@{DEMO_DOMAIN}")).all()
     if not demo_users:
@@ -68,6 +107,24 @@ def reset_demo_data(db) -> int:
     db.query(WithdrawalRequest).filter(WithdrawalRequest.user_id.in_(demo_ids)).delete(
         synchronize_session=False
     )
+    db.query(DailySettlementCredit).filter(
+        DailySettlementCredit.owner_user_id.in_(demo_ids)
+    ).delete(synchronize_session=False)
+    orphaned_runs = (
+        db.query(DailySettlementRun.id)
+        .outerjoin(
+            DailySettlementCredit,
+            DailySettlementCredit.run_id == DailySettlementRun.id,
+        )
+        .group_by(DailySettlementRun.id)
+        .having(func.count(DailySettlementCredit.id) == 0)
+        .all()
+    )
+    if orphaned_runs:
+        db.query(DailySettlementRun).filter(
+            DailySettlementRun.id.in_([r[0] for r in orphaned_runs])
+        ).delete(synchronize_session=False)
+
     db.query(BillableTrackPlay).filter(
         (BillableTrackPlay.owner_user_id.in_(demo_ids))
         | (BillableTrackPlay.listener_user_id.in_(demo_ids))
@@ -86,6 +143,15 @@ def reset_demo_data(db) -> int:
 
     db.query(RadioStation).filter(RadioStation.owner_id.in_(demo_ids)).delete(synchronize_session=False)
     db.query(OwnerBankAccount).filter(OwnerBankAccount.user_id.in_(demo_ids)).delete(synchronize_session=False)
+
+    wallet_ids = [
+        row[0]
+        for row in db.query(OwnerWallet.id).filter(OwnerWallet.user_id.in_(demo_ids)).all()
+    ]
+    if wallet_ids:
+        db.query(WalletLedgerEntry).filter(WalletLedgerEntry.wallet_id.in_(wallet_ids)).delete(
+            synchronize_session=False
+        )
     db.query(OwnerWallet).filter(OwnerWallet.user_id.in_(demo_ids)).delete(synchronize_session=False)
     db.query(SubscriptionPayment).filter(SubscriptionPayment.user_id.in_(demo_ids)).delete(
         synchronize_session=False
@@ -126,8 +192,9 @@ def ensure_user(
 
     apply_admin_subscription(user, subscription, subscription_cycle, db)
     if subscription == "premium":
-        user.subscription_activated_at = days_ago(20)
-        user.subscription_expires_at = days_ago(-10)
+        # Cover every seeded play/radio day: free listeners cannot produce billable plays.
+        user.subscription_activated_at = days_ago(PREMIUM_ACTIVE_DAYS)
+        user.subscription_expires_at = days_ago(-PREMIUM_REMAINING_DAYS)
     user.subscription_cancel_at_period_end = cancel_at_period_end
     db.flush()
     return user
@@ -202,9 +269,17 @@ def add_track_plays(
     owner: User,
     track: Track,
     listener: User,
-    credits: list[tuple[str, int]],
-) -> None:
-    for play_date, credit_paise in credits:
+    dates: list[str],
+    settings,
+    listened_seconds: float | None = None,
+) -> int:
+    """Insert qualifying listens only for dates the listener was premium."""
+    billable_dates = dates_while_premium(listener, dates)
+    seconds = listened_seconds
+    if seconds is None:
+        seconds = max(float(settings.min_track_seconds), float(track.duration or 0) * 0.5)
+    count = 0
+    for play_date in billable_dates:
         exists = (
             db.query(BillableTrackPlay.id)
             .filter(
@@ -216,17 +291,22 @@ def add_track_plays(
         )
         if exists:
             continue
+        day = datetime.date.fromisoformat(play_date)
+        created_at = datetime.datetime(day.year, day.month, day.day, 12, 0, 0)
         db.add(
             BillableTrackPlay(
                 listener_user_id=listener.id,
                 track_id=track.id,
                 owner_user_id=owner.id,
-                listened_seconds=120.0,
-                credit_paise=credit_paise,
+                listened_seconds=seconds,
+                credit_paise=0,
                 play_date=play_date,
-                created_at=days_ago(30 - int(play_date.split("-")[2]) % 28),
+                created_at=created_at,
             )
         )
+        count += 1
+    db.flush()
+    return count
 
 
 def add_radio_session(
@@ -236,9 +316,10 @@ def add_radio_session(
     station: RadioStation,
     listener: User,
     total_seconds: int,
-    credit_paise: int,
     token_suffix: str,
-) -> None:
+    started_days_ago: int,
+) -> int:
+    """Insert a closed radio session (seconds only; settlement credits later)."""
     token = f"demo_session_{token_suffix}"
     exists = (
         db.query(RadioListenSession.id)
@@ -246,8 +327,10 @@ def add_radio_session(
         .first()
     )
     if exists:
-        return
-    started = days_ago(5)
+        return 0
+
+    started = days_ago(started_days_ago)
+    ended = started + datetime.timedelta(seconds=total_seconds)
     db.add(
         RadioListenSession(
             session_token=token,
@@ -255,19 +338,15 @@ def add_radio_session(
             station_id=station.id,
             owner_user_id=owner.id,
             total_seconds=total_seconds,
-            total_credit_paise=credit_paise,
+            total_credit_paise=0,
             is_active=False,
             started_at=started,
-            ended_at=started + datetime.timedelta(seconds=total_seconds),
-            last_heartbeat_at=started + datetime.timedelta(seconds=total_seconds),
+            ended_at=ended,
+            last_heartbeat_at=ended,
         )
     )
-
-
-def set_wallet_balance(db, user: User, balance_paise: int) -> None:
-    wallet = get_or_create_wallet(db, user.id)
-    wallet.balance_paise = balance_paise
-    wallet.updated_at = utcnow()
+    db.flush()
+    return total_seconds
 
 
 def add_withdrawal(
@@ -277,22 +356,77 @@ def add_withdrawal(
     amount_paise: int,
     bank: BankDetails,
     created_days_ago: int,
-) -> None:
+    settings,
+) -> bool:
+    """Debit wallet + ledger and insert a paid withdrawal (same shape as request_withdrawal)."""
+    if amount_paise < settings.min_withdrawal_paise:
+        return False
+    wallet = get_or_create_wallet(db, user.id, for_update=True)
+    if amount_paise > wallet.balance_paise:
+        return False
+
     created_at = days_ago(created_days_ago)
+    wallet.balance_paise -= amount_paise
+    wallet.updated_at = created_at
     snapshot = encrypt_withdrawal_bank_snapshot(bank)
+    req = WithdrawalRequest(
+        user_id=user.id,
+        amount_paise=amount_paise,
+        status="paid",
+        created_at=created_at,
+        processed_at=created_at,
+        account_holder_name=snapshot["account_holder_name"],
+        bank_name=snapshot["bank_name"],
+        account_number_masked=snapshot["account_number_masked"],
+        ifsc_code=snapshot["ifsc_code"],
+    )
+    db.add(req)
+    db.flush()
     db.add(
-        WithdrawalRequest(
-            user_id=user.id,
-            amount_paise=amount_paise,
-            status="paid",
+        WalletLedgerEntry(
+            wallet_id=wallet.id,
+            amount_paise=-amount_paise,
+            entry_type="withdrawal",
+            description="Bank withdrawal",
+            reference_id=f"withdrawal:{req.id}",
+            listener_user_id=None,
             created_at=created_at,
-            processed_at=created_at,
-            account_holder_name=snapshot["account_holder_name"],
-            bank_name=snapshot["bank_name"],
-            account_number_masked=snapshot["account_number_masked"],
-            ifsc_code=snapshot["ifsc_code"],
         )
     )
+    db.flush()
+    return True
+
+
+def maybe_withdraw_half(
+    db,
+    *,
+    user: User,
+    bank: BankDetails,
+    settings,
+    created_days_ago: int,
+) -> int:
+    """Withdraw one min-sized chunk if balance allows, leaving remainder as available."""
+    wallet = get_or_create_wallet(db, user.id)
+    min_w = settings.min_withdrawal_paise
+    # Leave some balance visible on the Accounts page when possible.
+    amount = min_w
+    if wallet.balance_paise >= min_w * 2:
+        amount = (wallet.balance_paise // (2 * min_w)) * min_w
+        amount = max(min_w, min(amount, wallet.balance_paise - min_w))
+    elif wallet.balance_paise < min_w:
+        return 0
+    else:
+        amount = min_w
+
+    ok = add_withdrawal(
+        db,
+        user=user,
+        amount_paise=amount,
+        bank=bank,
+        created_days_ago=created_days_ago,
+        settings=settings,
+    )
+    return amount if ok else 0
 
 
 def add_subscription_payment(
@@ -316,22 +450,28 @@ def add_subscription_payment(
     if plan is None:
         raise RuntimeError("Subscription plans are not configured")
     paid_at = days_ago(created_days_ago - 1) if status == "paid" else None
-    db.add(
-        SubscriptionPayment(
-            user_id=user.id,
-            plan_id=plan.id,
-            amount_paise=plan.amount_paise,
-            currency=plan.currency,
-            razorpay_order_id=order_id,
-            razorpay_payment_id=f"demo_pay_{suffix}" if status == "paid" else None,
-            status=status,
-            created_at=days_ago(created_days_ago),
-            paid_at=paid_at,
-        )
+    payment = SubscriptionPayment(
+        user_id=user.id,
+        plan_id=plan.id,
+        amount_paise=plan.amount_paise,
+        currency=plan.currency,
+        razorpay_order_id=order_id,
+        razorpay_payment_id=f"demo_pay_{suffix}" if status == "paid" else None,
+        status=status,
+        created_at=days_ago(created_days_ago),
+        paid_at=paid_at,
     )
+    if status == "paid":
+        stamp_payment_billing_period(payment, user)
+    db.add(payment)
+
+
+def _fmt_inr(paise: int) -> str:
+    return f"₹{paise / 100:.2f}"
 
 
 def seed(db) -> None:
+    settings = get_revenue_settings(db)
 
     # --- Premium listeners (subscriptions tab) ---
     listener_active_m = ensure_user(
@@ -378,15 +518,15 @@ def seed(db) -> None:
 
     add_subscription_payment(
         db, user=listener_active_m, plan_id="premium_monthly", status="paid",
-        created_days_ago=25, suffix="m1",
+        created_days_ago=PREMIUM_ACTIVE_DAYS, suffix="m1",
     )
     add_subscription_payment(
         db, user=listener_active_y, plan_id="premium_yearly", status="paid",
-        created_days_ago=40, suffix="y1",
+        created_days_ago=PREMIUM_ACTIVE_DAYS, suffix="y1",
     )
     add_subscription_payment(
         db, user=listener_pending, plan_id="premium_monthly", status="paid",
-        created_days_ago=60, suffix="p0",
+        created_days_ago=PREMIUM_ACTIVE_DAYS, suffix="p0",
     )
     add_subscription_payment(
         db, user=listener_pending, plan_id="premium_monthly", status="created",
@@ -394,7 +534,7 @@ def seed(db) -> None:
     )
     add_subscription_payment(
         db, user=listener_failed, plan_id="premium_monthly", status="paid",
-        created_days_ago=45, suffix="f0",
+        created_days_ago=PREMIUM_ACTIVE_DAYS, suffix="f0",
     )
     add_subscription_payment(
         db, user=listener_failed, plan_id="premium_monthly", status="failed",
@@ -402,10 +542,11 @@ def seed(db) -> None:
     )
     add_subscription_payment(
         db, user=listener_cancelled, plan_id="premium_monthly", status="paid",
-        created_days_ago=30, suffix="c1",
+        created_days_ago=PREMIUM_ACTIVE_DAYS, suffix="c1",
     )
 
-    play_listener = listener_active_m
+    play_listeners = [listener_active_m, listener_active_y, listener_cancelled]
+    dates = play_dates(TRACK_PLAY_DAY_COUNT)
 
     # --- Studio owners ---
     studio1_user, studio1_artist = ensure_studio(
@@ -419,18 +560,22 @@ def seed(db) -> None:
     t2 = ensure_track(db, studio1_artist, "Neon Skies")
     t3 = ensure_track(db, studio2_artist, "Late Night Drive")
 
-    add_track_plays(
-        db, owner=studio1_user, track=t1, listener=play_listener,
-        credits=[("2026-06-01", 8000), ("2026-06-08", 7500), ("2026-06-15", 8200)],
-    )
-    add_track_plays(
-        db, owner=studio1_user, track=t2, listener=listener_active_y,
-        credits=[("2026-06-05", 6000), ("2026-06-12", 5800)],
-    )
-    add_track_plays(
-        db, owner=studio2_user, track=t3, listener=play_listener,
-        credits=[("2026-06-03", 9000), ("2026-06-10", 9500), ("2026-06-17", 9500)],
-    )
+    # Duration-weighted listens (studio1 gets more seconds than studio2)
+    for listener in play_listeners:
+        add_track_plays(
+            db, owner=studio1_user, track=t1, listener=listener, dates=dates,
+            settings=settings, listened_seconds=3600,
+        )
+        add_track_plays(
+            db, owner=studio1_user, track=t2, listener=listener, dates=dates,
+            settings=settings, listened_seconds=1800,
+        )
+    for listener in (listener_active_m, listener_active_y):
+        add_track_plays(
+            db, owner=studio2_user, track=t3, listener=listener,
+            dates=dates[: max(20, TRACK_PLAY_DAY_COUNT // 2)],
+            settings=settings, listened_seconds=600,
+        )
 
     bank_studio1 = BankDetails(
         account_holder_name="Priya Mehta",
@@ -461,18 +606,6 @@ def seed(db) -> None:
         ifsc_code=bank_studio2.ifsc_code,
     )
 
-    # Studio1: earned 35500, withdrawn 28000, balance 7500
-    set_wallet_balance(db, studio1_user, 7500)
-    add_withdrawal(
-        db, user=studio1_user, amount_paise=20000, bank=bank_studio1, created_days_ago=12,
-    )
-    add_withdrawal(
-        db, user=studio1_user, amount_paise=8000, bank=bank_studio1, created_days_ago=4,
-    )
-
-    # Studio2: earned 28000, no withdrawals
-    set_wallet_balance(db, studio2_user, 28000)
-
     # --- Radio owner ---
     radio_user, radio_station = ensure_radio_owner(
         db, "radio.wavefm", "Wave FM", "Sneha Reddy",
@@ -492,28 +625,89 @@ def seed(db) -> None:
         ifsc_code=bank_radio.ifsc_code,
     )
 
-    add_radio_session(
-        db, owner=radio_user, station=radio_station, listener=play_listener,
-        total_seconds=3600, credit_paise=12000, token_suffix="w1",
-    )
-    add_radio_session(
-        db, owner=radio_user, station=radio_station, listener=listener_active_y,
-        total_seconds=5400, credit_paise=18000, token_suffix="w2",
-    )
+    for i, (listener, sec, ago) in enumerate(
+        (
+            (listener_active_m, 6 * 3600, 8),
+            (listener_active_y, 10 * 3600, 5),
+            (listener_cancelled, 4 * 3600, 3),
+            (listener_active_m, 5 * 3600, 2),
+        ),
+        start=1,
+    ):
+        add_radio_session(
+            db,
+            owner=radio_user,
+            station=radio_station,
+            listener=listener,
+            total_seconds=sec,
+            token_suffix=f"w{i}",
+            started_days_ago=ago,
+        )
 
-    # Radio: earned 30000, withdrawn 20000, balance 10000
-    set_wallet_balance(db, radio_user, 10000)
-    add_withdrawal(
-        db, user=radio_user, amount_paise=15000, bank=bank_radio, created_days_ago=15,
+    db.flush()
+
+    # Settle every seeded play date (+ radio days) via daily settlement
+    settle_dates = set(dates)
+    for ago in (8, 5, 3, 2):
+        settle_dates.add((utcnow() - datetime.timedelta(days=ago)).date().isoformat())
+    for date_str in sorted(settle_dates):
+        settle_day(db, date_str, force=True)
+
+    def _earned(user_id: int) -> int:
+        return int(
+            db.query(func.coalesce(func.sum(WalletLedgerEntry.amount_paise), 0))
+            .join(OwnerWallet, OwnerWallet.id == WalletLedgerEntry.wallet_id)
+            .filter(
+                OwnerWallet.user_id == user_id,
+                WalletLedgerEntry.entry_type == "daily_settlement",
+            )
+            .scalar()
+            or 0
+        )
+
+    studio1_earned = _earned(studio1_user.id)
+    studio2_earned = _earned(studio2_user.id)
+    radio_earned = _earned(radio_user.id)
+
+    studio1_withdrawn = maybe_withdraw_half(
+        db,
+        user=studio1_user,
+        bank=bank_studio1,
+        settings=settings,
+        created_days_ago=12,
     )
-    add_withdrawal(
-        db, user=radio_user, amount_paise=5000, bank=bank_radio, created_days_ago=6,
+    w1 = get_or_create_wallet(db, studio1_user.id)
+    if w1.balance_paise >= settings.min_withdrawal_paise * 2:
+        extra = settings.min_withdrawal_paise
+        if add_withdrawal(
+            db,
+            user=studio1_user,
+            amount_paise=extra,
+            bank=bank_studio1,
+            created_days_ago=4,
+            settings=settings,
+        ):
+            studio1_withdrawn += extra
+
+    studio2_withdrawn = 0
+
+    radio_withdrawn = maybe_withdraw_half(
+        db,
+        user=radio_user,
+        bank=bank_radio,
+        settings=settings,
+        created_days_ago=6,
     )
 
     db.commit()
 
+    s1_bal = get_or_create_wallet(db, studio1_user.id).balance_paise
+    s2_bal = get_or_create_wallet(db, studio2_user.id).balance_paise
+    r_bal = get_or_create_wallet(db, radio_user.id).balance_paise
+
     print("Accounts demo data seeded successfully.\n")
     print(f"  Password for all demo users: {DEMO_PASSWORD}\n")
+    print("  Credits applied via daily user-centric settlement (duration-weighted).\n")
     print("  Subscriptions (Accounts → Subscriptions):")
     for local, note in [
         ("listener.monthly", "Active · paid"),
@@ -524,12 +718,21 @@ def seed(db) -> None:
     ]:
         print(f"    {demo_email(local)}  ({note})")
     print("\n  Owner accounts / Withdrawals:")
-    for local, note in [
-        ("studio.aurora", "Studio · completed withdrawal history"),
-        ("studio.midnight", "Studio · revenue only, no withdrawals yet"),
-        ("radio.wavefm", "Radio · completed withdrawal history"),
-    ]:
-        print(f"    {demo_email(local)}  ({note})")
+    print(
+        f"    {demo_email('studio.aurora')}  "
+        f"(earned {_fmt_inr(studio1_earned)}, withdrawn {_fmt_inr(studio1_withdrawn)}, "
+        f"balance {_fmt_inr(s1_bal)})"
+    )
+    print(
+        f"    {demo_email('studio.midnight')}  "
+        f"(earned {_fmt_inr(studio2_earned)}, withdrawn {_fmt_inr(studio2_withdrawn)}, "
+        f"balance {_fmt_inr(s2_bal)})"
+    )
+    print(
+        f"    {demo_email('radio.wavefm')}  "
+        f"(earned {_fmt_inr(radio_earned)}, withdrawn {_fmt_inr(radio_withdrawn)}, "
+        f"balance {_fmt_inr(r_bal)})"
+    )
     print("\n  Log in as admin@verisonic.com and open Accounts to review.")
 
 

@@ -1048,7 +1048,9 @@ def report_listen_progress(
         track=track,
         listened_seconds=body.listened_seconds,
     )
-    return ListenProgressResponse(credited=credit is not None and credit > 0, credit_paise=credit)
+    # Realtime wallet credit removed; qualifying listens settle daily.
+    recorded = credit is not None
+    return ListenProgressResponse(credited=False, credit_paise=0 if recorded else None)
 
 
 @router.websocket("/ws/tracks/status")

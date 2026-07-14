@@ -46,17 +46,15 @@ export const RevenueSettingsPanel: React.FC = () => {
         premium_yearly_paise: Number(form.premium_yearly_paise),
         company_share_bps: Number(form.company_share_bps),
         owner_share_bps: Number(form.owner_share_bps),
-        studio_pool_bps: Number(form.studio_pool_bps),
-        radio_pool_bps: Number(form.radio_pool_bps),
         min_track_seconds: Number(form.min_track_seconds),
         min_radio_heartbeat_sec: Number(form.min_radio_heartbeat_sec),
-        estimated_qualifying_plays_per_day: Number(form.estimated_qualifying_plays_per_day),
-        estimated_radio_minutes_per_day: Number(form.estimated_radio_minutes_per_day),
         min_withdrawal_paise: Number(form.min_withdrawal_paise),
+        daily_settlement_enabled: Boolean(form.daily_settlement_enabled),
+        min_valid_daily_listen_seconds: Number(form.min_valid_daily_listen_seconds),
       });
       setSettings(saved);
       setForm(saved);
-      showSuccess('Revenue settings saved. Subscription checkout prices update automatically.');
+      showSuccess('Revenue settings saved. Daily settlement uses company/owner shares and listen duration.');
     } catch (err) {
       showError('Save failed', err instanceof Error ? err.message : 'Could not save settings.');
     } finally {
@@ -133,10 +131,10 @@ export const RevenueSettingsPanel: React.FC = () => {
         </div>
 
         <h4 className="text-sm font-bold text-white flex items-center gap-2 pt-2">
-          <Percent className="w-4 h-4" /> Profit split (basis points, total 10000 = 100%)
+          <Percent className="w-4 h-4" /> Daily settlement split (basis points, total 10000 = 100%)
         </h4>
         <div className="grid sm:grid-cols-2 gap-3">
-          {(['company_share_bps', 'owner_share_bps', 'studio_pool_bps', 'radio_pool_bps'] as const).map((key) => (
+          {(['company_share_bps', 'owner_share_bps'] as const).map((key) => (
             <label key={key} className="text-xs text-slate-400 space-y-1">
               {key.replace(/_/g, ' ')}
               <input
@@ -149,14 +147,16 @@ export const RevenueSettingsPanel: React.FC = () => {
             </label>
           ))}
         </div>
+        <p className="text-[10px] text-slate-500">
+          Each subscriber&apos;s daily creator pool is shared by listen duration among creators they heard that day.
+        </p>
 
-        <h4 className="text-sm font-bold text-white pt-2">Playback thresholds & payout estimates</h4>
+        <h4 className="text-sm font-bold text-white pt-2">Playback & settlement rules</h4>
         <div className="grid sm:grid-cols-2 gap-3">
           {([
             ['min_track_seconds', 'Min track seconds for qualifying play'],
             ['min_radio_heartbeat_sec', 'Radio heartbeat interval (sec)'],
-            ['estimated_qualifying_plays_per_day', 'Est. qualifying plays / premium user / day'],
-            ['estimated_radio_minutes_per_day', 'Est. radio minutes / premium user / day'],
+            ['min_valid_daily_listen_seconds', 'Min total listen seconds / day to settle'],
             ['min_withdrawal_paise', 'Min withdrawal (paise)'],
           ] as const).map(([key, label]) => (
             <label key={key} className="text-xs text-slate-400 space-y-1">
@@ -169,6 +169,15 @@ export const RevenueSettingsPanel: React.FC = () => {
               />
             </label>
           ))}
+          <label className="text-xs text-slate-400 space-y-1 flex items-center gap-2 sm:col-span-2 pt-2">
+            <input
+              type="checkbox"
+              checked={Boolean(form.daily_settlement_enabled)}
+              onChange={(e) => setForm((prev) => ({ ...prev, daily_settlement_enabled: e.target.checked }))}
+              className="rounded border-white/20"
+            />
+            Daily settlement enabled
+          </label>
         </div>
 
         {settings && (

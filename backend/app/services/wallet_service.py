@@ -55,6 +55,7 @@ def is_billable_listener(user: User) -> bool:
 
 
 def listener_plan_price_and_days(listener: User, settings: PlatformRevenueSettings) -> tuple[int, int]:
+    """Legacy helper (estimate-based model). Prefer billing_period.resolve_billing_period_for_date."""
     if listener.subscription_cycle == "yearly":
         return settings.premium_yearly_paise, 365
     return settings.premium_monthly_paise, 30
@@ -65,6 +66,7 @@ def track_play_credit_paise(
     plan_price_paise: int,
     plan_duration_days: int,
 ) -> int:
+    """Deprecated: estimate-based realtime credit. Daily settlement replaces this."""
     owner_pool = plan_price_paise * settings.owner_share_bps // 10000
     studio_pool = owner_pool * settings.studio_pool_bps // 10000
     total_plays = plan_duration_days * settings.estimated_qualifying_plays_per_day
@@ -78,6 +80,7 @@ def radio_heartbeat_credit_paise(
     plan_price_paise: int,
     plan_duration_days: int,
 ) -> int:
+    """Deprecated: estimate-based realtime credit. Daily settlement replaces this."""
     owner_pool = plan_price_paise * settings.owner_share_bps // 10000
     radio_pool = owner_pool * settings.radio_pool_bps // 10000
     total_minutes = plan_duration_days * settings.estimated_radio_minutes_per_day
@@ -132,9 +135,18 @@ def credit_wallet(
     description: str,
     reference_id: Optional[str],
     listener_user_id: Optional[int],
-) -> None:
+) -> bool:
+    """Credit owner wallet. Returns False if amount<=0 or reference_id already exists."""
     if amount_paise <= 0:
-        return
+        return False
+    if reference_id:
+        exists = (
+            db.query(WalletLedgerEntry.id)
+            .filter(WalletLedgerEntry.reference_id == reference_id)
+            .first()
+        )
+        if exists is not None:
+            return False
     wallet = get_or_create_wallet(db, owner_user_id, for_update=True)
     wallet.balance_paise += amount_paise
     wallet.updated_at = utcnow()
@@ -148,6 +160,7 @@ def credit_wallet(
             listener_user_id=listener_user_id,
         )
     )
+    return True
 
 
 def process_track_listen_progress(
@@ -157,6 +170,7 @@ def process_track_listen_progress(
     track: Track,
     listened_seconds: float,
 ) -> Optional[int]:
+    """Record a qualifying listen for daily settlement. Does not credit wallets."""
     if not is_billable_listener(listener):
         return None
 
@@ -179,33 +193,22 @@ def process_track_listen_progress(
         .first()
     )
     if existing is not None:
-        return existing.credit_paise
-
-    plan_price, plan_days = listener_plan_price_and_days(listener, settings)
-    credit = track_play_credit_paise(settings, plan_price, plan_days)
-    if credit <= 0:
-        return None
+        if listened_seconds > float(existing.listened_seconds or 0):
+            existing.listened_seconds = listened_seconds
+            db.commit()
+        return 0
 
     record = BillableTrackPlay(
         listener_user_id=listener.id,
         track_id=track.id,
         owner_user_id=artist.user_id,
         listened_seconds=listened_seconds,
-        credit_paise=credit,
+        credit_paise=0,
         play_date=play_date,
     )
     db.add(record)
-    credit_wallet(
-        db,
-        owner_user_id=artist.user_id,
-        amount_paise=credit,
-        entry_type="track_play",
-        description=f"Qualifying play on track #{track.id}",
-        reference_id=f"track:{track.id}:{play_date}",
-        listener_user_id=listener.id,
-    )
     db.commit()
-    return credit
+    return 0
 
 
 def start_radio_listen_session(
@@ -245,6 +248,7 @@ def heartbeat_radio_listen_session(
     listener: User,
     session_token: str,
 ) -> Optional[int]:
+    """Accumulate listen seconds for settlement. Returns total_seconds (API field kept)."""
     session = (
         db.query(RadioListenSession)
         .filter(
@@ -266,37 +270,16 @@ def heartbeat_radio_listen_session(
         elapsed = settings.min_radio_heartbeat_sec
 
     if elapsed < settings.min_radio_heartbeat_sec:
-        return session.total_credit_paise
+        return session.total_seconds
 
     billable_seconds = (elapsed // settings.min_radio_heartbeat_sec) * settings.min_radio_heartbeat_sec
     if billable_seconds <= 0:
-        return session.total_credit_paise
-
-    plan_price, plan_days = listener_plan_price_and_days(listener, settings)
-    per_heartbeat = radio_heartbeat_credit_paise(settings, plan_price, plan_days)
-    if per_heartbeat <= 0:
-        session.last_heartbeat_at = now
-        db.commit()
-        return session.total_credit_paise
-
-    heartbeats = billable_seconds // settings.min_radio_heartbeat_sec
-    credit = per_heartbeat * heartbeats
+        return session.total_seconds
 
     session.total_seconds += billable_seconds
-    session.total_credit_paise += credit
     session.last_heartbeat_at = now
-
-    credit_wallet(
-        db,
-        owner_user_id=session.owner_user_id,
-        amount_paise=credit,
-        entry_type="radio_listen",
-        description=f"Radio listen on station #{session.station_id}",
-        reference_id=f"radio:{session.id}:{session.total_seconds}",
-        listener_user_id=listener.id,
-    )
     db.commit()
-    return session.total_credit_paise
+    return session.total_seconds
 
 
 def end_radio_listen_session(db: Session, *, listener: User, session_token: str) -> None:
