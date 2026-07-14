@@ -292,6 +292,11 @@ MIGRATIONS = [
         ALTER TABLE tracks ADD COLUMN IF NOT EXISTS hls_lossless_path VARCHAR;
         ALTER TABLE tracks ADD COLUMN IF NOT EXISTS hls_hires_path VARCHAR;
     """),
+    ("025_tracks_lyrics_timed", """
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS lyrics_timed JSONB;
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS lyrics_language VARCHAR;
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS lyrics_language_probability FLOAT;
+    """),
 ]
 
 

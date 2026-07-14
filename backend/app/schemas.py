@@ -195,6 +195,9 @@ class TrackResponse(BaseModel):
     aac_128_path: Optional[str] = None
     cover_art_url: Optional[str] = None
     lyrics: Optional[str] = None
+    lyrics_timed: Optional[List[dict]] = None
+    lyrics_language: Optional[str] = None
+    lyrics_language_probability: Optional[float] = None
     composer: Optional[str] = None
     lyricist: Optional[str] = None
     year: Optional[int] = None
@@ -210,6 +213,31 @@ class TrackResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class LyricsTimedLine(BaseModel):
+    start: float
+    end: float
+    text: str
+
+
+class TranscribeQueuedResponse(BaseModel):
+    task_id: str
+    status: str = "queued"
+    track_id: int
+
+
+class TranscribeStatusResponse(BaseModel):
+    task_id: str
+    state: str  # PENDING | STARTED | SUCCESS | FAILURE | …
+    status: Optional[str] = None  # success | failed | queued | running
+    track_id: Optional[int] = None
+    detected_language: Optional[str] = None
+    language_probability: Optional[float] = None
+    lyrics: Optional[str] = None
+    lyrics_timed: Optional[List[LyricsTimedLine]] = None
+    error: Optional[str] = None
+
 
 class AudioAnalysisReportResponse(BaseModel):
     id: int

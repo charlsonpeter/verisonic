@@ -1,0 +1,6 @@
+# Celery worker only — Demucs + faster-whisper lyrics pipeline.
+# Installed when Docker build-arg INSTALL_LYRICS_DEPS=1.
+torch>=2.0.0
+torchaudio>=2.0.0
+demucs>=4.0.0
+faster-whisper>=1.0.0

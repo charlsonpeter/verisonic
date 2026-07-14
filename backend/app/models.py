@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float, Table, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float, Table, UniqueConstraint, JSON
 from sqlalchemy.orm import relationship
 from app.db.base_class import Base
 
@@ -148,6 +148,9 @@ class Track(Base):
     # Custom details
     cover_image_path = Column(String, nullable=True)
     lyrics = Column(String, nullable=True)
+    lyrics_timed = Column(JSON, nullable=True)  # [{start, end, text}, ...]
+    lyrics_language = Column(String, nullable=True)
+    lyrics_language_probability = Column(Float, nullable=True)
     composer = Column(String, nullable=True)
     lyricist = Column(String, nullable=True)
     year = Column(Integer, nullable=True)

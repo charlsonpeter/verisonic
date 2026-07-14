@@ -592,3 +592,103 @@ def settle_daily_revenue_task(settlement_date: str | None = None):
         }
     finally:
         db.close()
+
+
+@celery_app.task(name="app.tasks.tasks.extract_lyrics_task", bind=True)
+def extract_lyrics_task(self, track_id: int, language: str | None = None):
+    """
+    Separate vocals (Demucs) and transcribe (faster-whisper), then dual-persist lyrics.
+    Runs only on Celery workers — never on the API request thread.
+    """
+    from app.services.lyrics_ai import extract_lyrics, segments_to_lrc
+    from app.services.storage import s3_client, settings as storage_settings
+
+    db = SessionLocal()
+    temp_file_path = None
+    try:
+        track = db.query(Track).filter(Track.id == track_id).first()
+        if not track:
+            return {
+                "status": "failed",
+                "track_id": track_id,
+                "error": "Track not found",
+                "detected_language": None,
+                "language_probability": None,
+                "lyrics": None,
+                "lyrics_timed": [],
+            }
+        if not track.original_file_path:
+            return {
+                "status": "failed",
+                "track_id": track_id,
+                "error": "Original audio file not found for this track",
+                "detected_language": None,
+                "language_probability": None,
+                "lyrics": None,
+                "lyrics_timed": [],
+            }
+
+        ext = os.path.splitext(track.original_file_path)[1].lower() or ".wav"
+        fd, temp_file_path = tempfile.mkstemp(suffix=ext)
+        os.close(fd)
+
+        s3_client.download_file(
+            Bucket=storage_settings.S3_BUCKET_NAME,
+            Key=track.original_file_path,
+            Filename=temp_file_path,
+        )
+
+        preferred_lang = language if language else track.language
+        result = extract_lyrics(temp_file_path, language=preferred_lang)
+
+        if result.get("status") != "success":
+            return {
+                "status": "failed",
+                "track_id": track_id,
+                "error": result.get("error") or "Lyrics extraction failed",
+                "detected_language": result.get("detected_language"),
+                "language_probability": result.get("language_probability"),
+                "lyrics": None,
+                "lyrics_timed": [],
+            }
+
+        timed = result.get("lyrics") or []
+        lrc_text = segments_to_lrc(timed)
+        detected = result.get("detected_language")
+        probability = result.get("language_probability")
+
+        track.lyrics = lrc_text if lrc_text else None
+        track.lyrics_timed = timed
+        track.lyrics_language = detected
+        track.lyrics_language_probability = probability
+        if detected and not track.language:
+            track.language = detected
+        db.commit()
+
+        return {
+            "status": "success",
+            "track_id": track_id,
+            "detected_language": detected,
+            "language_probability": probability,
+            "lyrics": track.lyrics,
+            "lyrics_timed": timed,
+            "error": None,
+        }
+    except Exception as exc:
+        db.rollback()
+        return {
+            "status": "failed",
+            "track_id": track_id,
+            "error": str(exc),
+            "detected_language": None,
+            "language_probability": None,
+            "lyrics": None,
+            "lyrics_timed": [],
+        }
+    finally:
+        db.close()
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.remove(temp_file_path)
+            except Exception:
+                pass
