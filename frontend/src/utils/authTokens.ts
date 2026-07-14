@@ -24,10 +24,20 @@ export function clearAuthTokens(): void {
 
 let refreshPromise: Promise<boolean> | null = null;
 let suppressSessionRestore = false;
+let refreshGeneration = 0;
+let refreshAbort: AbortController | null = null;
 
-/** Block silent refresh while logout is in progress. */
+/** Block silent refresh while logout is in progress / until next login. */
 export function beginLogout(): void {
   suppressSessionRestore = true;
+  refreshGeneration += 1;
+  refreshAbort?.abort();
+  refreshAbort = null;
+  refreshPromise = null;
+}
+
+export function isSessionRestoreSuppressed(): boolean {
+  return suppressSessionRestore;
 }
 
 export async function refreshAccessToken(): Promise<boolean> {
@@ -38,6 +48,10 @@ export async function refreshAccessToken(): Promise<boolean> {
     return refreshPromise;
   }
 
+  const generation = refreshGeneration;
+  const abort = new AbortController();
+  refreshAbort = abort;
+
   refreshPromise = (async () => {
     try {
       const res = await fetch('/api/auth/refresh', {
@@ -45,12 +59,19 @@ export async function refreshAccessToken(): Promise<boolean> {
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({}),
+        signal: abort.signal,
       });
+      if (suppressSessionRestore || generation !== refreshGeneration) {
+        return false;
+      }
       if (!res.ok) {
         clearAuthTokens();
         return false;
       }
       const data = await res.json();
+      if (suppressSessionRestore || generation !== refreshGeneration) {
+        return false;
+      }
       if (data.access_token) {
         setAuthTokens(data.access_token, data.refresh_token);
         return true;
@@ -60,7 +81,12 @@ export async function refreshAccessToken(): Promise<boolean> {
     } catch {
       return false;
     } finally {
-      refreshPromise = null;
+      if (generation === refreshGeneration) {
+        refreshPromise = null;
+        if (refreshAbort === abort) {
+          refreshAbort = null;
+        }
+      }
     }
   })();
 

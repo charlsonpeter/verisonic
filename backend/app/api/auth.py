@@ -123,7 +123,16 @@ def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
 
 
 def _clear_refresh_cookie(response: Response) -> None:
-    response.delete_cookie(key=REFRESH_COOKIE_NAME, path="/api/auth")
+    # Must match set_cookie attributes or browsers (Chrome) keep the cookie.
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value="",
+        httponly=True,
+        secure=settings.is_production,
+        samesite="lax",
+        max_age=0,
+        path="/api/auth",
+    )
 
 
 def _issue_token_response(user: User, response: Response) -> dict:

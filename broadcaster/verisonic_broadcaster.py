@@ -6,6 +6,7 @@ import threading
 import queue
 import math
 import json
+import base64
 import urllib.request
 import urllib.error
 import fractions
@@ -452,6 +453,7 @@ class PyQtBroadcasterApp(QMainWindow):
         self.auth_token = None
         self.refresh_token = None
         self.last_token_check_time = 0
+        self._refresh_in_progress = False
         self.saved_email = ""
         self.saved_bitrate = 320  # Default to 320 kbps (Audiophile / Ultra High)
         if os.path.exists(self.config_path):
@@ -495,8 +497,67 @@ class PyQtBroadcasterApp(QMainWindow):
             except Exception:
                 pass
 
+    def _access_token_exp(self):
+        """Return JWT exp (unix seconds) for the current access token, or 0."""
+        if not self.auth_token:
+            return 0
+        try:
+            parts = self.auth_token.split('.')
+            if len(parts) != 3:
+                return 0
+            payload_b64 = parts[1] + '=' * (-len(parts[1]) % 4)
+            payload = json.loads(base64.b64decode(payload_b64).decode('utf-8'))
+            return int(payload.get('exp') or 0)
+        except Exception:
+            return 0
+
+    def perform_token_refresh(self):
+        """Refresh access+refresh tokens and persist. Returns True on success."""
+        if not self.refresh_token:
+            return False
+        if getattr(self, '_refresh_in_progress', False):
+            return bool(self.auth_token)
+        self._refresh_in_progress = True
+        try:
+            res, _ = api_request(
+                "/auth/refresh",
+                method="POST",
+                data={"refresh_token": self.refresh_token},
+            )
+            new_access = res.get("access_token")
+            new_refresh = res.get("refresh_token")
+            if not new_access or not new_refresh:
+                return False
+            self.auth_token = new_access
+            self.refresh_token = new_refresh
+            self.save_config()
+            print("Token refreshed successfully.")
+            return True
+        except Exception as e:
+            print("Token refresh failed:", e)
+            return False
+        finally:
+            self._refresh_in_progress = False
+
+    def ensure_auth_token_fresh(self, min_ttl_sec=300):
+        """Keep session alive: refresh if access token is missing/expired/expiring soon."""
+        if not self.refresh_token and not self.auth_token:
+            return False
+        exp = self._access_token_exp()
+        now = time.time()
+        if self.auth_token and exp > 0 and (exp - now) >= min_ttl_sec:
+            return True
+        if not self.refresh_token:
+            return bool(self.auth_token and exp > now)
+        return self.perform_token_refresh()
+
     def verify_saved_token(self):
         try:
+            # Prefer refresh when access is stale so cold starts / overnight reopen still work
+            self.ensure_auth_token_fresh(min_ttl_sec=60)
+            if not self.auth_token:
+                raise Exception("No saved session")
+
             user_info, _ = api_request("/auth/me", method="GET", token=self.auth_token)
             role = user_info.get("role")
             if role != "radio_admin":
@@ -506,7 +567,27 @@ class PyQtBroadcasterApp(QMainWindow):
             self.on_login_success()
         except Exception as e:
             print("Saved token verification failed:", e)
-            self.clear_config()
+            # One more refresh + retry (covers expired access on disk)
+            if self.refresh_token and self.perform_token_refresh():
+                try:
+                    user_info, _ = api_request("/auth/me", method="GET", token=self.auth_token)
+                    role = user_info.get("role")
+                    if role != "radio_admin":
+                        raise Exception("Access Denied: Only Radio Admins are allowed.")
+                    self.user_id = user_info.get("id")
+                    self.saved_email = user_info.get("email", self.saved_email)
+                    self.on_login_success()
+                    return
+                except Exception as e2:
+                    print("Session restore after refresh failed:", e2)
+
+            # Only wipe credentials when refresh is clearly unusable — keep tokens on
+            # transient network errors so a 24/7 install survives backend blips.
+            detail = str(e).lower()
+            if "network error" in detail:
+                print("Keeping saved session despite network error; open login to retry.")
+            else:
+                self.clear_config()
             self.stacked_widget.setCurrentIndex(0)
 
     def init_ui(self):
@@ -1105,6 +1186,14 @@ class PyQtBroadcasterApp(QMainWindow):
                     self.is_connected = False
                     await asyncio.sleep(min(10, 2 + (attempts - 1) * 2))
 
+                # Keep JWT fresh for 24/7 reconnects (access token ~30 min)
+                try:
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, lambda: self.ensure_auth_token_fresh(min_ttl_sec=120)
+                    )
+                except Exception as te:
+                    print("Pre-connect token refresh failed:", te)
+
                 # Build WebSocket URL
                 if self.auth_token and self.selected_station_id:
                     ws_url = f"{server_url}?token={self.auth_token}&station_id={self.selected_station_id}"
@@ -1237,11 +1326,17 @@ class PyQtBroadcasterApp(QMainWindow):
 
     def update_gui_loop(self):
         """Monitors stats and updates volume visuals on the main thread loop."""
-        # Check and refresh token if needed
+        # Check and refresh token if needed (every ~60s — access tokens last ~30 min)
         now = time.time()
-        if hasattr(self, 'last_token_check_time') and (now - self.last_token_check_time > 3600):
+        if getattr(self, 'last_token_check_time', 0) == 0:
             self.last_token_check_time = now
-            self.check_and_refresh_token()
+        if now - self.last_token_check_time > 60:
+            self.last_token_check_time = now
+            if self.refresh_token:
+                threading.Thread(
+                    target=lambda: self.ensure_auth_token_fresh(min_ttl_sec=300),
+                    daemon=True,
+                ).start()
 
         if hasattr(self, 'broadcast_error') and self.broadcast_error:
             err = self.broadcast_error
@@ -1274,40 +1369,6 @@ class PyQtBroadcasterApp(QMainWindow):
         else:
             self.custom_vu.set_levels([0] * 20)
             self.live_indicator.setStyleSheet("color: #475569;")
-
-    def check_and_refresh_token(self):
-        if not self.auth_token or not self.refresh_token:
-            return
-        try:
-            parts = self.auth_token.split('.')
-            if len(parts) != 3:
-                return
-            payload_b64 = parts[1]
-            payload_b64 += '=' * (-len(payload_b64) % 4)
-            import base64
-            payload = json.loads(base64.b64decode(payload_b64).decode('utf-8'))
-            exp = payload.get('exp', 0)
-            if exp > 0 and (exp - time.time() < 86400):
-                print("Access token is expiring soon, refreshing...")
-                threading.Thread(target=self.perform_token_refresh, daemon=True).start()
-        except Exception as e:
-            print("Failed to check token expiration:", e)
-
-    def perform_token_refresh(self):
-        try:
-            res, _ = api_request(
-                "/auth/refresh", 
-                method="POST", 
-                data={"refresh_token": self.refresh_token}
-            )
-            new_access_token = res.get("access_token")
-            new_refresh_token = res.get("refresh_token")
-            if new_access_token and new_refresh_token:
-                self.auth_token = new_access_token
-                self.refresh_token = new_refresh_token
-                print("Token refreshed successfully.")
-        except Exception as e:
-            print("Token refresh failed:", e)
 
     # =====================================================================
     # COMPONENT HELPERS & UTILITIES

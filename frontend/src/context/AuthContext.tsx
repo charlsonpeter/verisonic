@@ -6,6 +6,7 @@ import {
   getAccessToken,
   setAuthTokens,
   refreshAccessToken,
+  isSessionRestoreSuppressed,
 } from '../utils/authTokens';
 import type { QualityLevelSetting } from '../utils/streamQuality';
 import { saveUserStreamQuality } from '../utils/userSettings';
@@ -184,6 +185,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     const bootstrap = async () => {
       if (!getAccessToken()) {
+        // After Sign Out, do not silently restore via refresh cookie in this tab.
+        if (isSessionRestoreSuppressed()) {
+          setIsLoading(false);
+          return;
+        }
         const refreshed = await refreshAccessToken();
         if (refreshed) {
           setToken(getAccessToken());
@@ -327,10 +333,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     const accessToken = getAccessToken();
+    // Suppress restore + abort in-flight refresh before clearing local session.
     beginLogout();
+    clearAuthTokens();
+    setToken(null);
+    setCurrentUser(null);
+    setAuthError(null);
+    setHasRadioStation(false);
+    setIsLoading(false);
 
     if (accessToken) {
       try {
+        // Revoke server refresh + clear cookie (must win over any race).
         await fetch(`${API_URL}/auth/logout`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${accessToken}` },
@@ -340,13 +354,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Best-effort server-side refresh token revocation
       }
     }
-
-    clearAuthTokens();
-    setToken(null);
-    setCurrentUser(null);
-    setAuthError(null);
-    setHasRadioStation(false);
-    setIsLoading(false);
   };
 
   const clearError = () => setAuthError(null);

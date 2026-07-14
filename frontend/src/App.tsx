@@ -82,6 +82,13 @@ function DashboardContent() {
   const [isQueueOpen, setIsQueueOpen] = useState<boolean>(false);
   const [isLyricsOpen, setIsLyricsOpen] = useState<boolean>(false);
 
+  const replaceHash = (tab: string) => {
+    const next = `#${tab}`;
+    if (window.location.hash !== next) {
+      window.history.replaceState(null, '', next);
+    }
+  };
+
   // Sync activeTab with localStorage & URL Hash
   useEffect(() => {
     localStorage.setItem('activeTab', activeTab);
@@ -108,9 +115,18 @@ function DashboardContent() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, [activeTab, mustResetPassword]);
 
+  // Logged-in users should not land on marketing/auth via browser Back
+  useEffect(() => {
+    if (token && !mustResetPassword && (activeTab === 'landing' || activeTab === 'auth')) {
+      replaceHash('home');
+      setActiveTab('home');
+    }
+  }, [token, activeTab, mustResetPassword]);
+
   // Handle logout redirect or invalid session redirect
   useEffect(() => {
-    if (!token && activeTab !== 'auth') {
+    if (!token && activeTab !== 'auth' && activeTab !== 'landing') {
+      replaceHash('landing');
       setActiveTab('landing');
       localStorage.removeItem('activeTab');
     }
@@ -406,10 +422,22 @@ function DashboardContent() {
       case 'broadcaster-download':
         return <BroadcasterDownload />;
       case 'auth':
-        return <AuthPage onSuccess={() => setActiveTab('home')} />;
+        return (
+          <AuthPage
+            onSuccess={() => {
+              replaceHash('home');
+              setActiveTab('home');
+            }}
+          />
+        );
       case 'admin-password-reset':
         return (
-          <ForceAdminPasswordReset onSuccess={() => setActiveTab('home')} />
+          <ForceAdminPasswordReset
+            onSuccess={() => {
+              replaceHash('home');
+              setActiveTab('home');
+            }}
+          />
         );
       
 
