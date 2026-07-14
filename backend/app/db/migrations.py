@@ -286,6 +286,12 @@ MIGRATIONS = [
         ALTER TABLE tracks ADD COLUMN IF NOT EXISTS comment VARCHAR;
         ALTER TABLE tracks ADD COLUMN IF NOT EXISTS copyright_text VARCHAR;
     """),
+    ("024_tracks_hls_quality_paths", """
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS hls_normal_path VARCHAR;
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS hls_high_path VARCHAR;
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS hls_lossless_path VARCHAR;
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS hls_hires_path VARCHAR;
+    """),
 ]
 
 

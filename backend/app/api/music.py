@@ -195,6 +195,10 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
     
     # Pre-sign storage URLs
     hls_url = generate_presigned_url(track.hls_playlist_path) if track.hls_playlist_path else None
+    hls_normal_url = generate_presigned_url(track.hls_normal_path) if track.hls_normal_path else None
+    hls_high_url = generate_presigned_url(track.hls_high_path) if track.hls_high_path else None
+    hls_lossless_url = generate_presigned_url(track.hls_lossless_path) if track.hls_lossless_path else None
+    hls_hires_url = generate_presigned_url(track.hls_hires_path) if track.hls_hires_path else None
     mp3_url = generate_presigned_url(track.mp3_320_path) if track.mp3_320_path else None
     aac_256_url = generate_presigned_url(track.aac_256_path) if track.aac_256_path else None
     aac_128_url = generate_presigned_url(track.aac_128_path) if track.aac_128_path else None
@@ -220,6 +224,10 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
         mp3_url = None
         aac_256_url = None
         hls_url = None
+        hls_high_url = None
+        hls_lossless_url = None
+        hls_hires_url = None
+        # Free tier keeps normal HLS (and legacy AAC 128 during migration)
 
     quality_score, quality_level = _resolve_quality_score(track, db)
 
@@ -242,6 +250,10 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
         "approved": track.approved,
         "original_file_path": original_url,
         "hls_playlist_path": hls_url,
+        "hls_normal_path": hls_normal_url,
+        "hls_high_path": hls_high_url,
+        "hls_lossless_path": hls_lossless_url,
+        "hls_hires_path": hls_hires_url,
         "mp3_320_path": mp3_url,
         "aac_256_path": aac_256_url,
         "aac_128_path": aac_128_url,
@@ -934,10 +946,15 @@ def delete_track(
         delete_file(track.aac_256_path)
     if track.aac_128_path:
         delete_file(track.aac_128_path)
-    # Note: deleting the entire HLS folder structure key prefixes
-    if track.hls_playlist_path:
+    # Delete entire HLS folder (all quality tiers) when any HLS path exists
+    if (
+        track.hls_playlist_path
+        or track.hls_normal_path
+        or track.hls_high_path
+        or track.hls_lossless_path
+        or track.hls_hires_path
+    ):
         delete_prefix(f"hls/{track.id}/")
-        delete_file(track.hls_playlist_path)
         
     db.delete(track)
     db.commit()
@@ -1013,7 +1030,13 @@ def manually_approve_track(
     db.commit()
     db.refresh(track)
     
-    if approved and not track.hls_playlist_path:
+    if approved and (
+        not track.hls_playlist_path
+        or not track.hls_normal_path
+        or not track.hls_high_path
+        or not track.hls_lossless_path
+        or not track.hls_hires_path
+    ):
         from app.tasks.tasks import transcode_audio_task
         transcode_audio_task.delay(track.id, None)
         

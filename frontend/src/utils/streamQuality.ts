@@ -2,6 +2,10 @@ export type StreamQualityTrack = {
   id?: number;
   original_file_path?: string;
   hls_playlist_path?: string;
+  hls_normal_path?: string;
+  hls_high_path?: string;
+  hls_lossless_path?: string;
+  hls_hires_path?: string;
   mp3_320_path?: string;
   aac_256_path?: string;
   aac_128_path?: string;
@@ -59,10 +63,10 @@ export const QUALITY_LABELS: Record<QualityLevelSetting, string> = {
 };
 
 export const QUALITY_DESCRIPTIONS: Record<QualityLevelSetting, string> = {
-  lossless: 'Original studio master file — bit-perfect FLAC, WAV, or AIFF as uploaded.',
-  hires: 'Same original studio master — full sample rate and bit depth from the source file.',
-  high: 'MP3 320 kbps or AAC 256 kbps — high-quality lossy streaming.',
-  normal: 'AAC 128 kbps — optimized for mobile and limited bandwidth.',
+  lossless: 'True lossless FLAC HLS at CD quality (16-bit / 44.1 kHz) — segmented, not a full-file download.',
+  hires: 'True lossless FLAC HLS at the original sample rate and bit depth (Hi-Res Master) — segmented streaming.',
+  high: 'AAC 256 kbps HLS — high-quality lossy segmented streaming.',
+  normal: 'AAC 128 kbps HLS — optimized for mobile and limited bandwidth.',
 };
 
 function uniquePaths(paths: Array<string | undefined | null>): string[] {
@@ -98,68 +102,70 @@ export function formatMasterStreamLabel(
   return parts.join(' · ');
 }
 
+/** Studio/admin preview: prefer quality HLS paths, then original master. */
 export function getOwnerStreamCandidates(track: StreamQualityTrack): string[] {
-  // Prefer authenticated master stream when the original file exists.
-  if (track.id && track.original_file_path) {
-    return [`/api/music/${track.id}/stream/master`];
-  }
   return uniquePaths([
-    track.original_file_path,
+    track.hls_hires_path,
+    track.hls_lossless_path,
+    track.hls_high_path,
+    track.hls_normal_path,
     track.hls_playlist_path,
-    track.mp3_320_path,
-    track.aac_256_path,
-    track.aac_128_path,
-    track.stream_url,
+    track.id && track.original_file_path
+      ? `/api/music/${track.id}/stream/master`
+      : undefined,
   ]);
 }
 
-/** True when an original master or any stream asset is available for admin/studio preview. */
+/** True when any quality HLS playlist (or legacy stream) is available. */
 export function trackHasPlayableStream(track: StreamQualityTrack): boolean {
   return !!(
-    track.original_file_path ||
+    track.hls_normal_path ||
+    track.hls_high_path ||
+    track.hls_lossless_path ||
+    track.hls_hires_path ||
     track.hls_playlist_path ||
-    track.mp3_320_path ||
-    track.aac_256_path ||
     track.aac_128_path ||
     track.stream_url
   );
 }
 
+/**
+ * Resolve stream candidates for the user's quality setting.
+ * Primary playback is always HLS segments — never full progressive files.
+ */
 export function getStreamCandidatesForQuality(
   track: StreamQualityTrack,
   quality: QualityLevelSetting,
   isPremium: boolean,
+  allowMasterFallback = false,
 ): string[] {
   if (!isPremium) {
-    return track.aac_128_path ? [track.aac_128_path] : [];
+    return uniquePaths([track.hls_normal_path]);
   }
 
+  let primary: Array<string | undefined | null> = [];
   switch (quality) {
     case 'lossless':
+      primary = [track.hls_lossless_path];
+      break;
     case 'hires':
-      return track.id && track.original_file_path
-        ? [`/api/music/${track.id}/stream/master`]
-        : [];
+      primary = [track.hls_hires_path];
+      break;
     case 'high':
-      return uniquePaths([
-        track.mp3_320_path,
-        track.aac_256_path,
-        track.aac_128_path,
-        track.stream_url,
-      ]);
+      primary = [track.hls_high_path, track.hls_playlist_path];
+      break;
     case 'normal':
-      return uniquePaths([
-        track.aac_128_path,
-        track.mp3_320_path,
-        track.stream_url,
-      ]);
+      primary = [track.hls_normal_path];
+      break;
     default:
-      return uniquePaths([
-        track.mp3_320_path,
-        track.aac_128_path,
-        track.stream_url,
-      ]);
+      primary = [track.hls_normal_path];
   }
+
+  if (allowMasterFallback && track.id && track.original_file_path) {
+    primary.push(`/api/music/${track.id}/stream/master`);
+  }
+
+  return uniquePaths(primary);
 }
 
 export async function resolveStreamUrl(path: string, track?: StreamQualityTrack): Promise<string> {
@@ -179,7 +185,21 @@ export function describeStreamPath(
   if (isMasterStreamPath(path)) {
     return track ? formatMasterStreamLabel(track) : 'Studio master';
   }
-  if (lower.includes('.m3u8') || lower.includes('/hls/')) return 'HLS adaptive (AAC 256 kbps)';
+  if (lower.includes('/lossless/') || lower.includes('hls_lossless')) {
+    return 'Lossless FLAC HLS · 16-bit / 44.1 kHz';
+  }
+  if (lower.includes('/hires/') || lower.includes('hls_hires')) {
+    return track
+      ? `Hi-Res FLAC HLS · ${formatMasterStreamLabel(track)}`
+      : 'Hi-Res Master FLAC HLS';
+  }
+  if (lower.includes('/high/') || lower.includes('hls_high')) {
+    return 'High Quality HLS · AAC 256 kbps';
+  }
+  if (lower.includes('/normal/') || lower.includes('hls_normal')) {
+    return 'Normal Quality HLS · AAC 128 kbps';
+  }
+  if (lower.includes('.m3u8') || lower.includes('/hls/')) return 'HLS adaptive stream';
   if (lower.includes('/originals/') || lower.endsWith('.flac')) return 'Lossless master';
   if (lower.endsWith('.wav') || lower.endsWith('.aiff') || lower.endsWith('.alac')) return 'Lossless master';
   if (lower.includes('320k') || lower.endsWith('.mp3')) return 'MP3 320 kbps';

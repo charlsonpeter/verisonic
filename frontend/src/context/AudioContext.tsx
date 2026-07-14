@@ -5,7 +5,6 @@ import {
   describeStreamPath,
   getEffectiveQuality,
   getStreamCandidatesForQuality,
-  getOwnerStreamCandidates,
   loadStoredQuality,
   saveStoredQuality,
   isStudioMasterQuality,
@@ -43,6 +42,10 @@ export interface Track {
   cover_art_url?: string;
   stream_url?: string;
   hls_playlist_path?: string;
+  hls_normal_path?: string;
+  hls_high_path?: string;
+  hls_lossless_path?: string;
+  hls_hires_path?: string;
   mp3_320_path?: string;
   aac_256_path?: string;
   aac_128_path?: string;
@@ -1172,15 +1175,14 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     playingOwnUploadRef.current = canPlayOriginalMaster;
 
-    // Determine stream candidates from quality preference and subscription tier
+    // Determine stream candidates from quality preference (HLS segments only)
     const candidates = isRadio
       ? [trackToPlay.stream_url || trackToPlay.hls_playlist_path || ''].filter(Boolean)
-      : canPlayOriginalMaster
-        ? getOwnerStreamCandidates(trackToPlay)
-        : getStreamCandidatesForQuality(
+      : getStreamCandidatesForQuality(
             trackToPlay,
             getEffectiveQuality(qualityLevelSettingRef.current, canConfigureStreamQualityRef.current),
-            isPremiumRef.current,
+            isPremiumRef.current || canPlayOriginalMaster,
+            canPlayOriginalMaster,
           );
 
     if (!isRadio && candidates.length === 0) {
@@ -1190,16 +1192,14 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       );
       if (isPremiumRef.current && isStudioMasterQuality(effectiveQuality)) {
         showError(
-          'Studio Master Unavailable',
-          token
-            ? 'The original lossless file is not available for this track yet.'
-            : 'Sign in to stream the original studio master file.',
+          'Stream Unavailable',
+          `The ${QUALITY_LABELS[effectiveQuality]} HLS playlist is not ready for this track yet. It may still be transcoding.`,
         );
       } else {
         showError(
           'Stream Unavailable',
           isPremiumRef.current
-            ? 'No audio file is available for the selected quality tier yet. The track may still be transcoding.'
+            ? 'No HLS stream is available for the selected quality tier yet. The track may still be transcoding.'
             : 'Preview stream is not ready yet. Please try again shortly.',
         );
       }

@@ -124,7 +124,11 @@ class Track(Base):
     
     # Storage details
     original_file_path = Column(String, nullable=True) # path in S3
-    hls_playlist_path = Column(String, nullable=True) # .m3u8 path in S3
+    hls_playlist_path = Column(String, nullable=True) # legacy / high HLS .m3u8 path in S3
+    hls_normal_path = Column(String, nullable=True)   # AAC 128 HLS
+    hls_high_path = Column(String, nullable=True)     # AAC 256 HLS
+    hls_lossless_path = Column(String, nullable=True) # FLAC CD (16/44.1) HLS
+    hls_hires_path = Column(String, nullable=True)    # FLAC original resolution HLS
     mp3_320_path = Column(String, nullable=True)
     aac_256_path = Column(String, nullable=True)
     aac_128_path = Column(String, nullable=True)

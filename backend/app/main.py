@@ -91,6 +91,13 @@ async def startup_seeder():
                 db.add(Genre(name=g_name))
             db.commit()
             print("Seeded default genres")
+
+        # Backfill four-tier HLS for approved tracks missing quality playlists
+        try:
+            from app.tasks.tasks import queue_missing_hls_retranscodes_task
+            queue_missing_hls_retranscodes_task.delay()
+        except Exception as retranscode_err:
+            print(f"Could not queue HLS re-transcode backfill: {retranscode_err}")
     except Exception as e:
         print(f"Error seeding database: {e}")
     finally:

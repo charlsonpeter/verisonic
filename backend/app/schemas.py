@@ -186,6 +186,10 @@ class TrackResponse(BaseModel):
     approved: bool
     original_file_path: Optional[str] = None
     hls_playlist_path: Optional[str] = None
+    hls_normal_path: Optional[str] = None
+    hls_high_path: Optional[str] = None
+    hls_lossless_path: Optional[str] = None
+    hls_hires_path: Optional[str] = None
     mp3_320_path: Optional[str] = None
     aac_256_path: Optional[str] = None
     aac_128_path: Optional[str] = None

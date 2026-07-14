@@ -6,7 +6,9 @@ from celery_worker import celery_app
 from app.db.session import SessionLocal
 from app.models import Track, AudioAnalysisReport
 from app.services.audio import extract_metadata, analyze_audio_spectral, calculate_quality_score
-from app.services.storage import upload_file_path, upload_file
+from app.services.storage import upload_file_path, upload_file, delete_prefix
+from sqlalchemy import or_
+
 
 @celery_app.task(name="app.tasks.tasks.analyze_audio_task")
 def analyze_audio_task(track_id: int, temp_file_path: str):
@@ -109,15 +111,71 @@ def analyze_audio_task(track_id: int, temp_file_path: str):
     finally:
         db.close()
 
+
+def _ffmpeg_hls(
+    input_file_path: str,
+    out_dir: str,
+    audio_args: list,
+    segment_type: str = "mpegts",
+) -> str:
+    """Run ffmpeg HLS encode into out_dir; return local playlist path."""
+    os.makedirs(out_dir, exist_ok=True)
+    playlist = os.path.join(out_dir, "playlist.m3u8")
+    cmd = [
+        "ffmpeg", "-y", "-i", input_file_path,
+        "-vn",
+        *audio_args,
+        "-f", "hls",
+        "-hls_time", "6",
+        "-hls_playlist_type", "vod",
+    ]
+    if segment_type == "fmp4":
+        cmd.extend([
+            "-hls_segment_type", "fmp4",
+            "-hls_fmp4_init_filename", "init.mp4",
+            "-hls_segment_filename", os.path.join(out_dir, "segment_%03d.m4s"),
+        ])
+    else:
+        cmd.extend([
+            "-hls_segment_filename", os.path.join(out_dir, "segment_%03d.ts"),
+        ])
+    cmd.append(playlist)
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return playlist
+
+
+def _upload_hls_directory(local_dir: str, s3_prefix: str) -> str:
+    """Upload all HLS artifacts under local_dir to s3_prefix; return playlist key."""
+    playlist_key = f"{s3_prefix}/playlist.m3u8"
+    for filename in os.listdir(local_dir):
+        file_path = os.path.join(local_dir, filename)
+        if not os.path.isfile(file_path):
+            continue
+        key = f"{s3_prefix}/{filename}"
+        lower = filename.lower()
+        if lower.endswith(".m3u8"):
+            content_type = "application/x-mpegURL"
+        elif lower.endswith(".ts"):
+            content_type = "video/MP2T"
+        elif lower.endswith(".m4s"):
+            content_type = "video/iso.segment"
+        elif lower.endswith(".mp4"):
+            content_type = "video/mp4"
+        else:
+            content_type = "application/octet-stream"
+        upload_file_path(file_path, key, content_type=content_type)
+    return playlist_key
+
+
 @celery_app.task(name="app.tasks.tasks.transcode_audio_task")
 def transcode_audio_task(track_id: int, local_file_path: str = None):
     """
-    Transcodes approved audio to:
-    - 320kbps MP3
-    - 256kbps AAC
-    - 128kbps AAC
-    - HLS Adaptive Bitrate segments (.m3u8)
-    Uploads all outputs to S3/MinIO and updates DB paths.
+    Transcodes approved audio to progressive download fallbacks plus four
+    quality-tier HLS playlists:
+      - normal:   AAC 128 kbps (MPEG-TS)
+      - high:     AAC 256 kbps (MPEG-TS)
+      - lossless: FLAC CD quality 16-bit/44.1 kHz (fMP4)
+      - hires:    FLAC at original sample rate / bit depth (fMP4)
     """
     db = SessionLocal()
     temp_dir = tempfile.mkdtemp()
@@ -144,7 +202,7 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
             )
             input_file_path = downloaded_temp_file
 
-        # 1. Transcode to 320kbps MP3
+        # Progressive fallbacks (downloads / legacy; not used for primary streaming)
         mp3_path = os.path.join(temp_dir, f"track_{track_id}_320.mp3")
         subprocess.run([
             "ffmpeg", "-y", "-i", input_file_path,
@@ -156,7 +214,6 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
         upload_file_path(mp3_path, mp3_key, content_type="audio/mpeg")
         track.mp3_320_path = mp3_key
         
-        # 2. Transcode to 256kbps AAC
         aac_256_path = os.path.join(temp_dir, f"track_{track_id}_256.aac")
         subprocess.run([
             "ffmpeg", "-y", "-i", input_file_path,
@@ -168,7 +225,6 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
         upload_file_path(aac_256_path, aac_256_key, content_type="audio/aac")
         track.aac_256_path = aac_256_key
         
-        # 3. Transcode to 128kbps AAC
         aac_128_path = os.path.join(temp_dir, f"track_{track_id}_128.aac")
         subprocess.run([
             "ffmpeg", "-y", "-i", input_file_path,
@@ -179,35 +235,52 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
         aac_128_key = f"transcoded/{track_id}/128k.aac"
         upload_file_path(aac_128_path, aac_128_key, content_type="audio/aac")
         track.aac_128_path = aac_128_key
- 
-        # 4. Transcode to HLS stream (AAC master & segments)
-        hls_dir = os.path.join(temp_dir, "hls")
-        os.makedirs(hls_dir, exist_ok=True)
-        hls_playlist = os.path.join(hls_dir, "playlist.m3u8")
-        
-        subprocess.run([
-            "ffmpeg", "-y", "-i", input_file_path,
-            "-codec:a", "aac", "-b:a", "256k",
-            "-hls_time", "6",
-            "-hls_playlist_type", "vod",
-            "-hls_segment_filename", os.path.join(hls_dir, "segment_%03d.ts"),
-            hls_playlist
-        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        # Upload all HLS files
-        hls_prefix = f"hls/{track_id}"
-        playlist_key = f"{hls_prefix}/playlist.m3u8"
-        
-        # Upload files in directory
-        for filename in os.listdir(hls_dir):
-            file_path = os.path.join(hls_dir, filename)
-            key = f"{hls_prefix}/{filename}"
-            if filename.endswith(".m3u8"):
-                upload_file_path(file_path, key, content_type="application/x-mpegURL")
-            elif filename.endswith(".ts"):
-                upload_file_path(file_path, key, content_type="video/MP2T")
- 
-        track.hls_playlist_path = playlist_key
+
+        # Replace any previous HLS trees for this track
+        delete_prefix(f"hls/{track_id}/")
+
+        # 1) Normal — AAC 128 HLS
+        normal_dir = os.path.join(temp_dir, "hls_normal")
+        _ffmpeg_hls(
+            input_file_path,
+            normal_dir,
+            ["-codec:a", "aac", "-b:a", "128k"],
+            segment_type="mpegts",
+        )
+        track.hls_normal_path = _upload_hls_directory(normal_dir, f"hls/{track_id}/normal")
+
+        # 2) High — AAC 256 HLS
+        high_dir = os.path.join(temp_dir, "hls_high")
+        _ffmpeg_hls(
+            input_file_path,
+            high_dir,
+            ["-codec:a", "aac", "-b:a", "256k"],
+            segment_type="mpegts",
+        )
+        track.hls_high_path = _upload_hls_directory(high_dir, f"hls/{track_id}/high")
+
+        # 3) Lossless — FLAC CD quality (16-bit / 44.1 kHz) fMP4 HLS
+        lossless_dir = os.path.join(temp_dir, "hls_lossless")
+        _ffmpeg_hls(
+            input_file_path,
+            lossless_dir,
+            ["-codec:a", "flac", "-sample_fmt", "s16", "-ar", "44100"],
+            segment_type="fmp4",
+        )
+        track.hls_lossless_path = _upload_hls_directory(lossless_dir, f"hls/{track_id}/lossless")
+
+        # 4) Hi-Res Master — FLAC at original sample rate / bit depth fMP4 HLS
+        hires_dir = os.path.join(temp_dir, "hls_hires")
+        _ffmpeg_hls(
+            input_file_path,
+            hires_dir,
+            ["-codec:a", "flac"],
+            segment_type="fmp4",
+        )
+        track.hls_hires_path = _upload_hls_directory(hires_dir, f"hls/{track_id}/hires")
+
+        # Legacy field points at high-quality HLS for readiness filters
+        track.hls_playlist_path = track.hls_high_path
         db.commit()
         
         return {"status": "success", "track_id": track_id}
@@ -223,6 +296,38 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
         shutil.rmtree(temp_dir, ignore_errors=True)
         if local_file_path and os.path.exists(local_file_path):
             os.remove(local_file_path)
+
+
+@celery_app.task(name="app.tasks.tasks.queue_missing_hls_retranscodes_task")
+def queue_missing_hls_retranscodes_task():
+    """
+    Queue re-transcodes for approved tracks missing any of the four HLS quality paths.
+    Safe to run on startup; skips tracks that already have all four playlists.
+    """
+    db = SessionLocal()
+    try:
+        tracks = (
+            db.query(Track)
+            .filter(
+                Track.approved == True,  # noqa: E712
+                Track.original_file_path.isnot(None),
+                or_(
+                    Track.hls_normal_path.is_(None),
+                    Track.hls_high_path.is_(None),
+                    Track.hls_lossless_path.is_(None),
+                    Track.hls_hires_path.is_(None),
+                ),
+            )
+            .all()
+        )
+        queued = 0
+        for i, track in enumerate(tracks):
+            # Stagger to avoid thundering herd on the worker
+            transcode_audio_task.apply_async(args=[track.id, None], countdown=i * 2)
+            queued += 1
+        return {"status": "success", "queued": queued}
+    finally:
+        db.close()
 
 
 @celery_app.task(name="app.tasks.tasks.settle_daily_revenue_task")
