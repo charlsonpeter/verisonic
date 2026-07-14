@@ -169,6 +169,10 @@ const PREVIEW_LIMIT_SECONDS = 30;
 const RADIO_PREVIEW_LIMIT_SECONDS = 60;
 /** Max position jump counted as continuous playback between timeupdate samples. */
 const LISTEN_SAMPLE_MAX_DELTA_SEC = 5;
+/** Prefetch related tracks when this many (or fewer) remain after the current index. */
+const AUTOPLAY_PREFETCH_REMAINING = 3;
+/** Related-track batch size for lazy queue growth. */
+const AUTOPLAY_BATCH_SIZE = 12;
 
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { token, isPremium, canConfigureStreamQuality, userMode, serverUserMode, currentUser, isStaffInAdminMode, updateStreamQuality } = useAuth();
@@ -252,6 +256,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const isStaffInAdminModeRef = useRef(isStaffInAdminMode);
   const tokenRef = useRef(token);
   const currentUserRef = useRef(currentUser);
+  const autoplayRefillInFlightRef = useRef(false);
+  const autoplayLastFailedSeedRef = useRef<number | null>(null);
+  const playNextRef = useRef<() => void>(() => {});
+  const handleTrackEndedRef = useRef<() => void>(() => {});
+  const maybePrefetchAutoplayRef = useRef<() => void>(() => {});
 
   const resetAudioElementForNewSource = () => {
     const audio = audioRef.current;
@@ -446,6 +455,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { repeatModeRef.current = repeatMode; }, [repeatMode]);
   useEffect(() => { playQueueRef.current = playQueue; }, [playQueue]);
   useEffect(() => { currentQueueIndexRef.current = currentQueueIndex; }, [currentQueueIndex]);
+
+  // Lazy-load related tracks into Now Playing when the queue is nearly exhausted
+  useEffect(() => {
+    maybePrefetchAutoplayRef.current();
+  }, [currentTrack?.id, currentQueueIndex, playQueue.length, activeRadioStation?.id, repeatMode]);
   useEffect(() => { isShuffleRef.current = isShuffle; }, [isShuffle]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
@@ -735,7 +749,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     };
     const onDurationChange = () => setDuration(audio.duration || 0);
-    const onEnded = () => handleTrackEnded();
+    const onEnded = () => handleTrackEndedRef.current();
     const onRateChange = () => {
       if (audio.playbackRate !== playbackSpeedRef.current) {
         audio.playbackRate = playbackSpeedRef.current;
@@ -793,7 +807,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Wire up MediaSession custom events to actual playPrevious / playNext functions
   useEffect(() => {
     const handlePrev = () => playPrevious();
-    const handleNext = () => playNext();
+    const handleNext = () => playNextRef.current();
     window.addEventListener('mediasession:previous', handlePrev);
     window.addEventListener('mediasession:next', handleNext);
     return () => {
@@ -965,26 +979,130 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return position >= PREVIEW_LIMIT_SECONDS;
   };
 
+  const refillQueueFromRadio = async (seed: Track): Promise<Track[]> => {
+    if (autoplayRefillInFlightRef.current) return [];
+    if (activeRadioStationRef.current) return [];
+    // Virtual live-radio ids are large sentinels; never seed autoplay from them
+    if (seed.id >= 100000) return [];
+    if (autoplayLastFailedSeedRef.current === seed.id) return [];
+
+    autoplayRefillInFlightRef.current = true;
+    try {
+      const queue = playQueueRef.current;
+      const exclude = new Set<number>([seed.id, ...queue.map((t) => t.id)]);
+      const params = new URLSearchParams({ limit: String(AUTOPLAY_BATCH_SIZE) });
+      if (exclude.size > 0) {
+        params.set('exclude_ids', Array.from(exclude).join(','));
+      }
+      const headers: HeadersInit = {};
+      if (tokenRef.current) {
+        headers.Authorization = `Bearer ${tokenRef.current}`;
+      }
+      const res = await fetch(`${API_URL}/discovery/tracks/${seed.id}/radio?${params}`, { headers });
+      if (!res.ok) {
+        autoplayLastFailedSeedRef.current = seed.id;
+        return [];
+      }
+      const related = (await res.json()) as Track[];
+      if (!Array.isArray(related) || related.length === 0) {
+        autoplayLastFailedSeedRef.current = seed.id;
+        return [];
+      }
+
+      const fresh = related.filter((t) => !exclude.has(t.id));
+      if (fresh.length === 0) {
+        autoplayLastFailedSeedRef.current = seed.id;
+        return [];
+      }
+
+      const prev = playQueueRef.current;
+      const seen = new Set(prev.map((t) => t.id));
+      const toAppend = fresh.filter((t) => !seen.has(t.id));
+      if (toAppend.length === 0) {
+        autoplayLastFailedSeedRef.current = seed.id;
+        return [];
+      }
+
+      const nextQueue = prev.length === 0 ? toAppend : [...prev, ...toAppend];
+      playQueueRef.current = nextQueue;
+      if (prev.length === 0) {
+        currentQueueIndexRef.current = -1;
+        setCurrentQueueIndex(-1);
+      }
+      setPlayQueue(nextQueue);
+      autoplayLastFailedSeedRef.current = null;
+      return toAppend;
+    } catch (e) {
+      console.warn('Failed to refill autoplay queue:', e);
+      return [];
+    } finally {
+      autoplayRefillInFlightRef.current = false;
+    }
+  };
+
+  const maybePrefetchAutoplay = () => {
+    if (autoplayRefillInFlightRef.current) return;
+    if (activeRadioStationRef.current) return;
+    if (repeatModeRef.current === 'all') return;
+
+    const queue = playQueueRef.current;
+    const index = currentQueueIndexRef.current;
+    const current = currentTrackRef.current;
+    if (!current || current.id >= 100000) return;
+
+    // Empty queue while a library track is playing: treat as 0 remaining and fill Now Playing
+    let remaining = 0;
+    if (queue.length === 0) {
+      remaining = 0;
+    } else if (index < 0) {
+      remaining = queue.length;
+    } else {
+      remaining = Math.max(0, queue.length - 1 - index);
+    }
+
+    if (remaining > AUTOPLAY_PREFETCH_REMAINING) return;
+
+    // Prefer seeding from the tail of the queue so recommendations chain forward
+    const seed = queue.length > 0 ? queue[queue.length - 1] : current;
+    if (autoplayLastFailedSeedRef.current === seed.id) return;
+    void refillQueueFromRadio(seed);
+  };
+  maybePrefetchAutoplayRef.current = maybePrefetchAutoplay;
+
   const handleTrackEnded = () => {
     if (repeatModeRef.current === 'one') {
       if (audioRef.current) {
         audioRef.current.currentTime = 0;
         audioRef.current.play().catch(() => { });
       }
-    } else {
-      const queue = playQueueRef.current;
-      const atEnd = queue.length === 0 || currentQueueIndexRef.current >= queue.length - 1;
-      if (atEnd && repeatModeRef.current !== 'all') {
-        setIsPlaying(false);
-        if (activeRadioStationRef.current) {
-          setActiveRadioStation(null);
-          setIsRadioSync(false);
-        }
-      } else {
-        playNext();
-      }
+      return;
     }
+
+    const queue = playQueueRef.current;
+    const atEnd = queue.length === 0 || currentQueueIndexRef.current >= queue.length - 1;
+    if (atEnd && repeatModeRef.current !== 'all') {
+      // Library autoplay: when the queue is exhausted, continue with related tracks
+      if (!activeRadioStationRef.current && currentTrackRef.current) {
+        void refillQueueFromRadio(currentTrackRef.current).then((appended) => {
+          if (appended.length > 0) {
+            playNextRef.current();
+          } else {
+            setIsPlaying(false);
+          }
+        });
+        return;
+      }
+      setIsPlaying(false);
+      if (activeRadioStationRef.current) {
+        setActiveRadioStation(null);
+        setIsRadioSync(false);
+      }
+      return;
+    }
+
+    playNextRef.current();
   };
+  handleTrackEndedRef.current = handleTrackEnded;
 
   const playTrack = async (track: Track, isRadio = false, autoPlay = true) => {
     if (!audioRef.current) return;
@@ -1775,6 +1893,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const playQueueTracks = (tracks: Track[]) => {
     if (tracks.length === 0) return;
+    autoplayLastFailedSeedRef.current = null;
     setPlayQueue(tracks);
     setCurrentQueueIndex(0);
     void playTrack(tracks[0]);
@@ -1785,6 +1904,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const clearQueue = () => {
+    autoplayLastFailedSeedRef.current = null;
     setPlayQueue([]);
     setCurrentQueueIndex(-1);
     setCurrentTrack(null);
@@ -1795,12 +1915,25 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const playNext = () => {
     const queue = playQueueRef.current;
     const index = currentQueueIndexRef.current;
+
     if (queue.length === 0) {
       if (repeatModeRef.current === 'all' && currentTrackRef.current) {
-        playTrack(currentTrackRef.current);
+        void playTrack(currentTrackRef.current);
+        return;
+      }
+      if (!activeRadioStationRef.current && currentTrackRef.current) {
+        void refillQueueFromRadio(currentTrackRef.current).then((appended) => {
+          if (appended.length === 0) return;
+          const nextQueue = playQueueRef.current;
+          if (nextQueue.length === 0) return;
+          currentQueueIndexRef.current = 0;
+          setCurrentQueueIndex(0);
+          void playTrack(nextQueue[0]);
+        });
       }
       return;
     }
+
     let nextIndex = index + 1;
 
     if (isShuffleRef.current) {
@@ -1808,14 +1941,27 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } else if (nextIndex >= queue.length) {
       if (repeatModeRef.current === 'all') {
         nextIndex = 0;
+      } else if (!activeRadioStationRef.current && currentTrackRef.current) {
+        void refillQueueFromRadio(currentTrackRef.current).then((appended) => {
+          if (appended.length === 0) return;
+          const nextQueue = playQueueRef.current;
+          const playIndex = Math.min(index + 1, nextQueue.length - 1);
+          if (playIndex < 0 || playIndex >= nextQueue.length) return;
+          currentQueueIndexRef.current = playIndex;
+          setCurrentQueueIndex(playIndex);
+          void playTrack(nextQueue[playIndex]);
+        });
+        return;
       } else {
         return; // Playback finished
       }
     }
 
+    currentQueueIndexRef.current = nextIndex;
     setCurrentQueueIndex(nextIndex);
-    playTrack(queue[nextIndex]);
+    void playTrack(queue[nextIndex]);
   };
+  playNextRef.current = playNext;
 
   const playPrevious = () => {
     const queue = playQueueRef.current;

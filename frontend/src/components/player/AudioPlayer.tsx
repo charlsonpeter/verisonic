@@ -7,6 +7,7 @@ import {
 import { useAudio } from '../../context/AudioContext';
 import { Equalizer } from './Equalizer';
 import { useAuth } from '../../context/AuthContext';
+import { AddToPlaylistButton } from '../shared/AddToPlaylistButton';
 
 interface AudioPlayerProps {
   onToggleQueue: () => void;
@@ -627,12 +628,20 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                 </p>
               </div>
               {currentTrack && !isRadioAdminInAdminMode && (
-                <button 
-                  onClick={() => toggleFavorite(currentTrack.id)} 
-                  className={`w-10 h-10 rounded-full bg-white/5 flex items-center justify-center transition active:scale-90 ${isFav ? 'text-rose-500 bg-rose-500/10' : 'text-slate-450'}`}
-                >
-                  <Heart className={`w-4.5 h-4.5 ${isFav ? 'fill-current' : ''}`} />
-                </button>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {!activeRadioStation && (
+                    <AddToPlaylistButton track={currentTrack} variant="round" />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => toggleFavorite(currentTrack.id)}
+                    className={`w-10 h-10 rounded-full bg-white/5 flex items-center justify-center transition active:scale-90 ${isFav ? 'text-rose-500 bg-rose-500/10' : 'text-slate-450'}`}
+                    title={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
+                    aria-label={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
+                  >
+                    <Heart className={`w-4.5 h-4.5 ${isFav ? 'fill-current' : ''}`} />
+                  </button>
+                </div>
               )}
             </div>
 
