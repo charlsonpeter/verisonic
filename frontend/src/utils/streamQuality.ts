@@ -84,6 +84,12 @@ export function isMasterStreamPath(path: string): boolean {
   return path.toLowerCase().includes('/stream/master');
 }
 
+/** True when URL/path is a FLAC lossless or hi-res HLS playlist. */
+export function isFlacHlsPath(path: string): boolean {
+  const lower = path.toLowerCase();
+  return lower.includes('/lossless/') || lower.includes('/hires/');
+}
+
 export function formatMasterStreamLabel(
   track: StreamQualityTrack,
 ): string {
@@ -102,17 +108,6 @@ export function formatMasterStreamLabel(
   return parts.join(' · ');
 }
 
-/** Studio/admin preview: quality HLS paths only (no full-file master). */
-export function getOwnerStreamCandidates(track: StreamQualityTrack): string[] {
-  return uniquePaths([
-    track.hls_hires_path,
-    track.hls_lossless_path,
-    track.hls_high_path,
-    track.hls_normal_path,
-    track.hls_playlist_path,
-  ]);
-}
-
 /** True when any quality HLS playlist (or legacy free preview) is available. */
 export function trackHasPlayableStream(track: StreamQualityTrack): boolean {
   return !!(
@@ -128,9 +123,9 @@ export function trackHasPlayableStream(track: StreamQualityTrack): boolean {
 
 /**
  * Resolve stream candidates for the user's quality setting.
- * Primary playback is HLS segments. Progressive AAC 128 is only a temporary
- * free/normal migration fallback until four-tier HLS backfill completes.
- * FLAC tiers fall back to high/normal HLS if the browser cannot play FLAC-in-HLS.
+ * Primary playback is HLS segments.
+ * Free tier may fall back to progressive AAC 128 only until normal HLS exists.
+ * Premium always uses HLS (FLAC tiers fall back to high/normal HLS if needed).
  */
 export function getStreamCandidatesForQuality(
   track: StreamQualityTrack,
@@ -169,10 +164,10 @@ export function getStreamCandidatesForQuality(
       ];
       break;
     case 'normal':
-      primary = [track.hls_normal_path, track.aac_128_path];
+      primary = [track.hls_normal_path];
       break;
     default:
-      primary = [track.hls_normal_path, track.aac_128_path];
+      primary = [track.hls_normal_path];
   }
 
   return uniquePaths(primary);

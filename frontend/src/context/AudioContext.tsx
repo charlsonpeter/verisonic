@@ -9,12 +9,13 @@ import {
   saveStoredQuality,
   isStudioMasterQuality,
   isMasterStreamPath,
+  isFlacHlsPath,
   resolveStreamUrl as resolveMasterStreamUrl,
   QUALITY_LABELS,
   type QualityLevelSetting,
 } from '../utils/streamQuality';
 import { parseStoredStreamQuality } from '../utils/userSettings';
-import { showError } from '../utils/swal';
+import { showError, showInfo } from '../utils/swal';
 import { hasPaidSubscription } from '../utils/accountTier';
 import {
   endRadioListenSession,
@@ -160,10 +161,16 @@ export { QUALITY_LABELS } from '../utils/streamQuality';
 
 const resolveStorageUrl = (url?: string): string => {
   if (!url) return "";
+  // Absolute CDN / S3 / MinIO URLs — use as-is
+  if (/^https?:\/\//i.test(url)) return url;
   if (url.startsWith("/api/")) return url;
-  if (url.startsWith("/storage") || url.includes("/storage/")) {
-    const normalized = url.startsWith('/') ? url : `/${url}`;
-    return `${window.location.protocol}//${window.location.host}${normalized}`;
+  // Same-origin storage proxy paths
+  if (url.startsWith("/storage")) {
+    return `${window.location.protocol}//${window.location.host}${url}`;
+  }
+  const storageIdx = url.indexOf("/storage/");
+  if (storageIdx >= 0) {
+    return `${window.location.protocol}//${window.location.host}${url.slice(storageIdx)}`;
   }
   return "";
 };
@@ -1151,6 +1158,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         });
         if (res.ok) {
           trackToPlay = await res.json();
+          // Keep queue entries from holding stale HLS generation URLs
+          setPlayQueue((prev) =>
+            prev.map((item) => (item.id === trackToPlay.id ? { ...item, ...trackToPlay } : item)),
+          );
         }
       } catch (e) {
         console.warn("Failed to fetch fresh metadata, playing with local cache:", e);
@@ -1175,14 +1186,17 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     playingOwnUploadRef.current = canPlayOriginalMaster;
 
-    // Determine stream candidates from quality preference (HLS segments)
-    const candidates = isRadio
-      ? [trackToPlay.stream_url || trackToPlay.hls_playlist_path || ''].filter(Boolean)
-      : getStreamCandidatesForQuality(
-            trackToPlay,
+    const buildCandidates = (t: Track) =>
+      isRadio
+        ? [t.stream_url || t.hls_playlist_path || ''].filter(Boolean)
+        : getStreamCandidatesForQuality(
+            t,
             getEffectiveQuality(qualityLevelSettingRef.current, canConfigureStreamQualityRef.current),
             isPremiumRef.current || canPlayOriginalMaster,
           );
+
+    // Determine stream candidates from quality preference (HLS segments)
+    let candidates = buildCandidates(trackToPlay);
 
     if (!isRadio && candidates.length === 0) {
       const effectiveQuality = getEffectiveQuality(
@@ -1343,6 +1357,38 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       });
     };
 
+    let qualityFallbackNotified = false;
+    let streamRefreshAttempted = false;
+
+    /** On stream failure: refresh URLs once and retry the preferred tier before downgrading. */
+    const afterStreamFailure = async (failedIndex: number) => {
+      if (!isRadio && !streamRefreshAttempted && track.id) {
+        streamRefreshAttempted = true;
+        try {
+          const res = await fetch(`${API_URL}/music/${track.id}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          });
+          if (res.ok) {
+            const fresh = await res.json();
+            trackToPlay = fresh;
+            setCurrentTrack(fresh);
+            setPlayQueue((prev) =>
+              prev.map((item) => (item.id === fresh.id ? { ...item, ...fresh } : item)),
+            );
+            const refreshed = buildCandidates(fresh);
+            if (refreshed.length > 0) {
+              candidates = refreshed;
+              // Retry preferred quality with fresh generation URLs before any downgrade
+              return tryCandidate(0);
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to refresh stream URLs after playback failure:', e);
+        }
+      }
+      return tryCandidate(failedIndex + 1);
+    };
+
     const tryCandidate = async (index: number) => {
       if (!audioRef.current) return;
 
@@ -1354,11 +1400,27 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       const streamPath = candidates[index];
+      const preferredPath = candidates[0];
+      if (
+        !isRadio &&
+        !qualityFallbackNotified &&
+        index > 0 &&
+        preferredPath &&
+        isFlacHlsPath(preferredPath) &&
+        !isFlacHlsPath(streamPath)
+      ) {
+        qualityFallbackNotified = true;
+        showInfo(
+          'Quality adjusted',
+          `This browser could not play ${describeStreamPath(preferredPath, trackToPlay)}. Playing ${describeStreamPath(streamPath, trackToPlay)} instead.`,
+        );
+      }
+
       let streamUrl = isMasterStreamPath(streamPath)
         ? await resolveMasterStreamUrl(streamPath, trackToPlay)
         : resolveStorageUrl(streamPath);
       if (!streamUrl) {
-        tryCandidate(index + 1);
+        await afterStreamFailure(index);
         return;
       }
 
@@ -1391,18 +1453,18 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           });
           hls.on(Hls.Events.ERROR, (_event, data) => {
             if (!data.fatal) return;
-            console.warn('HLS fatal error, trying next quality candidate:', data);
+            console.warn('HLS fatal error, recovering stream before quality downgrade:', data);
             seekRestoreCleanup?.();
             seekRestoreCleanup = null;
             hls.destroy();
             hlsRef.current = null;
-            tryCandidate(index + 1);
+            void afterStreamFailure(index);
           });
         } else if (audioRef.current.canPlayType('application/vnd.apple.mpegurl')) {
           const audio = audioRef.current;
           const onNativeError = () => {
             audio.removeEventListener('error', onNativeError);
-            tryCandidate(index + 1);
+            void afterStreamFailure(index);
           };
           audio.addEventListener('error', onNativeError);
           audio.src = streamUrl;
@@ -1416,7 +1478,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             { once: true }
           );
         } else {
-          tryCandidate(index + 1);
+          await afterStreamFailure(index);
         }
         return;
       }
@@ -1424,8 +1486,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const audio = audioRef.current;
       const onDirectError = () => {
         audio.removeEventListener('error', onDirectError);
-        console.warn('Direct stream failed, trying next quality candidate');
-        tryCandidate(index + 1);
+        console.warn('Direct stream failed, recovering stream before quality downgrade');
+        void afterStreamFailure(index);
       };
       audio.addEventListener('error', onDirectError);
       audio.src = streamUrl;

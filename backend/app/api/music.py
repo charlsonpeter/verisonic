@@ -1040,7 +1040,7 @@ def manually_approve_track(
         from app.tasks.tasks import transcode_audio_task
         transcode_audio_task.delay(track.id, None)
         
-    return serialize_track(track, db)
+    return serialize_track(track, db, viewer=current_user)
 
 @router.post("/{id}/play", status_code=status.HTTP_200_OK)
 def log_track_play(
@@ -1417,7 +1417,7 @@ async def update_track(
         
     db.commit()
     db.refresh(track)
-    return serialize_track(track, db)
+    return serialize_track(track, db, viewer=current_user)
 
 
 @router.get("/{track_id}/comments", response_model=List[TrackCommentResponse])

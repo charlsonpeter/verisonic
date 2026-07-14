@@ -775,7 +775,7 @@ def add_track_to_schedule(
     db.refresh(schedule)
     
     # Serialize the linked track using serialize_track
-    serialized_track = serialize_track(track, db)
+    serialized_track = serialize_track(track, db, viewer=current_user)
     
     return {
         "id": schedule.id,

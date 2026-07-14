@@ -7,9 +7,164 @@ from celery_worker import celery_app
 from app.db.session import SessionLocal
 from app.models import Track, AudioAnalysisReport
 from app.services.audio import extract_metadata, analyze_audio_spectral, calculate_quality_score
-from app.services.storage import upload_file_path, upload_file, delete_prefix_except
-from sqlalchemy import or_
+from app.services.storage import upload_file_path, delete_prefix_except
+from app.core.redis_client import get_redis
+from app.db.session import SQLALCHEMY_DATABASE_URL
+from sqlalchemy import or_, text, create_engine
+from sqlalchemy.pool import NullPool
 
+
+HLS_TRANSCODE_LOCK_TTL_SEC = 7200
+HLS_RETRANSCODE_SWEEP_LOCK_TTL_SEC = 300
+# Keep prior gens at least 2h, longer for long tracks, so in-flight listeners survive republish
+HLS_OLD_GEN_CLEANUP_MIN_SEC = 7200
+HLS_OLD_GEN_CLEANUP_DURATION_FACTOR = 3
+HLS_OLD_GEN_CLEANUP_PADDING_SEC = 600
+
+# Postgres advisory-lock namespace (avoid colliding with unrelated app locks).
+# Sweep uses a dedicated high key; track locks use a separate range that cannot
+# overlap it (track_id 1 must not equal the sweep key).
+_PG_LOCK_SWEEP_KEY = 2_100_000_000
+_PG_LOCK_TRACK_BASE = 2_200_000_000
+
+# Dedicated NullPool engine so long-held advisory locks do not starve the app pool
+_lock_engine = create_engine(SQLALCHEMY_DATABASE_URL, poolclass=NullPool, pool_pre_ping=True)
+
+
+def _transcode_lock_key(track_id: int) -> bytes:
+    return f"hls:transcode:{track_id}".encode()
+
+
+def _pg_lock_key_for_track(track_id: int) -> int:
+    return _PG_LOCK_TRACK_BASE + int(track_id)
+
+
+def _acquire_pg_advisory_lock(lock_key: int):
+    """
+    Session-scoped Postgres advisory lock on a NullPool connection.
+    Caller must release via _release_pg_advisory_lock.
+    """
+    conn = _lock_engine.connect()
+    try:
+        acquired = conn.execute(
+            text("SELECT pg_try_advisory_lock(:k)"),
+            {"k": lock_key},
+        ).scalar()
+        if not acquired:
+            conn.close()
+            return None
+        return conn
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return None
+
+
+def _release_pg_advisory_lock(conn, lock_key: int) -> None:
+    if conn is None:
+        return
+    try:
+        conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+    except Exception:
+        pass
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
+def _acquire_transcode_lock(track_id: int):
+    """
+    Acquire a cross-worker lock for this track.
+    Postgres advisory lock is authoritative (works when Redis is down).
+    Redis marker is best-effort for sweep heuristics.
+    Returns (pg_conn_or_None, acquired: bool).
+    """
+    pg_conn = _acquire_pg_advisory_lock(_pg_lock_key_for_track(track_id))
+    if pg_conn is None:
+        return None, False
+
+    client = get_redis()
+    if client:
+        try:
+            client.set(
+                _transcode_lock_key(track_id),
+                b"1",
+                ex=HLS_TRANSCODE_LOCK_TTL_SEC,
+            )
+        except Exception:
+            pass
+    return pg_conn, True
+
+
+def _release_transcode_lock(track_id: int, pg_conn) -> None:
+    _release_pg_advisory_lock(pg_conn, _pg_lock_key_for_track(track_id))
+    client = get_redis()
+    if not client:
+        return
+    try:
+        client.delete(_transcode_lock_key(track_id))
+    except Exception:
+        pass
+
+
+def _acquire_retranscode_sweep_lock():
+    """Sweep lock: Redis NX when possible, else Postgres advisory."""
+    client = get_redis()
+    if client:
+        try:
+            if client.set(
+                b"hls:retranscode_sweep",
+                b"1",
+                nx=True,
+                ex=HLS_RETRANSCODE_SWEEP_LOCK_TTL_SEC,
+            ):
+                return ("redis", None)
+            return None  # not acquired
+        except Exception:
+            pass
+
+    pg_conn = _acquire_pg_advisory_lock(_PG_LOCK_SWEEP_KEY)
+    if pg_conn is None:
+        return None
+    return ("pg", pg_conn)
+
+
+def _release_retranscode_sweep_lock(token) -> None:
+    if not token:
+        return
+    kind, pg_conn = token
+    if kind == "pg":
+        _release_pg_advisory_lock(pg_conn, _PG_LOCK_SWEEP_KEY)
+    # Redis sweep key expires via TTL
+
+
+def _is_transcode_locked(track_id: int) -> bool:
+    client = get_redis()
+    if client:
+        try:
+            if client.exists(_transcode_lock_key(track_id)):
+                return True
+        except Exception:
+            pass
+    # Probe PG lock without holding it
+    conn = _acquire_pg_advisory_lock(_pg_lock_key_for_track(track_id))
+    if conn is None:
+        return True
+    _release_pg_advisory_lock(conn, _pg_lock_key_for_track(track_id))
+    return False
+
+
+def _hls_cleanup_countdown_sec(duration: float | None) -> int:
+    duration_sec = float(duration or 0)
+    return int(
+        max(
+            HLS_OLD_GEN_CLEANUP_MIN_SEC,
+            duration_sec * HLS_OLD_GEN_CLEANUP_DURATION_FACTOR + HLS_OLD_GEN_CLEANUP_PADDING_SEC,
+        )
+    )
 
 @celery_app.task(name="app.tasks.tasks.analyze_audio_task")
 def analyze_audio_task(track_id: int, temp_file_path: str):
@@ -178,6 +333,13 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
       - lossless: FLAC CD quality 16-bit/44.1 kHz (fMP4)
       - hires:    FLAC at original sample rate / bit depth (fMP4)
     """
+    pg_lock_conn, lock_acquired = _acquire_transcode_lock(track_id)
+    if not lock_acquired:
+        # Avoid duplicate parallel work from overlapping startup/approve queues
+        if local_file_path and os.path.exists(local_file_path):
+            os.remove(local_file_path)
+        return {"status": "skipped", "reason": "transcode already in progress", "track_id": track_id}
+
     db = SessionLocal()
     temp_dir = tempfile.mkdtemp()
     
@@ -185,6 +347,20 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
         track = db.query(Track).filter(Track.id == track_id).first()
         if not track:
             return {"status": "error", "error": "Track not found"}
+
+        # Another queued job may have finished while we waited for the lock/countdown
+        if (
+            local_file_path is None
+            and track.hls_normal_path
+            and track.hls_high_path
+            and track.hls_lossless_path
+            and track.hls_hires_path
+        ):
+            return {
+                "status": "skipped",
+                "reason": "already has four HLS quality playlists",
+                "track_id": track_id,
+            }
 
         input_file_path = local_file_path
         if not input_file_path or not os.path.exists(input_file_path):
@@ -270,7 +446,7 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
             segment_type="fmp4",
         )
 
-        # Publish under a new generation prefix, then point DB at it, then clean old trees.
+        # Publish under a new generation prefix, then point DB at it, then clean old trees later.
         gen = uuid.uuid4().hex[:12]
         gen_root = f"hls/{track_id}/{gen}"
 
@@ -287,8 +463,11 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
         track.hls_playlist_path = hls_high_key
         db.commit()
 
-        # Best-effort: remove prior generations / legacy flat HLS after DB points at the new tree
-        delete_prefix_except(f"hls/{track_id}/", f"{gen_root}/")
+        # Defer cleanup so in-flight HLS listeners on the prior generation can finish
+        cleanup_old_hls_gens_task.apply_async(
+            args=[track_id, f"{gen_root}/"],
+            countdown=_hls_cleanup_countdown_sec(track.duration),
+        )
         
         return {"status": "success", "track_id": track_id}
         
@@ -298,6 +477,7 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
         return {"status": "error", "error": str(e)}
         
     finally:
+        _release_transcode_lock(track_id, pg_lock_conn)
         db.close()
         # Clean up temporary directory & input local file
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -305,12 +485,58 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
             os.remove(local_file_path)
 
 
+@celery_app.task(name="app.tasks.tasks.cleanup_old_hls_gens_task")
+def cleanup_old_hls_gens_task(track_id: int, keep_prefix: str):
+    """
+    Remove prior HLS generations after a grace period for in-flight listeners.
+    Always keeps the generation currently referenced in the DB (not a stale
+    keep_prefix), so a later re-transcode cannot be deleted by an older cleanup job.
+    """
+    db = SessionLocal()
+    try:
+        track = db.query(Track).filter(Track.id == track_id).first()
+        if not track:
+            return {"status": "skipped", "reason": "track not found"}
+
+        current_key = (
+            track.hls_high_path
+            or track.hls_normal_path
+            or track.hls_lossless_path
+            or track.hls_hires_path
+            or track.hls_playlist_path
+            or ""
+        )
+        effective_keep = keep_prefix
+        # paths look like: hls/{track_id}/{gen}/high/playlist.m3u8
+        parts = current_key.split("/")
+        if len(parts) >= 3 and parts[0] == "hls" and parts[1] == str(track_id):
+            effective_keep = f"hls/{track_id}/{parts[2]}/"
+
+        delete_prefix_except(f"hls/{track_id}/", effective_keep)
+        return {
+            "status": "success",
+            "track_id": track_id,
+            "kept": effective_keep,
+            "requested_keep": keep_prefix,
+        }
+    except Exception as e:
+        print(f"Error in cleanup_old_hls_gens_task: {e}")
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
 @celery_app.task(name="app.tasks.tasks.queue_missing_hls_retranscodes_task")
 def queue_missing_hls_retranscodes_task():
     """
     Queue re-transcodes for approved tracks missing any of the four HLS quality paths.
     Safe to run on startup; skips tracks that already have all four playlists.
+    Deduplicates concurrent API restarts and in-flight worker jobs via Redis/Postgres locks.
     """
+    sweep_token = _acquire_retranscode_sweep_lock()
+    if not sweep_token:
+        return {"status": "skipped", "reason": "sweep already running"}
+
     db = SessionLocal()
     try:
         tracks = (
@@ -328,14 +554,22 @@ def queue_missing_hls_retranscodes_task():
             .all()
         )
         queued = 0
+        skipped_locked = 0
         for i, track in enumerate(tracks):
+            if _is_transcode_locked(track.id):
+                skipped_locked += 1
+                continue
             # Stagger to avoid thundering herd on the worker
             transcode_audio_task.apply_async(args=[track.id, None], countdown=i * 2)
             queued += 1
-        return {"status": "success", "queued": queued}
+        return {
+            "status": "success",
+            "queued": queued,
+            "skipped_locked": skipped_locked,
+        }
     finally:
         db.close()
-
+        _release_retranscode_sweep_lock(sweep_token)
 
 @celery_app.task(name="app.tasks.tasks.settle_daily_revenue_task")
 def settle_daily_revenue_task(settlement_date: str | None = None):
