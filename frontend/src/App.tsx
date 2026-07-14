@@ -145,9 +145,12 @@ function DashboardContent() {
   useEffect(() => {
     const role = currentUser?.real_role || currentUser?.role;
     if (
-      (activeTab === 'accounts' || activeTab === 'users' || activeTab === 'analytics' || activeTab === 'reports')
+      (activeTab === 'accounts' || activeTab === 'users' || activeTab === 'analytics')
       && role !== 'admin'
     ) {
+      setActiveTab('home');
+    }
+    if (activeTab === 'reports' && role !== 'admin' && role !== 'studio_admin') {
       setActiveTab('home');
     }
   }, [activeTab, currentUser?.role, currentUser?.real_role]);
@@ -397,7 +400,7 @@ function DashboardContent() {
       case 'tracks':
         return <TracksManagement onViewReport={viewQualityReport} />;
       case 'track-list':
-        return <StudioTrackList />;
+        return <StudioTrackList onViewReport={viewQualityReport} />;
       case 'contact':
         return <Contact />;
       case 'broadcaster-download':

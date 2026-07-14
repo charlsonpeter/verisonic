@@ -118,7 +118,6 @@ interface AudioContextType {
   playQueue: Track[];
   currentQueueIndex: number;
   showPremiumModal: boolean;
-  equalizerBars: number[];
   qualityLevelSetting: QualityLevelSetting;
   activeStreamLabel: string | null;
   analyser: AnalyserNode | null;
@@ -219,7 +218,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const currentTimeRef = useRef(0);
   const applyQualityChangeRef = useRef<(quality: QualityLevelSetting) => void>(() => {});
   const playTrackRef = useRef<(track: Track, isRadio?: boolean, autoPlay?: boolean) => void | Promise<void>>(async () => {});
-  const [equalizerBars, setEqualizerBars] = useState<number[]>(new Array(20).fill(0));
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
 
   // Refs for HTMLAudioElement & HLS
@@ -228,10 +226,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const webrtcPCRef = useRef<RTCPeerConnection | null>(null);
   const websocketRef = useRef<WebSocket | null>(null);
   const previewTimerRef = useRef<any>(null);
-  const equalizerIntervalRef = useRef<any>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const animFrameRef = useRef<number | null>(null);
   const hasSyncedLiveHeadRef = useRef(false);
   const fadeIntervalRef = useRef<any>(null);
 
@@ -844,50 +840,33 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
-  // Real VU meter — driven by Web Audio API AnalyserNode
+  // Wire AnalyserNode once for the canvas equalizer (no React state updates per frame)
   useEffect(() => {
-    const NUM_BARS = 20;
-
-    const stopAnalyser = () => {
-      if (animFrameRef.current !== null) {
-        cancelAnimationFrame(animFrameRef.current);
-        animFrameRef.current = null;
-      }
-      setEqualizerBars(new Array(NUM_BARS).fill(0));
-    };
-
-    if (!isPlaying) {
-      stopAnalyser();
-      return;
-    }
+    if (!isPlaying) return;
 
     const audio = audioRef.current;
-    if (!audio) { stopAnalyser(); return; }
+    if (!audio) return;
 
-    // Lazily create AudioContext + analyser once
     if (!audioCtxRef.current) {
       try {
         audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
       } catch (e) {
         console.warn('Web Audio API not supported:', e);
-        stopAnalyser();
         return;
       }
     }
 
     const ctx = audioCtxRef.current;
 
-    // Resume if suspended (browser autoplay policy)
     if (ctx.state === 'suspended') {
       ctx.resume().catch(() => { });
     }
 
-    // Create analyser only once per audio element
     if (!analyserRef.current) {
       try {
         const source = ctx.createMediaElementSource(audio);
         const analyserNode = ctx.createAnalyser();
-        analyserNode.fftSize = 4096; // High resolution FFT Size
+        analyserNode.fftSize = 4096;
         analyserNode.smoothingTimeConstant = 0.85;
         analyserNode.minDecibels = -95;
         analyserNode.maxDecibels = -15;
@@ -896,67 +875,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         analyserRef.current = analyserNode;
         setAnalyser(analyserNode);
       } catch (e) {
-        // CORS or already-connected element — fall back to random
+        // CORS or already-connected element — canvas equalizer handles null analyser
         console.warn('AnalyserNode setup failed (likely CORS on radio stream):', e);
-        equalizerIntervalRef.current = setInterval(() => {
-          setEqualizerBars(prev => prev.map(() => Math.floor(Math.random() * 80) + 10));
-        }, 120);
-        return () => {
-          if (equalizerIntervalRef.current) clearInterval(equalizerIntervalRef.current);
-          setEqualizerBars(new Array(NUM_BARS).fill(0));
-        };
       }
     }
-
-    const analyser = analyserRef.current;
-    const dataArray = new Float32Array(analyser.frequencyBinCount);
-
-    const tick = () => {
-      analyser.getFloatFrequencyData(dataArray);
-
-      // Map frequency bins to 20 bands logarithmically like the broadcaster
-      const maxBin = Math.min(150, dataArray.length);
-      const logIndices = new Array(NUM_BARS + 1);
-      const minLog = Math.log10(1);
-      const maxLog = Math.log10(maxBin || 1);
-      const logRange = maxLog - minLog;
-
-      for (let i = 0; i <= NUM_BARS; i++) {
-        logIndices[i] = Math.round(Math.pow(10, minLog + (i / NUM_BARS) * logRange));
-      }
-
-      const bars = new Array(NUM_BARS);
-      for (let i = 0; i < NUM_BARS; i++) {
-        const startIdx = logIndices[i];
-        const endIdx = Math.max(startIdx + 1, logIndices[i + 1]);
-
-        // Average the db value in the bin range
-        let sum = 0;
-        let count = 0;
-        for (let j = startIdx; j < endIdx && j < dataArray.length; j++) {
-          sum += dataArray[j];
-          count++;
-        }
-        const avgDb = count > 0 ? sum / count : -100;
-
-        // High frequency treble boost (boost = 1.0 + i/20 * 5.0)
-        // Since db scale is logarithmic, amp * boost => db + 20 * log10(boost)
-        const boost = 1.0 + (i / NUM_BARS) * 5.0;
-        const boostedDb = avgDb + (20 * Math.log10(boost));
-
-        // Map decibels (-50dB to -5dB) to level scale (0 to 100)
-        // val = (boostedDb + 50) / 45 * 100
-        const level = Math.max(0, Math.min(100, Math.round(((boostedDb + 50) / 45) * 100)));
-        bars[i] = level;
-      }
-
-      setEqualizerBars(bars);
-      animFrameRef.current = requestAnimationFrame(tick);
-    };
-
-    animFrameRef.current = requestAnimationFrame(tick);
-
-    return () => { stopAnalyser(); };
   }, [isPlaying]);
 
   const handleLimitReached = () => {
@@ -2146,7 +2068,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       playQueue,
       currentQueueIndex,
       showPremiumModal,
-      equalizerBars,
       qualityLevelSetting,
       activeStreamLabel,
       analyser,

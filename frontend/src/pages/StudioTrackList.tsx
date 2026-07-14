@@ -26,7 +26,7 @@ function getStatusDetails(t: {
   return { label: 'Rejected', style: 'bg-rose-500/10 border-rose-500/20 text-rose-455', desc: 'Failed spectral cutoff checks' };
 }
 
-export const StudioTrackList: React.FC = () => {
+export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> = ({ onViewReport }) => {
   const { token, isStaffInAdminMode, isSwitchingMode } = useAuth();
   const { playTrack, currentTrack, isPlaying } = useAudio();
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -213,17 +213,20 @@ export const StudioTrackList: React.FC = () => {
                     </td>
                     <td className="p-5">
                       {t.quality_score !== null ? (
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${
+                        <button
+                          type="button"
+                          onClick={() => onViewReport?.(t)}
+                          className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition hover:underline cursor-pointer ${
                             t.quality_score >= 86
-                              ? 'bg-emerald-500/10 text-emerald-400'
+                              ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
                               : t.quality_score >= 71
-                                ? 'bg-cyan-500/10 text-cyan-400'
-                                : 'bg-rose-500/10 text-rose-400'
+                                ? 'bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20'
+                                : 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/20'
                           }`}
+                          title="View spectral analysis report"
                         >
                           {t.quality_score}%
-                        </span>
+                        </button>
                       ) : (
                         <span className="text-slate-600">—</span>
                       )}
@@ -315,17 +318,20 @@ export const StudioTrackList: React.FC = () => {
 
                 <div className="flex flex-wrap items-center gap-2">
                   {t.quality_score !== null ? (
-                    <span
-                      className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${
+                    <button
+                      type="button"
+                      onClick={() => onViewReport?.(t)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition hover:underline cursor-pointer ${
                         t.quality_score >= 86
-                          ? 'bg-emerald-500/10 text-emerald-400'
+                          ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
                           : t.quality_score >= 71
-                            ? 'bg-cyan-500/10 text-cyan-400'
-                            : 'bg-rose-500/10 text-rose-400'
+                            ? 'bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20'
+                            : 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/20'
                       }`}
+                      title="View spectral analysis report"
                     >
                       {t.quality_score}%
-                    </span>
+                    </button>
                   ) : (
                     <span className="text-[10px] text-slate-600">Score: —</span>
                   )}
