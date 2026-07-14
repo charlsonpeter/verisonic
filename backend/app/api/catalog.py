@@ -18,7 +18,7 @@ def _serialize_album(album: Album, db: Session, track_count: Optional[int] = Non
     if track_count is None:
         track_count = (
             db.query(func.count(Track.id))
-            .filter(Track.album_id == album.id, Track.approved == True)
+            .filter(Track.album_id == album.id, Track.approved == True, Track.hls_playlist_path.isnot(None))
             .scalar()
             or 0
         )
@@ -68,7 +68,7 @@ def list_albums(
     for album in albums:
         approved_count = (
             db.query(func.count(Track.id))
-            .filter(Track.album_id == album.id, Track.approved == True)
+            .filter(Track.album_id == album.id, Track.approved == True, Track.hls_playlist_path.isnot(None))
             .scalar()
             or 0
         )
@@ -97,7 +97,7 @@ def get_album_tracks(
     tracks = (
         db.query(Track)
         .options(joinedload(Track.artist), joinedload(Track.album), joinedload(Track.genres))
-        .filter(Track.album_id == album_id, Track.approved == True)
+        .filter(Track.album_id == album_id, Track.approved == True, Track.hls_playlist_path.isnot(None))
         .order_by(Track.title.asc())
         .all()
     )

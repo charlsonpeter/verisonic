@@ -7,6 +7,7 @@ import Swal from 'sweetalert2';
 import { CardGridSkeleton } from '../components/shared/skeleton';
 import { LicenceDocumentUpload } from '../components/shared/LicenceDocumentUpload';
 import { CoverImageUpload } from '../components/shared/CoverImageUpload';
+import { ListSearchInput } from '../components/shared/ListSearchInput';
 
 interface StationProfileProps {
   onNavigate?: (tab: string) => void;
@@ -383,13 +384,11 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
         <div className="space-y-6">
           {/* Filters Bar */}
           <div className="flex flex-col sm:flex-row gap-4 bg-slate-900/10 border border-white/3 p-4 rounded-2xl shadow-inner font-sans text-xs items-center justify-between">
-            <div className="flex flex-1 w-full gap-3">
-              <input
-                type="text"
-                placeholder="Search stations by name or category..."
+            <div className="flex w-full gap-3">
+              <ListSearchInput
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="flex-1 max-w-md bg-slate-950 border border-white/5 rounded-xl p-3 outline-none focus:border-rose-500 text-slate-200 transition text-xs"
+                onChange={setSearchQuery}
+                placeholder="Search stations by name or category..."
               />
             </div>
             <div className="flex gap-2 items-center w-full sm:w-auto justify-end">

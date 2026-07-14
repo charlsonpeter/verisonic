@@ -94,7 +94,7 @@ def _related_artists(
     all_tracks = (
         db.query(Track)
         .options(joinedload(Track.album))
-        .filter(Track.approved == True)
+        .filter(Track.approved == True, Track.hls_playlist_path.isnot(None))
         .all()
     )
     for track in all_tracks:
@@ -130,7 +130,11 @@ def list_public_studios(db: Session = Depends(get_db)):
     for studio in studios:
         track_count = (
             db.query(func.count(Track.id))
-            .filter(Track.artist_id == studio.id, Track.approved == True)
+            .filter(
+                Track.artist_id == studio.id,
+                Track.approved == True,
+                Track.hls_playlist_path.isnot(None),
+            )
             .scalar()
             or 0
         )
@@ -151,7 +155,7 @@ def get_artist_detail(
     tracks_db = (
         db.query(Track)
         .options(joinedload(Track.artist), joinedload(Track.album), joinedload(Track.genres))
-        .filter(Track.approved == True)
+        .filter(Track.approved == True, Track.hls_playlist_path.isnot(None))
         .all()
     )
     matched = [t for t in tracks_db if track_belongs_to_artist(t, decoded_name)]

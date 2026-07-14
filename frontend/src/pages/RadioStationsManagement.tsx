@@ -7,6 +7,7 @@ import { TableSkeleton } from '../components/shared/skeleton';
 import { LicenceDocumentLink } from '../components/shared/LicenceDocumentUpload';
 import { useLazyList, DEFAULT_LAZY_PAGE_SIZE } from '../hooks/useLazyList';
 import { LazyListSentinel } from '../components/shared/LazyListSentinel';
+import { ListSearchInput } from '../components/shared/ListSearchInput';
 
 interface RadioStationRow {
   id: number;
@@ -267,12 +268,10 @@ export const RadioStationsManagement: React.FC = () => {
       {viewMode === 'list' && (
         <div className="space-y-6">
           <div className="flex flex-col sm:flex-row gap-4 bg-slate-900/10 border border-white/3 p-4 rounded-2xl shadow-inner text-xs items-center justify-between">
-            <input
-              type="text"
-              placeholder="Search by station, owner, licence, or category..."
+            <ListSearchInput
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="flex-1 max-w-md bg-slate-950 border border-white/5 rounded-xl p-3 outline-none focus:border-rose-500 text-slate-200 transition text-xs"
+              onChange={setSearchQuery}
+              placeholder="Search by station, owner, licence, or category..."
             />
             <div className="flex gap-2 items-center w-full sm:w-auto justify-end">
               <span className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Filter Status:</span>

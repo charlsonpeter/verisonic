@@ -194,6 +194,10 @@ class TrackResponse(BaseModel):
     composer: Optional[str] = None
     lyricist: Optional[str] = None
     year: Optional[int] = None
+    track_number: Optional[int] = None
+    album_artist: Optional[str] = None
+    comment: Optional[str] = None
+    copyright: Optional[str] = None
     language: Optional[str] = None
     genres: Optional[List[str]] = []
     created_at: datetime

@@ -1,6 +1,9 @@
 import React from 'react';
 import { Search } from 'lucide-react';
 
+/** Match HeaderSearch responsive width */
+export const SEARCH_INPUT_WIDTH_CLASS = 'w-36 md:w-44 lg:w-56 xl:w-64';
+
 export const ListSearchInput = ({
   value,
   onChange,
@@ -12,7 +15,7 @@ export const ListSearchInput = ({
   placeholder?: string;
   className?: string;
 }) => (
-  <div className={`relative w-[28rem] max-w-full shrink-0 ${className}`}>
+  <div className={`relative ${SEARCH_INPUT_WIDTH_CLASS} max-w-full shrink-0 ${className}`}>
     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500 pointer-events-none" />
     <input
       type="search"

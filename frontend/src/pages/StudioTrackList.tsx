@@ -75,25 +75,44 @@ export const StudioTrackList: React.FC = () => {
         const data = JSON.parse(event.data);
         if (data.type !== 'status_updates') return;
 
-        const updates = data.tracks;
+        const updates = data.tracks as Array<{
+          track_id: number;
+          status: string;
+          quality_score: number | null;
+          quality_level: string | null;
+          approved: boolean;
+          has_hls?: boolean;
+        }>;
         tracksList.setItems((prev) => {
-          const hasNew = updates.some((u: { track_id: number }) =>
+          const hasNew = updates.some((u) =>
             !prev.some((t) => t.id === u.track_id)
           );
           if (hasNew) {
             setTimeout(() => tracksList.reload(), 0);
           }
           return prev.map((track) => {
-            const update = updates.find((u: { track_id: number }) => u.track_id === track.id);
+            const update = updates.find((u) => u.track_id === track.id);
             if (!update) return track;
-            return {
+            const next = {
               ...track,
               quality_score: update.quality_score,
               quality_level: update.quality_level,
               approved: update.approved,
+              hls_playlist_path: track.hls_playlist_path,
             };
+            if (update.status === 'completed' || update.has_hls) {
+              next.hls_playlist_path = track.hls_playlist_path || 'ready';
+            }
+            return next;
           });
         });
+
+        const hasTerminal = updates.some((u) =>
+          u.status === 'completed' || u.status === 'rejected' || u.status === 'failed'
+        );
+        if (hasTerminal) {
+          void tracksList.reload();
+        }
       } catch {
         /* ignore malformed messages */
       }

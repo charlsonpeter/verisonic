@@ -22,6 +22,7 @@ import {
   rankSearchResults,
   trackSearchFields,
 } from '../../utils/searchMatch';
+import { SEARCH_INPUT_WIDTH_CLASS } from '../shared/ListSearchInput';
 
 interface HeaderSearchProps {
   searchQuery: string;
@@ -309,7 +310,7 @@ export const HeaderSearch: React.FC<HeaderSearchProps> = ({
 
   return (
     <div ref={containerRef} className="relative hidden md:block flex-shrink-0">
-      <div className="flex items-center gap-2 bg-slate-900/40 border border-white/5 rounded-xl px-2.5 lg:px-3 py-1.5 hover:border-slate-800 transition duration-300 w-36 md:w-44 lg:w-56 xl:w-64">
+      <div className={`flex items-center gap-2 bg-slate-900/40 border border-white/5 rounded-xl px-2.5 lg:px-3 py-1.5 hover:border-slate-800 transition duration-300 ${SEARCH_INPUT_WIDTH_CLASS}`}>
         <Search className="w-4 h-4 text-slate-500 flex-shrink-0" />
         <input
           type="text"

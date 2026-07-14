@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import os
 import numpy as np
@@ -7,6 +8,53 @@ import matplotlib
 matplotlib.use('Agg') # Headless mode for matplotlib
 import matplotlib.pyplot as plt
 import librosa.display
+
+
+def _build_tag_map(*tag_dicts) -> dict:
+    merged: dict[str, str] = {}
+    for tags in tag_dicts:
+        for key, value in (tags or {}).items():
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                merged[key.lower()] = text
+    return merged
+
+
+def _read_tag(tag_map: dict, *keys: str) -> str:
+    for key in keys:
+        value = tag_map.get(key.lower())
+        if value:
+            return value
+    return ""
+
+
+def parse_track_number(raw: str) -> int | None:
+    if not raw:
+        return None
+    match = re.search(r"\d+", raw.strip())
+    if not match:
+        return None
+    try:
+        return int(match.group(0))
+    except ValueError:
+        return None
+
+
+def parse_genre_list(raw: str) -> list[str]:
+    if not raw or not raw.strip():
+        return []
+    genres: list[str] = []
+    seen: set[str] = set()
+    for part in re.split(r"[/;,|]", raw):
+        name = part.strip()
+        key = name.lower()
+        if name and key not in seen:
+            seen.add(key)
+            genres.append(name)
+    return genres
+
 
 def extract_metadata(file_path: str) -> dict:
     """
@@ -70,53 +118,36 @@ def extract_metadata(file_path: str) -> dict:
         # but 16-bit is the typical PCM output depth.
         bit_depth = 16
         
-    # Extract metadata tags if present
-    tags = fmt.get("tags", {}) or {}
-    stream_tags = audio_stream.get("tags", {}) or {}
-    title = (
-        tags.get("title") or tags.get("TITLE") or tags.get("Title") or
-        stream_tags.get("title") or stream_tags.get("TITLE") or stream_tags.get("Title") or ""
+    # Extract descriptive metadata tags if present
+    tag_map = _build_tag_map(fmt.get("tags", {}), audio_stream.get("tags", {}))
+    title = _read_tag(tag_map, "title")
+    artist = _read_tag(tag_map, "artist")
+    album = _read_tag(tag_map, "album")
+    composer = _read_tag(tag_map, "composer")
+    lyricist = _read_tag(tag_map, "lyricist")
+    lyrics = _read_tag(
+        tag_map,
+        "lyrics",
+        "unsynced lyrics",
+        "unsyncedlyrics",
+        "uslt",
     )
-    artist = (
-        tags.get("artist") or tags.get("ARTIST") or tags.get("Artist") or
-        stream_tags.get("artist") or stream_tags.get("ARTIST") or stream_tags.get("Artist") or ""
-    )
-    album = (
-        tags.get("album") or tags.get("ALBUM") or tags.get("Album") or
-        stream_tags.get("album") or stream_tags.get("ALBUM") or stream_tags.get("Album") or ""
-    )
-    composer = (
-        tags.get("composer") or tags.get("COMPOSER") or tags.get("Composer") or
-        stream_tags.get("composer") or stream_tags.get("COMPOSER") or stream_tags.get("Composer") or ""
-    )
-    lyricist = (
-        tags.get("lyricist") or tags.get("LYRICIST") or tags.get("Lyricist") or
-        stream_tags.get("lyricist") or stream_tags.get("LYRICIST") or stream_tags.get("Lyricist") or ""
-    )
-    lyrics = (
-        tags.get("lyrics") or tags.get("LYRICS") or tags.get("Lyrics") or
-        tags.get("unsynced lyrics") or tags.get("UNSYNCED LYRICS") or tags.get("Unsynced Lyrics") or
-        tags.get("unsyncedlyrics") or tags.get("UNSYNCEDLYRICS") or tags.get("Unsyncedlyrics") or
-        tags.get("USLT") or tags.get("uslt") or
-        stream_tags.get("lyrics") or stream_tags.get("LYRICS") or stream_tags.get("Lyrics") or
-        stream_tags.get("unsynced lyrics") or stream_tags.get("UNSYNCED LYRICS") or stream_tags.get("unsyncedlyrics") or ""
-    )
-    year_str = (
-        tags.get("date") or tags.get("DATE") or tags.get("year") or tags.get("YEAR") or
-        stream_tags.get("date") or stream_tags.get("DATE") or stream_tags.get("year") or stream_tags.get("YEAR") or ""
-    )
-    
-    # Parse 4 digit year from date/year tag
+    album_artist = _read_tag(tag_map, "album_artist", "albumartist", "album artist", "band")
+    copyright_text = _read_tag(tag_map, "copyright", "©cpy", "cpy")
+    comment = _read_tag(tag_map, "comment", "description", "comments")
+    genre_raw = _read_tag(tag_map, "genre", "genres")
+    track_number_raw = _read_tag(tag_map, "track", "tracknumber", "track_number", "trck")
+    year_str = _read_tag(tag_map, "date", "year", "originaldate", "originalyear")
+
     year = None
     if year_str:
-        import re
         match = re.search(r"\d{4}", year_str)
         if match:
             try:
                 year = int(match.group(0))
-            except:
+            except ValueError:
                 pass
-        
+
     return {
         "codec": codec,
         "duration": duration,
@@ -130,7 +161,13 @@ def extract_metadata(file_path: str) -> dict:
         "composer": composer,
         "lyricist": lyricist,
         "year": year,
-        "lyrics": lyrics
+        "lyrics": lyrics,
+        "album_artist": album_artist,
+        "copyright": copyright_text,
+        "comment": comment,
+        "genre": genre_raw,
+        "genres": parse_genre_list(genre_raw),
+        "track_number": parse_track_number(track_number_raw),
     }
 
 def analyze_audio_spectral(file_path: str, output_img_path: str) -> dict:

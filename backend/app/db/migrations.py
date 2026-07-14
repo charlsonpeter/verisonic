@@ -280,6 +280,12 @@ MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS ix_daily_settlement_credits_date
             ON daily_settlement_credits (settlement_date);
     """),
+    ("023_track_metadata_tags", """
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS track_number INTEGER;
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS album_artist VARCHAR;
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS comment VARCHAR;
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS copyright_text VARCHAR;
+    """),
 ]
 
 

@@ -12,7 +12,7 @@ router = APIRouter(prefix="/playlist", tags=["playlist"])
 
 def playlist_tracks_ordered(playlist) -> list:
     ordered = sorted(
-        [pt for pt in playlist.playlist_tracks if pt.track and pt.track.approved],
+        [pt for pt in playlist.playlist_tracks if pt.track and pt.track.approved and pt.track.hls_playlist_path],
         key=lambda pt: pt.position,
     )
     return ordered
@@ -90,8 +90,8 @@ def add_track_to_playlist(
     track = db.query(Track).filter(Track.id == track_in.track_id).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
-    if not track.approved:
-        raise HTTPException(status_code=400, detail="Cannot add unapproved track to playlist")
+    if not track.approved or not track.hls_playlist_path:
+        raise HTTPException(status_code=400, detail="Cannot add track that is not ready for streaming")
 
     existing = db.query(PlaylistTrack).filter(
         PlaylistTrack.playlist_id == playlist.id,
@@ -130,7 +130,7 @@ def reorder_playlist_tracks(
     pts_by_track = {
         pt.track_id: pt
         for pt in playlist.playlist_tracks
-        if pt.track and pt.track.approved
+        if pt.track and pt.track.approved and pt.track.hls_playlist_path
     }
     if set(reorder_in.track_ids) != set(pts_by_track.keys()):
         raise HTTPException(status_code=400, detail="Track list does not match playlist contents")

@@ -147,6 +147,10 @@ class Track(Base):
     composer = Column(String, nullable=True)
     lyricist = Column(String, nullable=True)
     year = Column(Integer, nullable=True)
+    track_number = Column(Integer, nullable=True)
+    album_artist = Column(String, nullable=True)
+    comment = Column(String, nullable=True)
+    copyright_text = Column(String, nullable=True)
     artist_name_override = Column(String, nullable=True)
     language = Column(String, nullable=True)
     

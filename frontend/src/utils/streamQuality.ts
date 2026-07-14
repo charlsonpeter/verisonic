@@ -99,7 +99,8 @@ export function formatMasterStreamLabel(
 }
 
 export function getOwnerStreamCandidates(track: StreamQualityTrack): string[] {
-  if (track.id) {
+  // Prefer authenticated master stream when the original file exists.
+  if (track.id && track.original_file_path) {
     return [`/api/music/${track.id}/stream/master`];
   }
   return uniquePaths([
@@ -112,9 +113,15 @@ export function getOwnerStreamCandidates(track: StreamQualityTrack): string[] {
   ]);
 }
 
+/** True when an original master or any stream asset is available for admin/studio preview. */
 export function trackHasPlayableStream(track: StreamQualityTrack): boolean {
-  return getOwnerStreamCandidates(track).length > 0 || !!(
-    track.hls_playlist_path || track.mp3_320_path || track.aac_256_path || track.aac_128_path || track.stream_url
+  return !!(
+    track.original_file_path ||
+    track.hls_playlist_path ||
+    track.mp3_320_path ||
+    track.aac_256_path ||
+    track.aac_128_path ||
+    track.stream_url
   );
 }
 
@@ -130,7 +137,9 @@ export function getStreamCandidatesForQuality(
   switch (quality) {
     case 'lossless':
     case 'hires':
-      return track.id ? [`/api/music/${track.id}/stream/master`] : [];
+      return track.id && track.original_file_path
+        ? [`/api/music/${track.id}/stream/master`]
+        : [];
     case 'high':
       return uniquePaths([
         track.mp3_320_path,

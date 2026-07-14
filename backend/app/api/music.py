@@ -30,7 +30,7 @@ from app.core.premium import user_has_premium
 from app.core.config import settings
 from app.core.security import ALGORITHM, create_stream_ticket, validate_stream_ticket
 from app.core.upload_validation import validate_audio_upload, validate_cover_upload
-from app.core.ws_auth import extract_ws_token, resolve_ws_user
+from app.core.ws_auth import accept_authenticated_websocket, extract_ws_token, resolve_ws_user
 from app.models import User
 
 router = APIRouter(prefix="/music", tags=["music"])
@@ -43,6 +43,38 @@ def normalize_optional_string(val: Optional[str]) -> Optional[str]:
     if stripped == "" or stripped.lower() in ("null", "none"):
         return None
     return stripped
+
+
+def attach_genres_to_track(db: Session, track: Track, genre_names: list[str]) -> None:
+    if not genre_names:
+        return
+    for genre_name in genre_names:
+        g_model = db.query(Genre).filter(Genre.name == genre_name).first()
+        if not g_model:
+            g_model = Genre(name=genre_name)
+            db.add(g_model)
+            db.commit()
+            db.refresh(g_model)
+        track.genres.append(g_model)
+    db.commit()
+
+
+def _metadata_response_from_extract(meta: dict, filename: str) -> dict:
+    return {
+        "title": meta.get("title") or os.path.splitext(filename)[0],
+        "artist": meta.get("artist") or "",
+        "album": meta.get("album") or "",
+        "composer": meta.get("composer") or "",
+        "lyricist": meta.get("lyricist") or "",
+        "year": meta.get("year") or "",
+        "lyrics": meta.get("lyrics") or "",
+        "track_number": meta.get("track_number"),
+        "genres": meta.get("genres") or [],
+        "genre": meta.get("genre") or "",
+        "comment": meta.get("comment") or "",
+        "album_artist": meta.get("album_artist") or "",
+        "copyright": meta.get("copyright") or "",
+    }
 
 def _user_can_manage_track(user: User, track: Track, db: Session) -> bool:
     if user.role == "admin":
@@ -80,6 +112,14 @@ def _radio_admin_blocked_from_music(user) -> bool:
         return False
     real_role = getattr(user, "_real_role", None) or user.role
     return real_role == "radio_admin" and user.role == "radio_admin"
+
+
+def _public_ready_track_filters():
+    """Public feeds: approved + HLS ready (streamable)."""
+    return (
+        Track.approved == True,
+        Track.hls_playlist_path.isnot(None),
+    )
 
 
 def _resolve_quality_score(
@@ -210,6 +250,10 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
         "composer": track.composer,
         "lyricist": track.lyricist,
         "year": track.year,
+        "track_number": track.track_number,
+        "album_artist": track.album_artist,
+        "comment": track.comment,
+        "copyright": track.copyright_text,
         "language": track.language,
         "genres": [g.name for g in track.genres] if track.genres else [],
         "created_at": track.created_at,
@@ -289,27 +333,10 @@ async def parse_metadata(
         from app.services.audio import extract_metadata
         meta = extract_metadata(temp_file_path)
         
-        return {
-            "title": meta.get("title") or os.path.splitext(filename)[0],
-            "artist": meta.get("artist") or "",
-            "album": meta.get("album") or "",
-            "composer": meta.get("composer") or "",
-            "lyricist": meta.get("lyricist") or "",
-            "year": meta.get("year") or "",
-            "lyrics": meta.get("lyrics") or ""
-        }
+        return _metadata_response_from_extract(meta, filename)
     except Exception as e:
         print(f"Error parsing metadata: {e}")
-        # Fallback to filename-based title
-        return {
-            "title": os.path.splitext(filename)[0],
-            "artist": "",
-            "album": "",
-            "composer": "",
-            "lyricist": "",
-            "year": "",
-            "lyrics": ""
-        }
+        return _metadata_response_from_extract({}, filename)
     finally:
         if os.path.exists(temp_file_path):
             try:
@@ -380,6 +407,11 @@ async def upload_music(
     extracted_lyricist = None
     extracted_year = None
     extracted_lyrics = None
+    extracted_track_number = None
+    extracted_album_artist = None
+    extracted_comment = None
+    extracted_copyright = None
+    extracted_genres: list[str] = []
     try:
         from app.services.audio import extract_metadata
         meta = extract_metadata(temp_file_path)
@@ -391,6 +423,11 @@ async def upload_music(
         extracted_lyricist = meta.get("lyricist")
         extracted_year = meta.get("year")
         extracted_lyrics = meta.get("lyrics")
+        extracted_track_number = meta.get("track_number")
+        extracted_album_artist = meta.get("album_artist")
+        extracted_comment = meta.get("comment")
+        extracted_copyright = meta.get("copyright")
+        extracted_genres = meta.get("genres") or []
     except Exception as e:
         print(f"Error extracting metadata tags: {e}")
         
@@ -421,25 +458,19 @@ async def upload_music(
         lyricist=lyricist if lyricist else (extracted_lyricist if extracted_lyricist else None),
         year=year if year is not None else (extracted_year if extracted_year is not None else None),
         lyrics=lyrics if lyrics else (extracted_lyrics if extracted_lyrics else None),
-        language=language
+        language=language,
+        track_number=extracted_track_number,
+        album_artist=extracted_album_artist,
+        comment=extracted_comment,
+        copyright_text=extracted_copyright,
     )
     db.add(track)
     db.commit()
     db.refresh(track)
     
-    # Process genres
-    if genres:
-        genre_list = [g.strip() for g in genres.split(",") if g.strip()]
-        for genre_name in genre_list:
-            g_model = db.query(Genre).filter(Genre.name == genre_name).first()
-            if not g_model:
-                g_model = Genre(name=genre_name)
-                db.add(g_model)
-                db.commit()
-                db.refresh(g_model)
-            track.genres.append(g_model)
-        db.commit()
-        
+    genre_names = [g.strip() for g in genres.split(",") if g.strip()] if genres else extracted_genres
+    attach_genres_to_track(db, track, genre_names)
+    
     # Try to extract embedded cover image from audio track
     try:
         from app.services.audio import extract_embedded_cover
@@ -597,7 +628,10 @@ def list_tracks(
     query = db.query(Track)
     
     if approved_only:
-        query = query.join(Artist, Track.artist_id == Artist.id).filter(Track.approved == True, Artist.is_active == True)
+        query = query.join(Artist, Track.artist_id == Artist.id).filter(
+            *_public_ready_track_filters(),
+            Artist.is_active == True,
+        )
         
     if search:
         search_pattern = f"%{search}%"
@@ -729,7 +763,7 @@ def get_listening_history(
         if row.track_id in seen_track_ids:
             continue
         seen_track_ids.add(row.track_id)
-        if not row.track or not row.track.approved:
+        if not row.track or not row.track.approved or not row.track.hls_playlist_path:
             continue
         if skipped < offset:
             skipped += 1
@@ -866,8 +900,9 @@ def get_track(
             artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
             is_owner_or_admin = bool(artist and track.artist_id == artist.id)
 
-    if not track.approved and not is_owner_or_admin:
-        raise HTTPException(status_code=404, detail="Track not found")
+    if not is_owner_or_admin:
+        if not track.approved or not track.hls_playlist_path:
+            raise HTTPException(status_code=404, detail="Track not found")
         
     if track.artist and not track.artist.is_active and (not current_user or current_user.role != "admin"):
         raise HTTPException(status_code=403, detail="Track is currently unavailable (Studio is disabled)")
@@ -998,8 +1033,18 @@ def log_track_play(
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
 
-    if not track.approved:
+    is_owner_or_admin = False
+    if current_user.role == "admin":
+        is_owner_or_admin = True
+    else:
+        artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+        is_owner_or_admin = bool(artist and track.artist_id == artist.id)
+
+    ready = bool(track.approved and track.hls_playlist_path)
+    if not ready and not is_owner_or_admin:
         raise HTTPException(status_code=403, detail="Track is not approved for playback")
+    if not ready:
+        return {"message": "Preview play (not ready for public logging)"}
         
     # 1. Log play history
     history = ListeningHistory(user_id=current_user.id, track_id=track.id)
@@ -1037,8 +1082,19 @@ def report_listen_progress(
     track = db.query(Track).filter(Track.id == id).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
-    if not track.approved:
+
+    is_owner_or_admin = False
+    if current_user.role == "admin":
+        is_owner_or_admin = True
+    else:
+        artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+        is_owner_or_admin = bool(artist and track.artist_id == artist.id)
+
+    ready = bool(track.approved and track.hls_playlist_path)
+    if not ready and not is_owner_or_admin:
         raise HTTPException(status_code=403, detail="Track is not approved for playback")
+    if not ready:
+        return ListenProgressResponse(credited=False, credit_paise=None)
 
     from app.services.wallet_service import process_track_listen_progress
 
@@ -1068,8 +1124,8 @@ async def websocket_tracks_status(
         await websocket.close(code=1008, reason="Forbidden")
         return
 
-    await websocket.accept()
-        
+    await accept_authenticated_websocket(websocket)
+
     monitored_ids = set()
     last_states = {} # track_id -> status
     
@@ -1116,7 +1172,8 @@ async def websocket_tracks_status(
                             "quality_score": t.quality_score,
                             "quality_level": t.quality_level,
                             "approved": t.approved,
-                            "title": t.title
+                            "has_hls": t.hls_playlist_path is not None,
+                            "title": t.title,
                         }
                         
                         prev_status = last_states.get(t.id)
@@ -1161,7 +1218,7 @@ async def websocket_analysis(websocket: WebSocket, track_id: int, token: Optiona
     finally:
         db.close()
 
-    await websocket.accept()
+    await accept_authenticated_websocket(websocket)
 
     try:
         while True:
@@ -1224,6 +1281,10 @@ async def update_track(
     composer: Optional[str] = Form(None),
     lyricist: Optional[str] = Form(None),
     year: Optional[str] = Form(None),
+    track_number: Optional[str] = Form(None),
+    album_artist: Optional[str] = Form(None),
+    comment: Optional[str] = Form(None),
+    copyright: Optional[str] = Form(None),
     language: Optional[str] = Form(None),
     genres: Optional[str] = Form(None),
     lyrics: Optional[str] = Form(None),
@@ -1276,6 +1337,25 @@ async def update_track(
                 track.year = int(year_norm)
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid year format. Must be an integer.")
+
+    if "track_number" in form_data:
+        track_number_norm = normalize_optional_string(track_number)
+        if track_number_norm is None:
+            track.track_number = None
+        else:
+            try:
+                track.track_number = int(track_number_norm)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid track number format. Must be an integer.")
+
+    if "album_artist" in form_data:
+        track.album_artist = normalize_optional_string(album_artist)
+
+    if "comment" in form_data:
+        track.comment = normalize_optional_string(comment)
+
+    if "copyright" in form_data:
+        track.copyright_text = normalize_optional_string(copyright)
                 
     if "language" in form_data:
         track.language = normalize_optional_string(language)
@@ -1297,14 +1377,7 @@ async def update_track(
         track.genres = []
         if genres is not None:
             genre_list = [g.strip() for g in genres.split(",") if g.strip()]
-            for genre_name in genre_list:
-                g_model = db.query(Genre).filter(Genre.name == genre_name).first()
-                if not g_model:
-                    g_model = Genre(name=genre_name)
-                    db.add(g_model)
-                    db.commit()
-                    db.refresh(g_model)
-                track.genres.append(g_model)
+            attach_genres_to_track(db, track, genre_list)
             
     if cover_image is not None and cover_image.filename:
         ext = await validate_cover_upload(cover_image)

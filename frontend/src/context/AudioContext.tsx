@@ -1025,7 +1025,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // Only re-fetch metadata for real music library tracks, not virtual live-radio tracks
     if (!isRadio) {
       try {
-        const res = await fetch(`${API_URL}/music/${track.id}`);
+        const res = await fetch(`${API_URL}/music/${track.id}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
         if (res.ok) {
           trackToPlay = await res.json();
         }
@@ -1042,18 +1044,20 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       role === 'studio_admin' &&
       !!currentUser?.artist_profile?.id &&
       trackToPlay.artist_id === currentUser.artist_profile.id;
+    const isPlatformAdminPreview = !isRadio && role === 'admin';
+    const canPlayOriginalMaster = isOwnUpload || isPlatformAdminPreview;
 
     if (isStaffInAdminMode && role === 'studio_admin' && !isRadio && !isOwnUpload) {
       console.warn("Studio admins in admin mode can only play tracks they uploaded.");
       return;
     }
 
-    playingOwnUploadRef.current = isOwnUpload;
+    playingOwnUploadRef.current = canPlayOriginalMaster;
 
     // Determine stream candidates from quality preference and subscription tier
     const candidates = isRadio
       ? [trackToPlay.stream_url || trackToPlay.hls_playlist_path || ''].filter(Boolean)
-      : isOwnUpload
+      : canPlayOriginalMaster
         ? getOwnerStreamCandidates(trackToPlay)
         : getStreamCandidatesForQuality(
             trackToPlay,
@@ -1203,7 +1207,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
         if (autoPlay) {
           const position = audioRef.current?.currentTime ?? seekAfterLoad ?? 0;
-          if (isPreviewBlockedAt(position, isRadio, isOwnUpload)) {
+          if (isPreviewBlockedAt(position, isRadio, canPlayOriginalMaster)) {
             userPausedRef.current = true;
             isPlayingRef.current = false;
             setIsPlaying(false);
