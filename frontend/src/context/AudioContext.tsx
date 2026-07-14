@@ -40,6 +40,7 @@ export interface Track {
   artist_name: string;
   artist_name_override?: string;
   album_title?: string;
+  album_artist?: string;
   cover_art_url?: string;
   stream_url?: string;
   hls_playlist_path?: string;
@@ -54,6 +55,8 @@ export interface Track {
   duration: number;
   sample_rate?: number;
   bit_depth?: number;
+  bitrate?: number;
+  channels?: number;
   quality_score?: number;
   quality_level?: string;
   file_format?: string;
@@ -62,7 +65,10 @@ export interface Track {
   composer?: string;
   lyricist?: string;
   year?: number;
+  track_number?: number;
   language?: string;
+  comment?: string;
+  copyright?: string;
   genres?: string[];
 }
 

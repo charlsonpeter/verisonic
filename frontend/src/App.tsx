@@ -321,8 +321,41 @@ function DashboardContent() {
 
   const handleDetailsView = (track: any) => {
     setSelectedDetailsTrack(track);
+    if (track?.id != null) {
+      sessionStorage.setItem('selectedDetailsTrackId', String(track.id));
+    }
     setActiveTab('details');
   };
+
+  // Restore track details after refresh / direct #details hash (track lives in React state only)
+  useEffect(() => {
+    if (activeTab !== 'details') return;
+    if (selectedDetailsTrack?.id) {
+      sessionStorage.setItem('selectedDetailsTrackId', String(selectedDetailsTrack.id));
+      return;
+    }
+
+    const savedId = sessionStorage.getItem('selectedDetailsTrackId');
+    if (!savedId) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/music/${savedId}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
+        if (!res.ok) throw new Error('Track not found');
+        const data = await res.json();
+        if (!cancelled) setSelectedDetailsTrack(data);
+      } catch {
+        if (!cancelled) sessionStorage.removeItem('selectedDetailsTrackId');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, selectedDetailsTrack?.id, token]);
 
   // Helper circle chart render
   const renderCircularProgress = (score: number) => {

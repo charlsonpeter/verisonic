@@ -19,6 +19,14 @@ function formatDuration(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+function normalizeGenreTags(genres?: Array<string | { name?: string }> | null): string[] {
+  if (!genres?.length) return [];
+  return genres
+    .map((g) => (typeof g === 'string' ? g : g?.name || ''))
+    .map((g) => g.trim())
+    .filter(Boolean);
+}
+
 function buildTrackMetadata(track: Track): { label: string; value: string }[] {
   const rows: { label: string; value: string }[] = [];
 
@@ -30,17 +38,17 @@ function buildTrackMetadata(track: Track): { label: string; value: string }[] {
   };
 
   add('Album', track.album_title);
+  add('Album Artist', track.album_artist);
+  add('Track #', track.track_number);
   add('Year', track.year);
   add('Composer', track.composer);
   add('Lyricist', track.lyricist);
   add('Language', track.language);
+  add('Copyright', track.copyright);
+  add('Comment', track.comment);
 
   if (track.duration && track.duration > 0) {
     rows.push({ label: 'Duration', value: formatDuration(track.duration) });
-  }
-
-  if (track.genres?.length) {
-    rows.push({ label: 'Genres', value: track.genres.join(', ') });
   }
 
   return rows;
@@ -48,7 +56,7 @@ function buildTrackMetadata(track: Track): { label: string; value: string }[] {
 
 export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate, onArtistClick }) => {
   const { playTrack, favorites, toggleFavorite } = useAudio();
-  const { currentUser, token } = useAuth();
+  const { token } = useAuth();
 
   interface CommentItem {
     id: number;
@@ -57,20 +65,61 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate, o
     created_at: string;
   }
 
+  const [resolvedTrack, setResolvedTrack] = useState<Track | null>(track);
+  const [isLoadingTrack, setIsLoadingTrack] = useState(false);
   const [comments, setComments] = useState<CommentItem[]>([]);
   const [isLoadingComments, setIsLoadingComments] = useState(false);
   const [isPostingComment, setIsPostingComment] = useState(false);
   const [newComment, setNewComment] = useState('');
 
   useEffect(() => {
-    if (!track?.id) {
+    if (track) {
+      setResolvedTrack(track);
+      setIsLoadingTrack(false);
+      return;
+    }
+
+    const savedId = sessionStorage.getItem('selectedDetailsTrackId');
+    if (!savedId) {
+      setResolvedTrack(null);
+      setIsLoadingTrack(false);
+      return;
+    }
+
+    let cancelled = false;
+    setIsLoadingTrack(true);
+    (async () => {
+      try {
+        const res = await fetch(`/api/music/${savedId}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
+        if (!res.ok) throw new Error('not found');
+        const data = await res.json();
+        if (!cancelled) setResolvedTrack(data);
+      } catch {
+        if (!cancelled) {
+          sessionStorage.removeItem('selectedDetailsTrackId');
+          setResolvedTrack(null);
+        }
+      } finally {
+        if (!cancelled) setIsLoadingTrack(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [track, token]);
+
+  useEffect(() => {
+    if (!resolvedTrack?.id) {
       setComments([]);
       return;
     }
     const loadComments = async () => {
       setIsLoadingComments(true);
       try {
-        const res = await fetch(`/api/music/${track.id}/comments`);
+        const res = await fetch(`/api/music/${resolvedTrack.id}/comments`);
         if (res.ok) {
           setComments(await res.json());
         }
@@ -81,28 +130,36 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate, o
       }
     };
     void loadComments();
-  }, [track?.id]);
+  }, [resolvedTrack?.id]);
 
-  if (!track) {
+  useEffect(() => {
+    if (isLoadingTrack) return;
+    if (!resolvedTrack) {
+      onNavigate('home');
+    }
+  }, [isLoadingTrack, resolvedTrack, onNavigate]);
+
+  if (isLoadingTrack || !resolvedTrack) {
     return (
       <div className="text-center py-20">
-        <Music className="w-12 h-12 text-slate-500 mx-auto mb-4 animate-bounce" />
-        <h3 className="text-slate-355 font-bold text-sm">No track selected</h3>
-        <button onClick={() => onNavigate('home')} className="mt-4 px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-xs font-bold rounded-xl transition">
-          Return to Home
-        </button>
+        <Music className="w-12 h-12 text-slate-500 mx-auto mb-4 animate-pulse" />
+        <h3 className="text-slate-355 font-bold text-sm">
+          {isLoadingTrack ? 'Loading track…' : 'Returning to library…'}
+        </h3>
       </div>
     );
   }
 
-  const isFav = favorites.includes(track.id);
+  const displayTrack = resolvedTrack;
+  const genreTags = normalizeGenreTags(displayTrack.genres);
+  const isFav = favorites.includes(displayTrack.id);
 
   const handleAddComment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newComment.trim() || !token) return;
     setIsPostingComment(true);
     try {
-      const res = await fetch(`/api/music/${track.id}/comments`, {
+      const res = await fetch(`/api/music/${displayTrack.id}/comments`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -122,7 +179,7 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate, o
 
   const formatCommentTime = (value: string) => formatLocalDateTime(value) || value;
 
-  const metadataRows = buildTrackMetadata(track);
+  const metadataRows = buildTrackMetadata(displayTrack);
 
   const detailCardClass =
     'bg-slate-900/20 border border-white/5 p-6 rounded-3xl h-full flex flex-col gap-4 min-h-[320px]';
@@ -134,10 +191,10 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate, o
       
       <section className="flex flex-col sm:flex-row gap-6 sm:gap-8 items-center sm:items-start">
         <div className="w-48 h-48 sm:w-56 sm:h-56 bg-slate-900 border border-white/5 rounded-3xl overflow-hidden shadow-2xl flex-shrink-0 relative group">
-          <img src={track.cover_art_url} alt="Cover" className="w-full h-full object-cover" />
+          <img src={displayTrack.cover_art_url} alt="Cover" className="w-full h-full object-cover" />
           <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
             <button 
-              onClick={() => playTrack(track)}
+              onClick={() => playTrack(displayTrack)}
               className="w-12 h-12 bg-white text-slate-950 rounded-full flex items-center justify-center shadow-lg active:scale-95 transition"
               title="Play"
             >
@@ -149,33 +206,45 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate, o
         <div className="flex-1 min-w-0 w-full text-center sm:text-left space-y-5">
           <div className="space-y-2">
             <h1 className="hidden md:block text-3xl sm:text-4xl md:text-5xl font-extrabold text-gradient-premium tracking-tight leading-tight">
-              {track.title}
+              {displayTrack.title}
             </h1>
             <p className="text-sm text-slate-350 font-bold">
               Artist:{' '}
               <button
                 type="button"
-                onClick={() => onArtistClick?.(track.artist_name)}
+                onClick={() => onArtistClick?.(displayTrack.artist_name)}
                 className="text-slate-100 hover:text-rose-400 transition underline-offset-2 hover:underline"
               >
-                {track.artist_name}
+                {displayTrack.artist_name}
               </button>
             </p>
-            {track.album_title && (
-              <p className="text-xs text-slate-450 font-semibold">Album: {track.album_title}</p>
+            {displayTrack.album_title && (
+              <p className="text-xs text-slate-450 font-semibold">Album: {displayTrack.album_title}</p>
+            )}
+            {genreTags.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 justify-center sm:justify-start pt-1">
+                {genreTags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-lg bg-rose-500/10 text-rose-300 border border-rose-500/20"
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
             )}
           </div>
 
           <div className="flex gap-3 items-center justify-center sm:justify-start">
             <button
-              onClick={() => playTrack(track)}
+              onClick={() => playTrack(displayTrack)}
               className="px-6 py-3.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md shadow-rose-600/25 transition"
             >
               <Play className="w-4 h-4 fill-current" />
               Play
             </button>
             <button
-              onClick={() => toggleFavorite(track.id)}
+              onClick={() => toggleFavorite(displayTrack.id)}
               className={`p-3 bg-slate-900 border border-white/5 rounded-xl transition ${
                 isFav ? 'text-rose-500 hover:text-rose-455' : 'text-slate-400 hover:text-white'
               }`}
@@ -222,7 +291,7 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate, o
               <AlignLeft className="w-4 h-4" /> Lyrics
             </h3>
             <div className="flex-1 min-h-0 text-xs font-medium text-slate-350 leading-relaxed whitespace-pre-line overflow-y-auto">
-              {track.lyrics ? track.lyrics : (
+              {displayTrack.lyrics ? displayTrack.lyrics : (
                 <p className="text-slate-500 italic">Lyrics not available for this track.</p>
               )}
             </div>
