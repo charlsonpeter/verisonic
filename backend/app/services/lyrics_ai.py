@@ -13,9 +13,11 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+ProgressCallback = Callable[[int, str], None]
 
 _whisper_model = None
 _whisper_model_key: Optional[tuple] = None
@@ -174,11 +176,15 @@ def _separate_vocals(audio_path: str, work_dir: str) -> str:
 def _transcribe_vocals(
     vocals_path: str,
     language: Optional[str] = None,
+    on_progress: Optional[ProgressCallback] = None,
 ) -> tuple[list[dict[str, Any]], str, float]:
     model = _get_whisper_model()
     lang = language.strip().lower() if language else None
     if lang in ("", "auto", "none", "null"):
         lang = None
+
+    if on_progress:
+        on_progress(62, "transcribing")
 
     segments_iter, info = model.transcribe(
         vocals_path,
@@ -188,6 +194,8 @@ def _transcribe_vocals(
     )
 
     lyrics: list[dict[str, Any]] = []
+    # Whisper streams segments; nudge progress toward 88% as lines arrive
+    line_count = 0
     for seg in segments_iter:
         text = (seg.text or "").strip()
         if not text:
@@ -199,19 +207,36 @@ def _transcribe_vocals(
                 "text": text,
             }
         )
+        line_count += 1
+        if on_progress:
+            pct = min(88, 62 + line_count * 2)
+            on_progress(pct, "transcribing")
 
     detected = getattr(info, "language", None) or (lang or "und")
     probability = float(getattr(info, "language_probability", 0.0) or 0.0)
+    if on_progress:
+        on_progress(90, "transcribing")
     return lyrics, detected, probability
 
 
-def extract_lyrics(audio_path: str, language: Optional[str] = None) -> dict[str, Any]:
+def extract_lyrics(
+    audio_path: str,
+    language: Optional[str] = None,
+    on_progress: Optional[ProgressCallback] = None,
+) -> dict[str, Any]:
     """
     Extract multilingual timed lyrics from an audio file.
 
     Returns a structured dict with status, language metadata, and timed lines.
     Never raises into callers for expected failure modes — returns status=failed.
     """
+    def progress(pct: int, stage: str) -> None:
+        if on_progress:
+            try:
+                on_progress(pct, stage)
+            except Exception:
+                pass
+
     work_dir: Optional[str] = None
     try:
         if not audio_path or not isinstance(audio_path, str):
@@ -222,7 +247,9 @@ def extract_lyrics(audio_path: str, language: Optional[str] = None) -> dict[str,
         work_dir = tempfile.mkdtemp(prefix="lyrics_ai_")
 
         try:
+            progress(15, "separating_vocals")
             vocals_path = _separate_vocals(audio_path, work_dir)
+            progress(55, "separating_vocals")
         except FileNotFoundError as exc:
             logger.exception("Demucs vocals stem missing")
             return _failed(str(exc))
@@ -245,7 +272,11 @@ def extract_lyrics(audio_path: str, language: Optional[str] = None) -> dict[str,
             return _failed(f"Vocal separation failed: {exc}")
 
         try:
-            lyrics, detected, probability = _transcribe_vocals(vocals_path, language=language)
+            lyrics, detected, probability = _transcribe_vocals(
+                vocals_path,
+                language=language,
+                on_progress=on_progress,
+            )
         except MemoryError:
             logger.exception("Out of memory during Whisper transcription")
             return _failed("Out of memory during transcription")

@@ -229,8 +229,10 @@ class TranscribeQueuedResponse(BaseModel):
 
 class TranscribeStatusResponse(BaseModel):
     task_id: str
-    state: str  # PENDING | STARTED | SUCCESS | FAILURE | …
+    state: str  # PENDING | STARTED | SUCCESS | FAILURE | PROGRESS | …
     status: Optional[str] = None  # success | failed | queued | running
+    progress: Optional[int] = None  # 0–100
+    stage: Optional[str] = None
     track_id: Optional[int] = None
     detected_language: Optional[str] = None
     language_probability: Optional[float] = None

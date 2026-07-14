@@ -599,35 +599,60 @@ def extract_lyrics_task(self, track_id: int, language: str | None = None):
     """
     Separate vocals (Demucs) and transcribe (faster-whisper), then dual-persist lyrics.
     Runs only on Celery workers — never on the API request thread.
+    Publishes live progress to Redis for WebSocket clients.
     """
     from app.services.lyrics_ai import extract_lyrics, segments_to_lrc
+    from app.services.lyrics_progress import publish_lyrics_progress
     from app.services.storage import s3_client, settings as storage_settings
 
+    task_id = self.request.id or ""
     db = SessionLocal()
     temp_file_path = None
+
+    def emit(progress: int, stage: str, status: str = "running", **extra):
+        payload = {
+            "task_id": task_id,
+            "track_id": track_id,
+            "status": status,
+            "progress": int(max(0, min(100, progress))),
+            "stage": stage,
+            **extra,
+        }
+        try:
+            self.update_state(state="PROGRESS", meta=payload)
+        except Exception:
+            pass
+        if task_id:
+            publish_lyrics_progress(task_id, payload)
+        return payload
+
     try:
+        emit(2, "queued")
         track = db.query(Track).filter(Track.id == track_id).first()
         if not track:
-            return {
-                "status": "failed",
-                "track_id": track_id,
-                "error": "Track not found",
-                "detected_language": None,
-                "language_probability": None,
-                "lyrics": None,
-                "lyrics_timed": [],
-            }
+            return emit(
+                100,
+                "failed",
+                status="failed",
+                error="Track not found",
+                detected_language=None,
+                language_probability=None,
+                lyrics=None,
+                lyrics_timed=[],
+            )
         if not track.original_file_path:
-            return {
-                "status": "failed",
-                "track_id": track_id,
-                "error": "Original audio file not found for this track",
-                "detected_language": None,
-                "language_probability": None,
-                "lyrics": None,
-                "lyrics_timed": [],
-            }
+            return emit(
+                100,
+                "failed",
+                status="failed",
+                error="Original audio file not found for this track",
+                detected_language=None,
+                language_probability=None,
+                lyrics=None,
+                lyrics_timed=[],
+            )
 
+        emit(8, "downloading")
         ext = os.path.splitext(track.original_file_path)[1].lower() or ".wav"
         fd, temp_file_path = tempfile.mkstemp(suffix=ext)
         os.close(fd)
@@ -639,19 +664,29 @@ def extract_lyrics_task(self, track_id: int, language: str | None = None):
         )
 
         preferred_lang = language if language else track.language
-        result = extract_lyrics(temp_file_path, language=preferred_lang)
+
+        def on_progress(pct: int, stage: str) -> None:
+            emit(pct, stage)
+
+        result = extract_lyrics(
+            temp_file_path,
+            language=preferred_lang,
+            on_progress=on_progress,
+        )
 
         if result.get("status") != "success":
-            return {
-                "status": "failed",
-                "track_id": track_id,
-                "error": result.get("error") or "Lyrics extraction failed",
-                "detected_language": result.get("detected_language"),
-                "language_probability": result.get("language_probability"),
-                "lyrics": None,
-                "lyrics_timed": [],
-            }
+            return emit(
+                100,
+                "failed",
+                status="failed",
+                error=result.get("error") or "Lyrics extraction failed",
+                detected_language=result.get("detected_language"),
+                language_probability=result.get("language_probability"),
+                lyrics=None,
+                lyrics_timed=[],
+            )
 
+        emit(92, "saving")
         timed = result.get("lyrics") or []
         lrc_text = segments_to_lrc(timed)
         detected = result.get("detected_language")
@@ -665,26 +700,28 @@ def extract_lyrics_task(self, track_id: int, language: str | None = None):
             track.language = detected
         db.commit()
 
-        return {
-            "status": "success",
-            "track_id": track_id,
-            "detected_language": detected,
-            "language_probability": probability,
-            "lyrics": track.lyrics,
-            "lyrics_timed": timed,
-            "error": None,
-        }
+        return emit(
+            100,
+            "complete",
+            status="success",
+            detected_language=detected,
+            language_probability=probability,
+            lyrics=track.lyrics,
+            lyrics_timed=timed,
+            error=None,
+        )
     except Exception as exc:
         db.rollback()
-        return {
-            "status": "failed",
-            "track_id": track_id,
-            "error": str(exc),
-            "detected_language": None,
-            "language_probability": None,
-            "lyrics": None,
-            "lyrics_timed": [],
-        }
+        return emit(
+            100,
+            "failed",
+            status="failed",
+            error=str(exc),
+            detected_language=None,
+            language_probability=None,
+            lyrics=None,
+            lyrics_timed=[],
+        )
     finally:
         db.close()
         if temp_file_path and os.path.exists(temp_file_path):
