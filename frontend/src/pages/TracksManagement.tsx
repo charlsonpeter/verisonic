@@ -364,6 +364,16 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const activeUploadXhrRef = useRef<XMLHttpRequest | null>(null);
   const uploadStopRequestedRef = useRef(false);
+  const uploadQueueListRef = useRef<HTMLDivElement | null>(null);
+  const uploadingItemId = uploadQueue.find((q) => q.status === 'uploading')?.id;
+
+  useEffect(() => {
+    if (!uploadingItemId || !uploadQueueListRef.current) return;
+    const el = uploadQueueListRef.current.querySelector<HTMLElement>(
+      `[data-upload-item-id="${uploadingItemId}"]`,
+    );
+    el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [uploadingItemId]);
 
   const [suggestions, setSuggestions] = useState<{
     artists: string[];
@@ -1186,13 +1196,21 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                     </button>
                   </div>
 
-                  <div className="space-y-3 pr-1">
+                  <div ref={uploadQueueListRef} className="space-y-3 pr-1">
                     {uploadQueue.map((item, idx) => {
                       const isPending = item.status === 'pending';
                       const isUploading = item.status === 'uploading';
 
                       return (
-                        <div key={item.id} className="bg-slate-900/40 border border-white/5 p-4 rounded-2xl space-y-3 transition hover:border-slate-800 shadow-lg">
+                        <div
+                          key={item.id}
+                          data-upload-item-id={item.id}
+                          className={`bg-slate-900/40 border p-4 rounded-2xl space-y-3 transition shadow-lg ${
+                            isUploading
+                              ? 'border-rose-500/40'
+                              : 'border-white/5 hover:border-slate-800'
+                          }`}
+                        >
                           {/* Queue Item Header */}
                           <div className="flex justify-between items-start gap-4">
                             <div className="min-w-0">
