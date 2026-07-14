@@ -15,10 +15,12 @@ import { ListSearchInput } from '../components/shared/ListSearchInput';
 interface UploadQueueItem {
   id: string;
   file: File;
-  status: 'pending' | 'uploading' | 'analyzing' | 'transcoding' | 'completed' | 'rejected' | 'failed';
+  status: 'pending' | 'uploading' | 'analyzing' | 'transcoding' | 'completed' | 'rejected' | 'failed' | 'cancelled';
   progress: number;
   message: string;
 }
+
+type TrackStatusFilter = 'all' | 'analyzing' | 'transcoding' | 'ready' | 'rejected';
 
 interface TracksManagementProps {
   onViewReport?: (track: any) => void;
@@ -287,12 +289,14 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
   const isStudioAdmin = currentUser?.role === 'studio_admin';
 
   const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<TrackStatusFilter>('all');
 
   const tracksList = useLazyList<any>({
     fetchPage: useCallback(async (offset, limit) => {
       if (!token) return { items: [], hasMore: false };
       const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
       if (searchQuery.trim()) params.set('search', searchQuery.trim());
+      if (statusFilter !== 'all') params.set('status', statusFilter);
       const res = await fetch(`/api/music/manage?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -305,8 +309,8 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       }
       const data = await res.json();
       return { items: data.items, hasMore: data.has_more };
-    }, [token, searchQuery]),
-    resetKey: token && (isStaffInAdminMode || isPlatformAdmin) ? `tracks-${searchQuery}` : null,
+    }, [token, searchQuery, statusFilter]),
+    resetKey: token && (isStaffInAdminMode || isPlatformAdmin) ? `tracks-${searchQuery}-${statusFilter}` : null,
     enabled: !!(token && (isStaffInAdminMode || isPlatformAdmin)),
     pageSize: DEFAULT_LAZY_PAGE_SIZE,
   });
@@ -358,6 +362,8 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
   const [isQueueUploading, setIsQueueUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const activeUploadXhrRef = useRef<XMLHttpRequest | null>(null);
+  const uploadStopRequestedRef = useRef(false);
 
   const [suggestions, setSuggestions] = useState<{
     artists: string[];
@@ -406,12 +412,24 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
 
   const uploadSingleQueueItem = (item: UploadQueueItem): Promise<void> => {
     return new Promise((resolve) => {
+      if (uploadStopRequestedRef.current) {
+        setUploadQueue(prev => prev.map(q => q.id === item.id ? {
+          ...q,
+          status: 'cancelled',
+          message: 'Cancelled',
+          progress: 0,
+        } : q));
+        resolve();
+        return;
+      }
+
       setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'uploading', progress: 0, message: 'Uploading...' } : q));
       
       const formData = new FormData();
       formData.append('file', item.file);
       
       const xhr = new XMLHttpRequest();
+      activeUploadXhrRef.current = xhr;
       
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) {
@@ -421,6 +439,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       };
       
       xhr.onload = () => {
+        if (activeUploadXhrRef.current === xhr) activeUploadXhrRef.current = null;
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
             const data = JSON.parse(xhr.responseText);
@@ -446,10 +465,22 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       };
       
       xhr.onerror = () => {
+        if (activeUploadXhrRef.current === xhr) activeUploadXhrRef.current = null;
         setUploadQueue(prev => prev.map(q => q.id === item.id ? { 
           ...q, 
           status: 'failed', 
           message: 'Upload failed.',
+        } : q));
+        resolve();
+      };
+
+      xhr.onabort = () => {
+        if (activeUploadXhrRef.current === xhr) activeUploadXhrRef.current = null;
+        setUploadQueue(prev => prev.map(q => q.id === item.id ? {
+          ...q,
+          status: 'cancelled',
+          message: 'Stopped',
+          progress: 0,
         } : q));
         resolve();
       };
@@ -460,18 +491,36 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     });
   };
 
+  const handleStopUploadQueue = () => {
+    uploadStopRequestedRef.current = true;
+    const xhr = activeUploadXhrRef.current;
+    if (xhr) {
+      xhr.abort();
+      activeUploadXhrRef.current = null;
+    }
+    setUploadQueue(prev => prev.map(q =>
+      q.status === 'pending'
+        ? { ...q, status: 'cancelled', message: 'Cancelled', progress: 0 }
+        : q
+    ));
+    setUploadMessage({ type: 'error', text: 'Upload stopped. Remaining files were cancelled.' });
+  };
+
   const handleUploadQueue = async () => {
     if (uploadQueue.length === 0 || isQueueUploading) return;
+    uploadStopRequestedRef.current = false;
     setIsQueueUploading(true);
     setUploadMessage(null);
     
     const itemsToUpload = [...uploadQueue];
     for (const item of itemsToUpload) {
-      if (item.status === 'completed' || item.status === 'rejected' || item.status === 'failed') continue;
+      if (uploadStopRequestedRef.current) break;
+      if (item.status === 'completed' || item.status === 'rejected' || item.status === 'failed' || item.status === 'cancelled') continue;
       await uploadSingleQueueItem(item);
     }
     
     setIsQueueUploading(false);
+    activeUploadXhrRef.current = null;
     fetchSuggestions();
     fetchTracks(true);
   };
@@ -1068,16 +1117,19 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
           isQueueUploading ? (
             <button
               type="button"
-              disabled
-              className="w-full bg-slate-900 border border-white/5 text-slate-500 font-bold py-3 rounded-xl transition text-xs font-sans cursor-not-allowed text-center"
+              onClick={handleStopUploadQueue}
+              className="w-full bg-slate-900 border border-rose-500/30 hover:bg-rose-600/15 text-rose-400 font-bold py-3 rounded-xl transition text-xs font-sans flex items-center justify-center gap-1.5"
             >
-              Uploading queue... {uploadQueue.filter(q => q.status === 'completed' || q.status === 'failed').length} / {uploadQueue.length} done
+              <Ban className="w-3.5 h-3.5" />
+              Stop Upload ({uploadQueue.filter(q => q.status === 'completed' || q.status === 'failed' || q.status === 'cancelled').length} / {uploadQueue.length} done)
             </button>
-          ) : uploadQueue.some(q => q.status === 'completed' || q.status === 'failed') ? (
+          ) : uploadQueue.some(q => q.status === 'completed' || q.status === 'failed' || q.status === 'cancelled') ? (
             <button
               type="button"
               onClick={() => {
                 setUploadQueue([]);
+                setUploadMessage(null);
+                uploadStopRequestedRef.current = false;
                 setIsUploadModalOpen(false);
               }}
               className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-xl transition text-xs shadow flex items-center justify-center gap-1.5 font-sans"
@@ -1153,6 +1205,8 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                                     ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-450'
                                     : item.status === 'failed'
                                     ? 'bg-rose-500/10 border-rose-500/20 text-rose-455'
+                                    : item.status === 'cancelled'
+                                    ? 'bg-slate-500/10 border-slate-500/20 text-slate-400'
                                     : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
                                 }`}>
                                   {item.message}
@@ -1204,6 +1258,10 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                                 <div className="w-8 h-8 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400" title="Upload Failed">
                                   <AlertTriangle className="w-4 h-4" />
                                 </div>
+                              ) : item.status === 'cancelled' ? (
+                                <div className="w-8 h-8 rounded-full bg-slate-500/10 border border-slate-500/20 flex items-center justify-center text-slate-400" title="Cancelled">
+                                  <Ban className="w-4 h-4" />
+                                </div>
                               ) : null}
                               
                               {isPending && (
@@ -1254,7 +1312,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
             </div>
           </div>
 
-          <div className="flex justify-end">
+          <div className="flex flex-col sm:flex-row gap-4 items-center justify-end">
             <ListSearchInput
               value={searchQuery}
               onChange={setSearchQuery}
@@ -1264,6 +1322,20 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                   : 'Search by title, artist, or album...'
               }
             />
+            <div className="flex gap-2 items-center w-full sm:w-auto justify-end">
+              <span className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Filter Status:</span>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as TrackStatusFilter)}
+                className="bg-slate-950 border border-white/5 rounded-xl p-2.5 outline-none focus:border-rose-500 text-slate-200 transition text-xs min-w-[140px]"
+              >
+                <option value="all">All Tracks</option>
+                <option value="analyzing">Analyzing</option>
+                <option value="transcoding">Transcoding</option>
+                <option value="ready">Ready</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
           </div>
 
           <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">

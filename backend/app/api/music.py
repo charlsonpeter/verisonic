@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 from jose import jwt, JWTError
 from pydantic import BaseModel
 
@@ -685,10 +685,45 @@ def _apply_manage_track_search(query, search: Optional[str], *, include_owner: b
     return query.filter(or_(*filters))
 
 
+ManageTrackStatus = Literal["analyzing", "transcoding", "ready", "rejected"]
+
+
+def _apply_manage_track_status(query, status_filter: Optional[ManageTrackStatus]):
+    """Filter by Live Status labels used on the manage tracks screen."""
+    if not status_filter:
+        return query
+    if status_filter == "analyzing":
+        return query.filter(Track.quality_score.is_(None))
+    if status_filter == "transcoding":
+        return query.filter(
+            Track.approved == True,
+            Track.quality_score.isnot(None),
+            Track.hls_playlist_path.is_(None),
+        )
+    if status_filter == "ready":
+        return query.filter(
+            Track.approved == True,
+            Track.hls_playlist_path.isnot(None),
+        )
+    if status_filter == "rejected":
+        return query.filter(
+            Track.approved == False,
+            Track.quality_score.isnot(None),
+        )
+    raise HTTPException(
+        status_code=400,
+        detail="Invalid status. Use analyzing, transcoding, ready, or rejected.",
+    )
+
+
 @router.get("/manage", response_model=PaginatedTrackListResponse)
 def manage_tracks(
     approved_only: bool = False,
     search: Optional[str] = None,
+    status: Optional[ManageTrackStatus] = Query(
+        None,
+        description="Live status filter: analyzing | transcoding | ready | rejected",
+    ),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -717,6 +752,7 @@ def manage_tracks(
             query = query.filter(Track.approved == True)
 
     query = _apply_manage_track_search(query, search, include_owner=current_user.role == "admin")
+    query = _apply_manage_track_status(query, status)
 
     total = query.count()
     tracks = query.order_by(Track.created_at.desc()).offset(offset).limit(limit).all()
