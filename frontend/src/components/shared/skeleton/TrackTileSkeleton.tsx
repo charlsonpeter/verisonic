@@ -8,7 +8,7 @@ interface CompactTrackTileSkeletonProps {
 export const CompactTrackTileSkeleton: React.FC<CompactTrackTileSkeletonProps> = ({
   className = '',
 }) => (
-  <div className={`flex-shrink-0 w-[6.75rem] space-y-0 ${className}`}>
+  <div className={`w-full min-w-0 space-y-0 ${className}`}>
     <Skeleton className="w-full aspect-square rounded-xl mb-1.5" />
     <Skeleton className="h-2.5 w-full" />
     <Skeleton className="h-2 w-4/5 mt-0" />

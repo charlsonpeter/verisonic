@@ -27,7 +27,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   activeTab 
 }) => {
   const { 
-    currentTrack, activeRadioStation, isPlaying, duration, currentTime, 
+    currentTrack, activeRadioStation, isPlaying, duration, getCurrentTime, subscribeTime,
     volume, isMuted, isRadioSync, playbackSpeed, repeatMode, isShuffle, 
     favorites, togglePlay, seek, adjustVolume, toggleMute, setPlaybackSpeed, 
     setRepeatMode, toggleShuffle, toggleFavorite, playNext, playPrevious
@@ -124,40 +124,102 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     };
   };
 
-  // For 24h live clock display using client time and timezone
-  const [secondsSinceMidnight, setSecondsSinceMidnight] = React.useState(0);
+  const format24hTime = (totalSeconds: number) => {
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const hStr = String(hours).padStart(2, '0');
+    const mStr = String(minutes).padStart(2, '0');
+    const sStr = String(seconds).padStart(2, '0');
+    return `${hStr}:${mStr}:${sStr}`;
+  };
 
-  React.useEffect(() => {
-    if (!isRadioSync) return;
-    
-    const updateTime = () => {
-      const now = new Date();
-      setSecondsSinceMidnight(now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds());
-    };
-    
-    updateTime();
-    const interval = setInterval(updateTime, 1000);
-    return () => clearInterval(interval);
-  }, [isRadioSync]);
+  const formatTime = (time: number) => {
+    if (isNaN(time) || time === Infinity) return '0:00';
+    const mins = Math.floor(time / 60);
+    const secs = Math.floor(time % 60);
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+  };
 
-  const [isSeeking, setIsSeeking] = React.useState(false);
-  const [seekDraft, setSeekDraft] = React.useState(0);
+  const seekMax = isRadioSync ? 86400 : (duration || 100);
+  const isRadioSyncRef = React.useRef(isRadioSync);
+  isRadioSyncRef.current = isRadioSync;
+  const seekMaxRef = React.useRef(seekMax);
+  seekMaxRef.current = seekMax;
+
+  const mobileMiniSliderRef = React.useRef<HTMLInputElement | null>(null);
+  const desktopSliderRef = React.useRef<HTMLInputElement | null>(null);
+  const expandedSliderRef = React.useRef<HTMLInputElement | null>(null);
+  const desktopElapsedRef = React.useRef<HTMLSpanElement | null>(null);
+  const expandedElapsedRef = React.useRef<HTMLSpanElement | null>(null);
+
   const isSeekingRef = React.useRef(false);
   const seekDraftRef = React.useRef(0);
+  const [isSeeking, setIsSeeking] = React.useState(false);
+
+  const paintSeekUi = React.useCallback((time: number, opts?: { forceSliders?: boolean }) => {
+    const label = isRadioSyncRef.current ? format24hTime(time) : formatTime(time);
+    if (desktopElapsedRef.current) desktopElapsedRef.current.textContent = label;
+    if (expandedElapsedRef.current) expandedElapsedRef.current.textContent = label;
+
+    if (opts?.forceSliders || !isSeekingRef.current) {
+      const max = String(seekMaxRef.current);
+      const value = String(time);
+      for (const el of [mobileMiniSliderRef.current, desktopSliderRef.current, expandedSliderRef.current]) {
+        if (!el) continue;
+        el.max = max;
+        el.value = value;
+      }
+    }
+  }, []);
+
+  const finishSeek = React.useCallback(() => {
+    if (!isSeekingRef.current || isRadioSyncRef.current) return;
+    isSeekingRef.current = false;
+    setIsSeeking(false);
+    seek(seekDraftRef.current);
+  }, [seek]);
+
+  React.useEffect(() => {
+    if (isRadioSync) {
+      const tick = () => {
+        const now = new Date();
+        const s = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+        paintSeekUi(s, { forceSliders: true });
+      };
+      tick();
+      const interval = setInterval(tick, 1000);
+      return () => clearInterval(interval);
+    }
+
+    return subscribeTime((t) => {
+      if (isSeekingRef.current) return;
+      paintSeekUi(t);
+    });
+  }, [isRadioSync, subscribeTime, paintSeekUi]);
+
+  React.useEffect(() => {
+    seekMaxRef.current = seekMax;
+    const max = String(seekMax);
+    for (const el of [mobileMiniSliderRef.current, desktopSliderRef.current, expandedSliderRef.current]) {
+      if (el) el.max = max;
+    }
+  }, [seekMax]);
 
   React.useEffect(() => {
     if (!isSeeking) return;
     const onPointerUp = () => { finishSeek(); };
     window.addEventListener('pointerup', onPointerUp);
     return () => window.removeEventListener('pointerup', onPointerUp);
-  }, [isSeeking, isRadioSync, seek]);
+  }, [isSeeking, finishSeek]);
 
   React.useEffect(() => {
     isSeekingRef.current = false;
     setIsSeeking(false);
-    seekDraftRef.current = currentTime;
-    setSeekDraft(currentTime);
-  }, [currentTrack?.id]);
+    const t = getCurrentTime();
+    seekDraftRef.current = t;
+    paintSeekUi(t, { forceSliders: true });
+  }, [currentTrack?.id, getCurrentTime, paintSeekUi]);
 
   const handleSeekPointerDown = () => {
     isSeekingRef.current = true;
@@ -166,14 +228,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
   const handleSeekChange = (value: number) => {
     seekDraftRef.current = value;
-    setSeekDraft(value);
-  };
-
-  const finishSeek = () => {
-    if (!isSeekingRef.current || isRadioSync) return;
-    isSeekingRef.current = false;
-    setIsSeeking(false);
-    seek(seekDraftRef.current);
+    paintSeekUi(value, { forceSliders: true });
   };
 
   const handleSeekKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -183,30 +238,27 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     }
   };
 
-  const seekSliderValue = isRadioSync ? secondsSinceMidnight : (isSeeking ? seekDraft : currentTime);
-  const seekDisplayTime = isRadioSync ? secondsSinceMidnight : (isSeeking ? seekDraft : currentTime);
-  const seekMax = isRadioSync ? 86400 : (duration || 100);
-
-  const format24hTime = (totalSeconds: number) => {
-    const hours = Math.floor(totalSeconds / 3600);
-    const minutes = Math.floor((totalSeconds % 3600) / 60);
-    const seconds = totalSeconds % 60;
-    
-    const hStr = String(hours).padStart(2, '0');
-    const mStr = String(minutes).padStart(2, '0');
-    const sStr = String(seconds).padStart(2, '0');
-    
-    return `${hStr}:${mStr}:${sStr}`;
-  };
+  React.useLayoutEffect(() => {
+    if (!currentTrack && !activeRadioStation) return;
+    if (isRadioSync) {
+      const now = new Date();
+      paintSeekUi(
+        now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds(),
+        { forceSliders: true },
+      );
+    } else {
+      paintSeekUi(getCurrentTime(), { forceSliders: true });
+    }
+  }, [
+    currentTrack?.id,
+    activeRadioStation?.id,
+    isRadioSync,
+    isMobileExpanded,
+    getCurrentTime,
+    paintSeekUi,
+  ]);
 
   if (!currentTrack && !activeRadioStation) return null;
-
-  const formatTime = (time: number) => {
-    if (isNaN(time) || time === Infinity) return '0:00';
-    const mins = Math.floor(time / 60);
-    const secs = Math.floor(time % 60);
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
-  };
 
   const isFav = currentTrack ? favorites.includes(currentTrack.id) : false;
   const hasLyrics = !!(
@@ -318,10 +370,11 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               </p>
             </button>
             <input
+              ref={mobileMiniSliderRef}
               type="range"
               min="0"
               max={seekMax}
-              value={seekSliderValue}
+              defaultValue={0}
               onPointerDown={handleSeekPointerDown}
               onChange={(e) => handleSeekChange(parseFloat(e.target.value))}
               onKeyDown={handleSeekKeyDown}
@@ -429,14 +482,18 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             </div>
 
             <div className={`flex items-center gap-1.5 text-slate-500 font-bold font-sans ${isRadioSync ? 'w-[15rem]' : 'w-[13.5rem]'}`}>
-              <span className={`shrink-0 text-right tabular-nums ${isRadioSync ? 'w-11 text-[9px]' : 'w-9 text-[10px]'}`}>
-                {isRadioSync ? format24hTime(secondsSinceMidnight) : formatTime(seekDisplayTime)}
+              <span
+                ref={desktopElapsedRef}
+                className={`shrink-0 text-right tabular-nums ${isRadioSync ? 'w-11 text-[9px]' : 'w-9 text-[10px]'}`}
+              >
+                0:00
               </span>
               <input 
+                ref={desktopSliderRef}
                 type="range" 
                 min="0"
                 max={seekMax}
-                value={seekSliderValue}
+                defaultValue={0}
                 onPointerDown={handleSeekPointerDown}
                 onChange={(e) => handleSeekChange(parseFloat(e.target.value))}
                 onKeyDown={handleSeekKeyDown}
@@ -682,10 +739,11 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               )}
 
               <input
+                ref={expandedSliderRef}
                 type="range"
                 min="0"
                 max={seekMax}
-                value={seekSliderValue}
+                defaultValue={0}
                 onPointerDown={handleSeekPointerDown}
                 onChange={(e) => handleSeekChange(parseFloat(e.target.value))}
                 onKeyDown={handleSeekKeyDown}
@@ -694,9 +752,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                 className="w-full accent-rose-500 h-1.5 bg-slate-800 rounded-lg outline-none cursor-pointer audio-knob"
               />
               <div className="flex items-center justify-between text-[10px] text-slate-500 font-bold font-sans">
-                <span>
-                  {isRadioSync ? format24hTime(secondsSinceMidnight) : formatTime(seekDisplayTime)}
-                </span>
+                <span ref={expandedElapsedRef}>0:00</span>
                 <span>
                   {isRadioSync ? "24:00:00" : formatTime(duration)}
                 </span>

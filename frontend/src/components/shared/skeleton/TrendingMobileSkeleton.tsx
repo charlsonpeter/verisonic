@@ -1,5 +1,5 @@
 import React from 'react';
-import { MOBILE_SCROLL_STRIP } from './layout';
+import { MOBILE_SCROLL_STRIP, MOBILE_GRID_PAGE } from './layout';
 import { CompactTrackTileSkeleton } from './TrackTileSkeleton';
 
 interface TrendingMobileSkeletonProps {
@@ -10,7 +10,7 @@ export const TrendingMobileSkeleton: React.FC<TrendingMobileSkeletonProps> = ({
   tileCount = 9,
 }) => (
   <div className={MOBILE_SCROLL_STRIP}>
-    <div className="grid grid-cols-3 gap-x-2.5 gap-y-2 flex-shrink-0 snap-start">
+    <div className={MOBILE_GRID_PAGE}>
       {Array.from({ length: tileCount }).map((_, idx) => (
         <CompactTrackTileSkeleton key={idx} />
       ))}

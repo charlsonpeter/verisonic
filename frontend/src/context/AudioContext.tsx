@@ -108,12 +108,17 @@ export interface RadioStation {
 
 type RepeatMode = 'none' | 'all' | 'one';
 
+type TimeListener = (time: number) => void;
+
 interface AudioContextType {
   currentTrack: Track | null;
   activeRadioStation: RadioStation | null;
   isPlaying: boolean;
   duration: number;
-  currentTime: number;
+  /** Read latest playhead without subscribing to React re-renders. */
+  getCurrentTime: () => number;
+  /** High-frequency playhead updates (DOM/UI); does not re-render context consumers. */
+  subscribeTime: (listener: TimeListener) => () => void;
   volume: number;
   isMuted: boolean;
   isRadioSync: boolean;
@@ -197,7 +202,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [activeRadioStation, setActiveRadioStation] = useState<RadioStation | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [duration, setDuration] = useState<number>(0);
-  const [currentTime, setCurrentTime] = useState<number>(0);
   const [volume, setVolume] = useState<number>(0.8);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isRadioSync, setIsRadioSync] = useState<boolean>(false);
@@ -222,6 +226,29 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const qualityLevelSettingRef = useRef<QualityLevelSetting>('normal');
   const pendingSeekRef = useRef<number | null>(null);
   const currentTimeRef = useRef(0);
+  const timeListenersRef = useRef(new Set<TimeListener>());
+
+  const getCurrentTime = useCallback(() => currentTimeRef.current, []);
+
+  const publishTime = useCallback((time: number) => {
+    currentTimeRef.current = time;
+    timeListenersRef.current.forEach((listener) => {
+      try {
+        listener(time);
+      } catch {
+        /* ignore subscriber errors */
+      }
+    });
+  }, []);
+
+  const subscribeTime = useCallback((listener: TimeListener) => {
+    timeListenersRef.current.add(listener);
+    listener(currentTimeRef.current);
+    return () => {
+      timeListenersRef.current.delete(listener);
+    };
+  }, []);
+
   const applyQualityChangeRef = useRef<(quality: QualityLevelSetting) => void>(() => {});
   const playTrackRef = useRef<(track: Track, isRadio?: boolean, autoPlay?: boolean) => void | Promise<void>>(async () => {});
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
@@ -258,6 +285,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const isMutedRef = useRef(isMuted);
   // Tracks whether the user EXPLICITLY pressed pause (vs browser-initiated background pause)
   const userPausedRef = useRef(false);
+  /** True when play() was blocked while advancing tracks (common on mobile background tabs). */
+  const pendingContinuePlaybackRef = useRef(false);
   const playbackEpochRef = useRef(0);
   const ownedBlobUrlRef = useRef<string | null>(null);
   const walletBilledTrackRef = useRef<number | null>(null);
@@ -310,6 +339,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const stopAllPlayback = () => {
     playbackEpochRef.current += 1;
     userPausedRef.current = true;
+    pendingContinuePlaybackRef.current = false;
     isPlayingRef.current = false;
 
     if (fadeIntervalRef.current) {
@@ -336,7 +366,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCurrentTrack(null);
     setActiveRadioStation(null);
     setIsRadioSync(false);
-    setCurrentTime(0);
+    publishTime(0);
     setDuration(0);
     setPlayQueue([]);
     setCurrentQueueIndex(-1);
@@ -710,15 +740,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     };
     const onTimeUpdate = () => {
-      currentTimeRef.current = audio.currentTime;
-      setCurrentTime(audio.currentTime);
+      const t = audio.currentTime;
+      publishTime(t);
       // Update Chrome's notification seek bar position
       if ('mediaSession' in navigator && !activeRadioStationRef.current && audio.duration && isFinite(audio.duration)) {
         try {
           navigator.mediaSession.setPositionState({
             duration: audio.duration,
             playbackRate: audio.playbackRate,
-            position: audio.currentTime,
+            position: t,
           });
         } catch (_) {}
       }
@@ -828,23 +858,69 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, []);
 
-  // Auto-resume audio when user returns to page after browser suspends it in background
+  const tryContinuePlayback = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || userPausedRef.current) {
+      pendingContinuePlaybackRef.current = false;
+      return;
+    }
+    if (!audio.paused && !audio.ended) {
+      pendingContinuePlaybackRef.current = false;
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'playing';
+      }
+      return;
+    }
+    audio.playbackRate = playbackSpeedRef.current;
+    void audio
+      .play()
+      .then(() => {
+        pendingContinuePlaybackRef.current = false;
+        userPausedRef.current = false;
+        isPlayingRef.current = true;
+        setIsPlaying(true);
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = 'playing';
+        }
+        const target = isMutedRef.current ? 0 : volumeRef.current;
+        if (audio.volume < target - 0.01) {
+          fadeVolume(target, 300);
+        }
+      })
+      .catch(() => {
+        // Mobile browsers often reject play() while the tab is hidden; keep retrying.
+        pendingContinuePlaybackRef.current = true;
+      });
+  }, []);
+
+  // Auto-resume when returning to the tab, or when a background next-track play() was blocked
   useEffect(() => {
     let wasPlayingBeforeHide = false;
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        // Record whether audio was actively playing when page went hidden
-        wasPlayingBeforeHide = isPlayingRef.current && !audioRef.current?.paused;
-      } else {
-        // Page is visible again — if we were playing before, try to resume
-        if (wasPlayingBeforeHide && audioRef.current?.paused) {
-          audioRef.current.play().catch(() => {});
-        }
+        wasPlayingBeforeHide =
+          (isPlayingRef.current || pendingContinuePlaybackRef.current) &&
+          !userPausedRef.current;
+      } else if (
+        !userPausedRef.current &&
+        (wasPlayingBeforeHide || pendingContinuePlaybackRef.current) &&
+        audioRef.current
+      ) {
+        tryContinuePlayback();
+      }
+    };
+    const handlePageShow = () => {
+      if (!userPausedRef.current && pendingContinuePlaybackRef.current) {
+        tryContinuePlayback();
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, []);
+    window.addEventListener('pageshow', handlePageShow);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pageshow', handlePageShow);
+    };
+  }, [tryContinuePlayback]);
 
   // Wire AnalyserNode once for the canvas equalizer (no React state updates per frame)
   useEffect(() => {
@@ -1045,7 +1121,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
   handleTrackEndedRef.current = handleTrackEnded;
 
-  /** Keep Now Playing aligned with what is actually playing (avoids phantom/duplicate rows). */
+  /**
+   * Keep Now Playing aligned with what is actually playing.
+   * Explicit plays (Home, search, etc.) always start a fresh queue — like YouTube Music —
+   * instead of jumping to a later occurrence of the same track in the old list.
+   * Next/prev set currentQueueIndex before calling playTrack, so they hit the
+   * "already current" path and preserve the existing queue.
+   */
   const ensurePlayingTrackQueued = (t: Track) => {
     const queue = playQueueRef.current;
     const idx = currentQueueIndexRef.current;
@@ -1055,16 +1137,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setPlayQueue(next);
       return;
     }
-    const foundIdx = queue.findIndex((item) => item.id === t.id);
-    if (foundIdx >= 0) {
-      currentQueueIndexRef.current = foundIdx;
-      setCurrentQueueIndex(foundIdx);
-      const next = queue.map((item, i) => (i === foundIdx ? { ...item, ...t } : item));
-      playQueueRef.current = next;
-      setPlayQueue(next);
-      return;
-    }
-    // New playback context: start the queue with this track so autoplay appends after it
+    // New playback context: replace Now Playing with this track; autoplay refills after it
     autoplayLastFailedSeedRef.current = null;
     const nextQueue = [t];
     playQueueRef.current = nextQueue;
@@ -1097,20 +1170,43 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       websocketRef.current.close();
       websocketRef.current = null;
     }
-    resetAudioElementForNewSource();
+    // Do not tear down the audio element yet — keep the media session alive until the
+    // next stream is ready (critical for mobile background autoplay continuity).
 
-    // Clear live radio station status if playing normal track
+    // Clear live radio station status if playing normal track (non-blocking so we
+    // can start the next track without an await gap that breaks background play()).
     if (!isRadio) {
-      await clearRadioWalletSession();
+      void clearRadioWalletSession();
       setActiveRadioStation(null);
       setIsRadioSync(false);
       walletBilledTrackRef.current = null;
       resetListenTimeTracking();
     }
 
+    const role = currentUser?.real_role || currentUser?.role;
+    const canPlayOriginalMasterFor = (t: Track) => {
+      const isOwnUpload =
+        !isRadio &&
+        role === 'studio_admin' &&
+        !!currentUser?.artist_profile?.id &&
+        t.artist_id === currentUser.artist_profile.id;
+      return isOwnUpload || (!isRadio && role === 'admin');
+    };
+
+    const buildCandidatesFor = (t: Track) =>
+      isRadio
+        ? [t.stream_url || t.hls_playlist_path || ''].filter(Boolean)
+        : getStreamCandidatesForQuality(
+            t,
+            getEffectiveQuality(qualityLevelSettingRef.current, canConfigureStreamQualityRef.current),
+            isPremiumRef.current || canPlayOriginalMasterFor(t),
+          );
+
     let trackToPlay = track;
-    // Only re-fetch metadata for real music library tracks, not virtual live-radio tracks
-    if (!isRadio) {
+    // Fast path: queue advances already carry stream URLs — skip the metadata await so
+    // play() can stay chained to the prior track's `ended` (mobile background requirement).
+    const cachedCandidates = !isRadio ? buildCandidatesFor(track) : [];
+    if (!isRadio && cachedCandidates.length === 0) {
       try {
         const res = await fetch(`${API_URL}/music/${track.id}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
@@ -1130,7 +1226,6 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       ensurePlayingTrackQueued(trackToPlay);
     }
 
-    const role = currentUser?.real_role || currentUser?.role;
     const isOwnUpload =
       !isRadio &&
       role === 'studio_admin' &&
@@ -1163,6 +1258,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         qualityLevelSettingRef.current,
         canConfigureStreamQualityRef.current,
       );
+      pendingContinuePlaybackRef.current = false;
+      isPlayingRef.current = false;
+      setIsPlaying(false);
       if (isPremiumRef.current && isStudioMasterQuality(effectiveQuality)) {
         showError(
           'Stream Unavailable',
@@ -1187,16 +1285,43 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const beginPlayback = () => {
       if (epoch !== playbackEpochRef.current || !audioRef.current) return;
       audioRef.current.playbackRate = playbackSpeedRef.current;
-      audioRef.current.volume = 0;
+      // Skip fade-from-zero while backgrounded — some mobile browsers treat volume-0
+      // play as inaudible and drop the session; also speeds up next-track start.
+      if (document.hidden) {
+        audioRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
+      } else {
+        audioRef.current.volume = 0;
+      }
+      userPausedRef.current = false;
+      isPlayingRef.current = true;
+      setIsPlaying(true);
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'playing';
+      }
       audioRef.current
         .play()
         .then(() => {
-          const target = isMutedRef.current ? 0 : volumeRef.current;
-          fadeVolume(target, 300);
+          pendingContinuePlaybackRef.current = false;
+          if (!document.hidden) {
+            const target = isMutedRef.current ? 0 : volumeRef.current;
+            fadeVolume(target, 300);
+          }
         })
-        .catch((e) => console.log('Autoplay blocked: ', e));
-      userPausedRef.current = false;
-      setIsPlaying(true);
+        .catch((e) => {
+          console.log('Autoplay blocked: ', e);
+          pendingContinuePlaybackRef.current = true;
+          const audio = audioRef.current;
+          if (!audio) return;
+          const retry = () => {
+            audio.removeEventListener('canplay', retry);
+            audio.removeEventListener('loadeddata', retry);
+            if (!userPausedRef.current && pendingContinuePlaybackRef.current) {
+              tryContinuePlayback();
+            }
+          };
+          audio.addEventListener('canplay', retry);
+          audio.addEventListener('loadeddata', retry);
+        });
     };
 
     const restorePlaybackPosition = (isHls = false): Promise<void> => {
@@ -1217,7 +1342,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           if (settled) return;
           settled = true;
           cleanup();
-          setCurrentTime(audio.currentTime);
+          publishTime(audio.currentTime);
           resolve();
         };
 
@@ -1290,7 +1415,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                   ? audioRef.current.duration
                   : target,
               );
-              setCurrentTime(audioRef.current.currentTime);
+              publishTime(audioRef.current.currentTime);
             } catch {
               console.warn('Could not restore playback position after stream reload.');
             }
@@ -1464,7 +1589,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // Reset details
     setCurrentTrack(trackToPlay);
-    setCurrentTime(seekAfterLoad ?? 0);
+    publishTime(seekAfterLoad ?? 0);
     setDuration(trackToPlay.duration || 0);
 
     // Register MediaSession API for lock screen / notification media controls on mobile
@@ -1477,10 +1602,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           ? [{ src: trackToPlay.cover_art_url, sizes: '512x512', type: 'image/jpeg' }]
           : [],
       });
+      if (autoPlay) {
+        navigator.mediaSession.playbackState = 'playing';
+      }
       navigator.mediaSession.setActionHandler('play', () => {
-        audioRef.current?.play();
+        userPausedRef.current = false;
+        tryContinuePlayback();
       });
       navigator.mediaSession.setActionHandler('pause', () => {
+        userPausedRef.current = true;
+        pendingContinuePlaybackRef.current = false;
         audioRef.current?.pause();
       });
       navigator.mediaSession.setActionHandler('previoustrack', () => {
@@ -1776,6 +1907,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!audioRef.current) return;
     if (isPlaying) {
       userPausedRef.current = true; // Mark as intentional user pause
+      pendingContinuePlaybackRef.current = false;
       isPlayingRef.current = false; // Sync update to prevent onError from firing when unloading source
       setIsPlaying(false);
 
@@ -1811,7 +1943,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       });
     } else {
-      const position = Math.max(audioRef.current.currentTime ?? 0, currentTime);
+      const position = Math.max(audioRef.current.currentTime ?? 0, currentTimeRef.current);
       if (isPreviewBlockedAt(position, !!activeRadioStation)) {
         setShowPremiumModal(true);
         return;
@@ -1837,7 +1969,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const seek = (time: number) => {
     if (!audioRef.current || isRadioSync) return; // Prevent live stream seeking
     audioRef.current.currentTime = time;
-    setCurrentTime(time);
+    publishTime(time);
     lastListenSampleTimeRef.current = time;
   };
 
@@ -2009,8 +2141,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
 
+    currentQueueIndexRef.current = prevIndex;
     setCurrentQueueIndex(prevIndex);
-    playTrack(queue[prevIndex]);
+    void playTrack(queue[prevIndex]);
   };
 
   const reorderQueue = (startIndex: number, endIndex: number) => {
@@ -2063,7 +2196,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       activeRadioStation,
       isPlaying,
       duration,
-      currentTime,
+      getCurrentTime,
+      subscribeTime,
       volume,
       isMuted,
       isRadioSync,

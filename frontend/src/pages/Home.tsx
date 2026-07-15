@@ -11,6 +11,8 @@ import {
   TrendingMobileSkeleton,
   ArtistTileSkeleton,
   ArtistListSkeleton,
+  MOBILE_SCROLL_STRIP,
+  MOBILE_GRID_PAGE,
 } from '../components/shared/skeleton';
 
 import { DEFAULT_COVER_FALLBACK } from '../utils/constants';
@@ -25,9 +27,6 @@ interface HomeProps {
   onViewDetails: (track: Track) => void;
   onArtistClick: (artistName: string) => void;
 }
-
-const mobileScrollStrip =
-  'flex md:hidden gap-3 overflow-x-auto pb-1 -mx-4 px-4 snap-x snap-mandatory [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden';
 
 const RECENT_MOBILE_PAGE_SIZE = 9;
 const RECENT_DESKTOP_BATCH_SIZE = 27;
@@ -67,7 +66,7 @@ const TrackTile: React.FC<{
   <button
     type="button"
     onClick={onPlay}
-    className={`text-left group active:scale-[0.98] transition flex-shrink-0 ${compact ? 'w-[6.75rem]' : 'w-full'}`}
+    className="text-left group active:scale-[0.98] transition w-full min-w-0"
   >
     <div
       className={`w-full aspect-square overflow-hidden bg-slate-800 relative ${
@@ -388,11 +387,11 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
           </h3>
 
           {/* Mobile: 3×3 pages, horizontal scroll + lazy load */}
-          <div ref={mobileScrollRef} className={mobileScrollStrip}>
+          <div ref={mobileScrollRef} className={MOBILE_SCROLL_STRIP}>
             {recentMobilePages.map((page, pageIdx) => (
               <div
                 key={pageIdx}
-                className="grid grid-cols-3 gap-x-2.5 gap-y-2 flex-shrink-0 snap-start w-[calc(100vw-2rem)] max-w-[22rem]"
+                className={MOBILE_GRID_PAGE}
               >
                 {page.map((track) => (
                   <TrackTile
@@ -405,9 +404,9 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
               </div>
             ))}
             {isLoadingMoreRecent && (
-              <div className="grid grid-cols-3 gap-x-2.5 gap-y-2 flex-shrink-0 snap-start w-[calc(100vw-2rem)] max-w-[22rem]">
+              <div className={MOBILE_GRID_PAGE}>
                 {Array.from({ length: RECENT_MOBILE_PAGE_SIZE }).map((_, idx) => (
-                  <div key={idx} className="w-full flex-shrink-0">
+                  <div key={idx} className="w-full min-w-0">
                     <div className="w-full aspect-square rounded-xl bg-slate-800/60 animate-pulse mb-1.5" />
                     <div className="h-2.5 bg-slate-800/60 rounded animate-pulse w-4/5 mb-1" />
                     <div className="h-2 bg-slate-800/40 rounded animate-pulse w-3/5" />
@@ -470,11 +469,11 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
           {isLoading ? (
             <TrendingMobileSkeleton tileCount={9} />
           ) : (
-          <div className={mobileScrollStrip}>
+          <div className={MOBILE_SCROLL_STRIP}>
             {trackPages.map((page, pageIdx) => (
               <div
                 key={pageIdx}
-                className="grid grid-cols-3 gap-x-2.5 gap-y-2 flex-shrink-0 snap-start"
+                className={MOBILE_GRID_PAGE}
               >
                 {page.map((track) => (
                   <TrackTile key={track.id} track={track} onPlay={() => playTrack(track)} compact />
@@ -514,7 +513,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
           ) : popularArtists.length === 0 ? (
             <p className="md:hidden text-xs text-slate-500 text-center py-4">No artists available.</p>
           ) : (
-            <div className={mobileScrollStrip}>
+            <div className={MOBILE_SCROLL_STRIP}>
               {popularArtists.map((art) => (
                 <ArtistTile
                   key={art.name}

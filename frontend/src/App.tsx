@@ -81,6 +81,17 @@ function DashboardContent() {
   const [selectedArtistName, setSelectedArtistName] = useState<string | null>(null);
   const [isQueueOpen, setIsQueueOpen] = useState<boolean>(false);
   const [isLyricsOpen, setIsLyricsOpen] = useState<boolean>(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const onChange = () => setIsMobileViewport(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
 
   const replaceHash = (tab: string) => {
     const next = `#${tab}`;
@@ -808,13 +819,15 @@ function DashboardContent() {
         <div className="md:hidden flex-shrink-0 pb-[env(safe-area-inset-bottom,0px)] bg-slate-950">
           {!hideAppChrome && (
             <>
-              <AudioPlayer 
-                onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
-                isQueueOpen={isQueueOpen} 
-                onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
-                isLyricsOpen={isLyricsOpen}
-                activeTab={activeTab} 
-              />
+              {isMobileViewport && (
+                <AudioPlayer 
+                  onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
+                  isQueueOpen={isQueueOpen} 
+                  onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
+                  isLyricsOpen={isLyricsOpen}
+                  activeTab={activeTab} 
+                />
+              )}
               <MobileNav activeTab={activeTab} setActiveTab={setActiveTab} />
             </>
           )}
@@ -827,18 +840,16 @@ function DashboardContent() {
       {/* 3.5. Center Lyrics Modal */}
       <LyricsModal isOpen={isLyricsOpen} onClose={() => setIsLyricsOpen(false)} />
 
-      {/* 4. Desktop audio player (fixed overlay) */}
-      <div className="hidden md:block">
-        {!hideAppChrome && (
-          <AudioPlayer 
-            onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
-            isQueueOpen={isQueueOpen} 
-            onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
-            isLyricsOpen={isLyricsOpen}
-            activeTab={activeTab} 
-          />
-        )}
-      </div>
+      {/* 4. Desktop audio player (fixed overlay) — only one player mounted at a time */}
+      {!hideAppChrome && !isMobileViewport && (
+        <AudioPlayer 
+          onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
+          isQueueOpen={isQueueOpen} 
+          onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
+          isLyricsOpen={isLyricsOpen}
+          activeTab={activeTab} 
+        />
+      )}
 
       {/* 5. Mobile nav moved into viewport column above */}
 
