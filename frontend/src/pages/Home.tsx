@@ -16,6 +16,7 @@ import {
 } from '../components/shared/skeleton';
 
 import { DEFAULT_COVER_FALLBACK } from '../utils/constants';
+import { buildArtistCandidatesFromTracks } from '../utils/searchMatch';
 
 interface StudioBrowseItem {
   stage_name: string;
@@ -191,16 +192,15 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
       ? RECENT_DESKTOP_BATCH_SIZE
       : RECENT_MOBILE_PAGE_SIZE;
 
-  const popularArtists = Array.from(new Set(allTracks.map(t => t.artist_name))).map(name => {
-    const tracksByArtist = allTracks.filter(t => t.artist_name === name);
-    const normalized = name.toLowerCase().trim();
+  const popularArtists = buildArtistCandidatesFromTracks(allTracks).map((art) => {
+    const normalized = art.name.toLowerCase().trim();
     return {
-      name,
-      genre: tracksByArtist[0]?.file_format || 'Artist',
-      tracks: tracksByArtist.length,
+      name: art.name,
+      genre: art.file_format || 'Artist',
+      tracks: art.trackCount,
       avatar:
         studioCovers[normalized]
-        || tracksByArtist[0]?.cover_art_url
+        || art.cover_art_url
         || DEFAULT_COVER_FALLBACK,
     };
   });

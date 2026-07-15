@@ -233,9 +233,33 @@ export function getTrackAlbumTitle(track: { album_title?: string }): string {
   return (track.album_title || '').trim();
 }
 
+/** Split collaboration credits: "A, B", "A & B", "A and B", "A feat. B", etc. */
+const ARTIST_CREDIT_SPLIT =
+  /\s*(?:,|&|\band\b|\bfeat(?:uring|\.)?|\bft\.?|\bvs\.?|\bx\b|×)\s*/i;
+
+export function splitArtistCredits(value: string): string[] {
+  const raw = (value || '').trim();
+  if (!raw) return [];
+  const parts = raw
+    .split(ARTIST_CREDIT_SPLIT)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts.length > 0 ? parts : [raw];
+}
+
+function creditFieldMatchesArtist(field: string, target: string): boolean {
+  if (!field || !target) return false;
+  if (normalizeSearchText(field) === target) return true;
+  return splitArtistCredits(field).some(
+    (credit) => normalizeSearchText(credit) === target
+  );
+}
+
 export interface ArtistCandidate {
   name: string;
   trackCount: number;
+  cover_art_url?: string;
+  file_format?: string;
 }
 
 export interface AlbumCandidate {
@@ -245,21 +269,55 @@ export interface AlbumCandidate {
   artist_name?: string;
 }
 
-/** Unique display artist names from track metadata. */
+/** Unique display artist names from track metadata (splits duet/collab credits). */
 export function buildArtistCandidatesFromTracks(
-  tracks: Array<{ artist_name: string; artist_name_override?: string }>
+  tracks: Array<{
+    artist_name: string;
+    artist_name_override?: string;
+    cover_art_url?: string;
+    file_format?: string;
+  }>
 ): ArtistCandidate[] {
-  const trackCounts = new Map<string, number>();
+  const groups = new Map<
+    string,
+    { name: string; trackCount: number; cover_art_url?: string; file_format?: string }
+  >();
 
   for (const track of tracks) {
-    const name = getTrackArtistName(track);
-    if (!name) continue;
-    trackCounts.set(name, (trackCounts.get(name) ?? 0) + 1);
+    const credits = splitArtistCredits(getTrackArtistName(track));
+    if (credits.length === 0) continue;
+
+    const seenOnTrack = new Set<string>();
+    for (const credit of credits) {
+      const key = normalizeSearchText(credit);
+      if (!key || seenOnTrack.has(key)) continue;
+      seenOnTrack.add(key);
+
+      const existing = groups.get(key);
+      if (existing) {
+        existing.trackCount += 1;
+        if (!existing.cover_art_url && track.cover_art_url) {
+          existing.cover_art_url = track.cover_art_url;
+        }
+        if (!existing.file_format && track.file_format) {
+          existing.file_format = track.file_format;
+        }
+      } else {
+        groups.set(key, {
+          name: credit,
+          trackCount: 1,
+          cover_art_url: track.cover_art_url,
+          file_format: track.file_format,
+        });
+      }
+    }
   }
 
-  return Array.from(trackCounts.entries()).map(([name, trackCount]) => ({
-    name,
-    trackCount,
+  return Array.from(groups.values()).map((group) => ({
+    name: group.name,
+    trackCount: group.trackCount,
+    cover_art_url: group.cover_art_url,
+    file_format: group.file_format,
   }));
 }
 
@@ -327,10 +385,11 @@ export function trackBelongsToArtist(
 ): boolean {
   const target = normalizeSearchText(artistName);
   if (!target) return false;
-  const displayName = normalizeSearchText(getTrackArtistName(track));
-  const metadataName = normalizeSearchText(track.artist_name || '');
-  const overrideName = normalizeSearchText(track.artist_name_override || '');
-  return displayName === target || metadataName === target || overrideName === target;
+  return (
+    creditFieldMatchesArtist(getTrackArtistName(track), target) ||
+    creditFieldMatchesArtist(track.artist_name || '', target) ||
+    creditFieldMatchesArtist(track.artist_name_override || '', target)
+  );
 }
 
 export function trackBelongsToAlbum(

@@ -18,7 +18,12 @@ from app.schemas import (
     TrackResponse,
 )
 from app.services.cover_images import resolve_cover_art_url
-from app.utils.search_normalize import get_track_artist_name, normalize_search_text, track_belongs_to_artist
+from app.utils.search_normalize import (
+    get_track_artist_name,
+    normalize_search_text,
+    split_artist_credits,
+    track_belongs_to_artist,
+)
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
 
@@ -134,6 +139,7 @@ def _related_artists(
 ) -> List[ArtistRelatedSummary]:
     current_norm = normalize_search_text(current_name)
     counts: dict[str, int] = {}
+    display_names: dict[str, str] = {}
     covers: dict[str, Optional[str]] = {}
 
     all_tracks = (
@@ -144,22 +150,34 @@ def _related_artists(
     )
     for track in all_tracks:
         name = get_track_artist_name(track)
-        norm = normalize_search_text(name)
-        if not norm or norm == current_norm:
+        credits = split_artist_credits(name)
+        if not credits:
             continue
-        counts[name] = counts.get(name, 0) + 1
-        if name not in covers:
-            cover = None
-            if track.cover_image_path:
-                cover = resolve_cover_art_url(track.cover_image_path)
-            elif track.album and track.album.cover_art_url:
-                cover = resolve_cover_art_url(track.album.cover_art_url)
-            covers[name] = cover
+        cover = None
+        if track.cover_image_path:
+            cover = resolve_cover_art_url(track.cover_image_path)
+        elif track.album and track.album.cover_art_url:
+            cover = resolve_cover_art_url(track.album.cover_art_url)
 
-    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0].lower()))
+        seen_on_track: Set[str] = set()
+        for credit in credits:
+            norm = normalize_search_text(credit)
+            if not norm or norm == current_norm or norm in seen_on_track:
+                continue
+            seen_on_track.add(norm)
+            counts[norm] = counts.get(norm, 0) + 1
+            if norm not in display_names:
+                display_names[norm] = credit
+                covers[norm] = cover
+
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], display_names[item[0]].lower()))
     return [
-        ArtistRelatedSummary(name=name, track_count=count, cover_art_url=covers.get(name))
-        for name, count in ranked[:limit]
+        ArtistRelatedSummary(
+            name=display_names[norm],
+            track_count=count,
+            cover_art_url=covers.get(norm),
+        )
+        for norm, count in ranked[:limit]
     ]
 
 
