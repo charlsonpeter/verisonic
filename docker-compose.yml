@@ -20,6 +20,9 @@ services:
       - "127.0.0.1:6379:6379"
     environment:
       - TZ=UTC
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
     restart: always
 
   minio:
@@ -136,4 +139,5 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
   minio_data:

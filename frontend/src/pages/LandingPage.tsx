@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { Play, ShieldCheck, Radio, Heart, Check, Disc, ChevronRight } from 'lucide-react';
-import { useAudio, Track, RadioStation } from '../context/AudioContext';
+import { ShieldCheck, Radio, Heart, Check, Disc, ChevronRight } from 'lucide-react';
 import { SubscriptionPlans } from '../components/subscription/SubscriptionPlans';
 
 interface LandingPageProps {
@@ -8,41 +7,30 @@ interface LandingPageProps {
 }
 
 export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
-  const { playTrack, playRadioStation } = useAudio();
-  
   const [openFaq, setOpenFaq] = useState<number | null>(null);
 
-  const [featuredTracks, setFeaturedTracks] = useState<Track[]>([]);
-  const [featuredRadio, setFeaturedRadio] = useState<RadioStation[]>([]);
-  const [contentStatus, setContentStatus] = useState<'loading' | 'ready' | 'unavailable'>('loading');
-
-  React.useEffect(() => {
-    const loadLandingData = async () => {
-      try {
-        const tracksRes = await fetch('/api/music?approved_only=true');
-        if (tracksRes.ok) {
-          const tracksData = await tracksRes.json();
-          setFeaturedTracks(tracksData.slice(0, 4));
-        }
-        const radioRes = await fetch('/api/radio');
-        if (radioRes.ok) {
-          const radioData = await radioRes.json();
-          setFeaturedRadio(radioData.slice(0, 3));
-        }
-        setContentStatus(tracksRes.ok || radioRes.ok ? 'ready' : 'unavailable');
-      } catch (e) {
-        console.error("Failed to load landing page data:", e);
-        setContentStatus('unavailable');
-      }
-    };
-    loadLandingData();
-  }, []);
+  const scrollToSection = (id: string) => (e: React.MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault();
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   const faqs = [
-    { q: "What makes VeriSonic different?", a: "Studios upload lossless source files that are analyzed and prepared for multiple playback qualities. Available quality depends on the source file, your plan, and your selected stream setting." },
-    { q: "Can I listen on my phone?", a: "Yes. VeriSonic is a responsive web app. Normal quality uses AAC 128 kbps HLS, while Premium members can choose higher qualities when available." },
-    { q: "What is included with the free tier?", a: "New accounts have a seven-day full-access trial. Afterwards, free listeners can preview tracks for 30 seconds and radio for 60 seconds at normal quality." },
-    { q: "What does Premium include?", a: "Premium unlocks full playback and quality settings including AAC 256, lossless, and Hi-Res master streams when the selected track provides them." }
+    {
+      q: 'What makes VeriSonic different?',
+      a: 'Artists and studios share music that has been checked for real sound quality. You can listen at the level that fits your plan, and choose clearer sound when it is available.',
+    },
+    {
+      q: 'Can I listen on my phone?',
+      a: 'Yes. VeriSonic works in your phone or computer browser. Free listening uses standard quality, and Premium members can choose clearer options when a track supports them.',
+    },
+    {
+      q: 'What is included with the free plan?',
+      a: 'New accounts get a seven-day full trial. After that, free listeners can preview songs for 30 seconds and live radio for one minute at standard quality.',
+    },
+    {
+      q: 'What does Premium include?',
+      a: 'Premium lets you hear full songs and live radio without short previews, and unlock higher sound quality when the track offers it.',
+    },
   ];
 
   return (
@@ -61,10 +49,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
         </div>
 
         <nav className="hidden md:flex items-center gap-8 text-xs font-semibold text-slate-400">
-          <a href="#features" className="hover:text-white transition">Features</a>
-          <a href="#science" className="hover:text-white transition">The Science</a>
-          <a href="#pricing" className="hover:text-white transition">Pricing</a>
-          <a href="#faq" className="hover:text-white transition">FAQs</a>
+          <a href="#features" onClick={scrollToSection('features')} className="hover:text-white transition">Features</a>
+          <a href="#science" onClick={scrollToSection('science')} className="hover:text-white transition">How it works</a>
+          <a href="#pricing" onClick={scrollToSection('pricing')} className="hover:text-white transition">Pricing</a>
+          <a href="#faq" onClick={scrollToSection('faq')} className="hover:text-white transition">FAQs</a>
         </nav>
 
         <div className="flex gap-3 items-center">
@@ -85,12 +73,12 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
         <div className="max-w-4xl space-y-8 relative z-10">
           <div className="space-y-4">
             <h1 className="text-5xl sm:text-7xl md:text-8xl font-black tracking-tight leading-none select-none">
-              <span className="text-gradient-premium">The Purest</span> <br />
-              <span className="text-gradient-accent">Audio Streaming.</span>
+              <span className="text-gradient-premium">Music that</span> <br />
+              <span className="text-gradient-accent">sounds true.</span>
             </h1>
 
             <p className="text-xs sm:text-sm text-slate-400 max-w-lg mx-auto font-semibold leading-relaxed">
-              Explore studio-uploaded music, live radio, and quality settings designed for every listening setup.
+              Discover songs and live radio in your browser. Pick the sound quality that feels right for you.
             </p>
           </div>
 
@@ -112,14 +100,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5 mb-1">
                   <span className="px-1.5 py-0.5 rounded bg-rose-500/10 border border-rose-500/25 text-[8px] font-extrabold uppercase text-rose-455 tracking-wider">
-                    Quality options
+                    Clear sound
                   </span>
                   <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/25 text-[8px] font-extrabold uppercase text-emerald-400 tracking-wider">
-                    Studio
+                    From the studio
                   </span>
                 </div>
-                <h4 className="text-xs font-bold text-white truncate">Music at the quality you choose</h4>
-                <p className="text-[10px] text-slate-400 truncate mt-0.5">Normal, high, lossless, and Hi-Res when available</p>
+                <h4 className="text-xs font-bold text-white truncate">Listen the way you like</h4>
+                <p className="text-[10px] text-slate-400 truncate mt-0.5">Standard, high, or studio-clear when available</p>
               </div>
 
               {/* Equalizer Soundwave Anim */}
@@ -180,18 +168,18 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
       </section>
 
       {/* 2. FEATURES SECTION */}
-      <section id="features" className="max-w-6xl mx-auto px-6">
+      <section id="features" className="max-w-6xl mx-auto px-6 py-16 scroll-mt-24">
         <div className="text-center mb-16 space-y-2">
-          <h2 className="text-2xl md:text-4xl font-extrabold text-white">Built for listeners and broadcasters</h2>
-          <p className="text-sm text-slate-400">A complete web platform for music discovery, playback, and live radio.</p>
+          <h2 className="text-2xl md:text-4xl font-extrabold text-white">Made for listening</h2>
+          <p className="text-sm text-slate-400">Find music, enjoy live radio, and keep your favorites in one place.</p>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           {[
-            { title: "Studio source uploads", icon: ShieldCheck, desc: "Studios can upload lossless source formats for analysis and transcoding." },
-            { title: "Live radio", icon: Radio, desc: "Radio admins can broadcast from the desktop broadcaster to listeners in the web player." },
-            { title: "Personal playlists", icon: Heart, desc: "Save favorites, build playlists, and control playback from one global player." },
-            { title: "Audio analysis", icon: Disc, desc: "The processing pipeline records quality data and creates spectrogram reports for review." }
+            { title: 'From real studios', icon: ShieldCheck, desc: 'Music comes straight from creators, checked so what you hear matches the intended sound.' },
+            { title: 'Live radio', icon: Radio, desc: 'Tune into live stations from your browser whenever a station is on air.' },
+            { title: 'Your playlists', icon: Heart, desc: 'Save favorites, build playlists, and control playback from one simple player.' },
+            { title: 'Quality checked', icon: Disc, desc: 'Each upload is reviewed so poor or misleading copies are less likely to reach your ears.' },
           ].map((feat, idx) => {
             const Icon = feat.icon;
             return (
@@ -207,29 +195,29 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
         </div>
       </section>
 
-      <section id="comparison" className="max-w-5xl mx-auto px-6">
+      <section id="comparison" className="max-w-5xl mx-auto px-6 py-16 scroll-mt-24">
         <div className="text-center mb-12 space-y-2">
-          <h2 className="text-2xl md:text-4xl font-extrabold text-white">Playback quality options</h2>
-          <p className="text-sm text-slate-400">Quality availability depends on the source track and your subscription tier.</p>
+          <h2 className="text-2xl md:text-4xl font-extrabold text-white">Sound quality choices</h2>
+          <p className="text-sm text-slate-400">What you can hear depends on the song and your plan.</p>
         </div>
 
         <div className="overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
           <table className="w-full text-left border-collapse text-xs">
-            <caption className="sr-only">VeriSonic playback quality options</caption>
+            <caption className="sr-only">VeriSonic sound quality options</caption>
             <thead>
               <tr className="border-b border-white/5 bg-slate-950/40 text-slate-400 uppercase font-bold tracking-wider">
-                <th scope="col" className="p-5">Setting</th>
-                <th scope="col" className="p-5 text-rose-400 text-glow-rose font-bold">VeriSonic playback</th>
-                <th scope="col" className="p-5">Access</th>
+                <th scope="col" className="p-5">Option</th>
+                <th scope="col" className="p-5 text-rose-400 text-glow-rose font-bold">What it means</th>
+                <th scope="col" className="p-5">Who can use it</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
               {[
-                { name: "Normal quality", us: "AAC 128 kbps HLS", them: "Available for free playback" },
-                { name: "High quality", us: "AAC 256 kbps HLS", them: "Premium" },
-                { name: "Lossless", us: "FLAC HLS at CD quality", them: "Premium, when available" },
-                { name: "Hi-Res master", us: "Original source sample rate and bit depth", them: "Premium, when available" },
-                { name: "Audio reports", us: "Analysis and spectrogram data", them: "Available to authorized admins" }
+                { name: 'Standard', us: 'Clear everyday listening', them: 'Free and Premium' },
+                { name: 'High', us: 'Richer detail for focused listening', them: 'Premium' },
+                { name: 'Studio clear', us: 'As close as possible to the original recording', them: 'Premium, when available' },
+                { name: 'Highest detail', us: 'The fullest version the studio provided', them: 'Premium, when available' },
+                { name: 'Quality review', us: 'Checks that help keep poor copies out', them: 'Handled by the platform team' },
               ].map((row, idx) => (
                 <tr key={idx} className="hover:bg-slate-900/20 transition">
                   <th scope="row" className="p-5 font-semibold text-slate-300">{row.name}</th>
@@ -244,120 +232,12 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
         </div>
       </section>
 
-      {/* 4. FEATURED MUSIC CAROUSEL */}
-      <section className="max-w-6xl mx-auto px-6">
-        <div className="flex justify-between items-end mb-10">
-          <div>
-            <h2 className="text-2xl md:text-3xl font-extrabold text-white">Featured Studio Tracks</h2>
-            <p className="text-xs text-slate-400 mt-1">Listen to approved music from the platform catalog.</p>
-          </div>
-          <button 
-            onClick={() => onNavigate('home')}
-            className="flex items-center gap-1 text-xs font-bold text-rose-400 hover:text-rose-300 transition"
-          >
-            Explore Library <ChevronRight className="w-4 h-4" />
-          </button>
-        </div>
-
-        {contentStatus === 'loading' && <p className="text-sm text-slate-400">Loading featured tracks…</p>}
-        {contentStatus === 'unavailable' && <p className="text-sm text-slate-400">Featured music is unavailable right now. Explore the library after signing in.</p>}
-        {contentStatus === 'ready' && featuredTracks.length === 0 && <p className="text-sm text-slate-400">No featured tracks are available yet.</p>}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-          {featuredTracks.map((track) => (
-            <button
-              key={track.id} 
-              onClick={() => playTrack(track)}
-              className="glass-card glass-card-hover p-4 rounded-3xl relative group text-left"
-              aria-label={`Play ${track.title} by ${track.artist_name}`}
-            >
-              <div className="w-full aspect-square rounded-2xl overflow-hidden relative shadow-md bg-slate-800 border border-white/5 mb-3">
-                <img src={track.cover_art_url} alt={`${track.title} cover`} className="w-full h-full object-cover" />
-                <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
-                  <span className="w-12 h-12 bg-white text-slate-950 rounded-full flex items-center justify-center shadow-lg transform translate-y-2 group-hover:translate-y-0 transition">
-                    <Play className="w-5 h-5 fill-current ml-0.5" aria-hidden="true" />
-                  </span>
-                </div>
-              </div>
-              <h4 className="font-bold text-white text-xs truncate mb-0.5">{track.title}</h4>
-              <p className="text-[10px] text-slate-450 truncate">{track.artist_name}</p>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      {/* 5. FEATURED RADIO STATIONS */}
-      <section className="max-w-6xl mx-auto px-6">
-        <div className="flex justify-between items-end mb-10">
-          <div>
-            <h2 className="text-2xl md:text-3xl font-extrabold text-white">Live Broadcasting Hubs</h2>
-            <p className="text-xs text-slate-400 mt-1">Tune in to available stations from the web player.</p>
-          </div>
-          <button 
-            onClick={() => onNavigate('radio')}
-            className="flex items-center gap-1 text-xs font-bold text-rose-400 hover:text-rose-300 transition"
-          >
-            All Live Stations <ChevronRight className="w-4 h-4" />
-          </button>
-        </div>
-
-        {contentStatus === 'ready' && featuredRadio.length === 0 && <p className="text-sm text-slate-400">No radio stations are available yet.</p>}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {featuredRadio.map((station) => (
-            <button
-              key={station.id} 
-              onClick={() => {
-                if (station.is_online === false) {
-                  return;
-                }
-                playRadioStation(station);
-              }}
-              className={`glass-card rounded-2xl p-5 border transition duration-300 relative group cursor-pointer flex gap-4 ${
-                station.is_online === false
-                  ? 'opacity-60 hover:opacity-85 border-white/5 bg-slate-900/5'
-                  : 'border-white/5 bg-slate-900/10 hover:border-slate-800'
-              } text-left`}
-              disabled={station.is_online === false}
-              aria-label={station.is_online === false ? `${station.name} is offline` : `Play ${station.name}`}
-            >
-              <div className="w-16 h-16 rounded-xl overflow-hidden shadow-inner flex-shrink-0 relative">
-                <img src={station.cover_art_url} alt={`${station.name} cover`} className="w-full h-full object-cover" />
-                {station.is_online !== false && (
-                  <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
-                    <Play className="w-5 h-5 text-white fill-current" />
-                  </div>
-                )}
-              </div>
-              <div className="min-w-0 flex-1 flex flex-col justify-between">
-                <div>
-                  <h4 className="font-bold text-white text-xs truncate group-hover:text-rose-400 transition">{station.name}</h4>
-                  <p className="text-[10px] text-slate-400 truncate mt-0.5">{station.description}</p>
-                </div>
-                <div className="flex items-center justify-between text-[9px] font-bold text-slate-500 uppercase mt-2">
-                  {station.is_online === false ? (
-                    <span className="flex items-center gap-1 text-slate-500">
-                      <span className="w-1.5 h-1.5 rounded-full bg-slate-500" />
-                      Offline
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-1 text-rose-405">
-                      <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-ping" />
-                      Live
-                    </span>
-                  )}
-                  <span>{station.is_online === false ? '0' : station.listeners_count?.toLocaleString()} listeners</span>
-                </div>
-              </div>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      {/* 6. HOW AUDIO QUALITY WORKS DIAGRAM */}
-      <section id="science" className="max-w-5xl mx-auto px-6">
+      {/* HOW IT WORKS */}
+      <section id="science" className="max-w-5xl mx-auto px-6 py-16 scroll-mt-24">
         <div className="text-center mb-16 space-y-2">
-          <h2 className="text-2xl md:text-4xl font-extrabold text-white">How Audio Verification Works</h2>
+          <h2 className="text-2xl md:text-4xl font-extrabold text-white">How it works</h2>
           <p className="text-sm text-slate-450 max-w-xl mx-auto">
-            Uploaded source files are analyzed before quality-specific streams are prepared for playback.
+            From studio upload to your headphones — a few simple steps.
           </p>
         </div>
 
@@ -365,10 +245,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
           {/* Explanation text */}
           <div className="md:col-span-5 space-y-6">
             {[
-              { num: "01", name: "Lossless source upload", desc: "Studios provide supported lossless source files such as FLAC, WAV, AIFF, or ALAC." },
-              { num: "02", name: "Audio analysis", desc: "The processing pipeline extracts metadata and creates quality and spectrogram data." },
-              { num: "03", name: "Review and preparation", desc: "Approved tracks are transcoded into quality-specific HLS variants when supported." },
-              { num: "04", name: "Playback choice", desc: "Listeners select an available quality level; free accounts use normal-quality AAC 128 playback." }
+              { num: '01', name: 'Studios share the original', desc: 'Creators upload the full-quality recording they made in the studio.' },
+              { num: '02', name: 'We check the sound', desc: 'Each file is reviewed so you are less likely to hear a weak or fake copy.' },
+              { num: '03', name: 'Ready to stream', desc: 'Approved songs are prepared so they play smoothly in your browser.' },
+              { num: '04', name: 'You choose how to listen', desc: 'Pick a quality level that fits your plan. Free listening uses standard quality.' },
             ].map((step, idx) => (
               <div key={idx} className="flex gap-4">
                 <span className="text-xl font-extrabold text-rose-450">{step.num}</span>
@@ -380,9 +260,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
             ))}
           </div>
 
-          {/* Graphical diagram representing spectrogram cutoff */}
+          {/* Graphical diagram — kept visual, plain-language labels */}
           <div className="md:col-span-7 bg-slate-900/40 border border-white/5 rounded-3xl p-6 shadow-inner">
-            <h4 className="text-[10px] font-bold text-rose-400 uppercase tracking-widest mb-4">FFT Spectral Cutoff Comparison</h4>
+            <h4 className="text-[10px] font-bold text-rose-400 uppercase tracking-widest mb-4">Real studio sound vs. weak copies</h4>
             
             {/* SVG Diagram */}
             <div className="relative w-full h-56 bg-slate-950 rounded-2xl border border-white/5 p-4 overflow-hidden">
@@ -398,7 +278,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
                 <line x1="90" y1="0" x2="90" y2="100" stroke="rgba(255,255,255,0.03)" strokeWidth="0.5" />
 
                 {/* Spectral curves */}
-                {/* 1. Lossless/Studio Master (Green Curve - full range) */}
+                {/* 1. Full studio sound (Green Curve) */}
                 <path 
                   d="M 0,15 Q 20,10 40,20 T 70,30 T 90,40 T 100,60 L 100,100 L 0,100 Z" 
                   fill="rgba(16,185,129,0.08)" 
@@ -406,7 +286,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
                   strokeWidth="1.5"
                 />
 
-                {/* 2. Fake Upscaled Rejection (Red Curve - sharp cutoff at 17kHz) */}
+                {/* 2. Weak / fake copy (Red Curve) */}
                 <path 
                   d="M 0,18 Q 20,14 40,25 T 60,35 T 75,42 L 76,98 L 76,100 L 0,100 Z" 
                   fill="rgba(239,68,68,0.08)" 
@@ -423,22 +303,20 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
               <div className="absolute top-4 left-4 flex flex-col gap-1.5 text-[9px] font-bold">
                 <span className="flex items-center gap-1 text-emerald-400">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  Authentic Studio Master (WAV/FLAC)
+                  Full studio recording
                 </span>
                 <span className="flex items-center gap-1 text-rose-455">
                   <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-                  Upscaled Lossy Rejection Limit (&lt;17kHz Cutoff)
+                  Weak copy that cuts off detail
                 </span>
               </div>
 
-              {/* Frequency coordinates */}
+              {/* Simple axis labels */}
               <div className="absolute bottom-2 left-4 right-4 flex justify-between text-[8px] text-slate-500 font-bold">
-                <span>20 Hz</span>
-                <span>5 kHz</span>
-                <span>15 kHz</span>
-                <span className="text-rose-400">17 kHz (Cutoff)</span>
-                <span>22 kHz (CD)</span>
-                <span>48 kHz (Hi-Res)</span>
+                <span>Bass</span>
+                <span>Mids</span>
+                <span className="text-rose-400">Detail lost</span>
+                <span>Full range</span>
               </div>
             </div>
           </div>
@@ -446,64 +324,69 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
       </section>
 
       {/* 8. PRICING SECTION */}
-      <section id="pricing" className="max-w-5xl mx-auto px-6">
+      <section id="pricing" className="max-w-5xl mx-auto px-6 py-16 scroll-mt-24">
         <div className="text-center mb-16 space-y-2">
-          <h2 className="text-2xl md:text-4xl font-extrabold text-white">Audiophile Streaming Plans</h2>
-          <p className="text-sm text-slate-400">Choose the plan and playback quality that fit your listening needs.</p>
+          <h2 className="text-2xl md:text-4xl font-extrabold text-white">Simple plans</h2>
+          <p className="text-sm text-slate-400">Start free, then upgrade when you want full songs and clearer sound.</p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-5xl mx-auto font-sans">
-          {/* Free Tier */}
-          <div className="bg-slate-900/10 border border-white/5 rounded-3xl p-8 flex flex-col justify-between shadow-inner hover:border-slate-800 transition duration-300">
-            <div className="space-y-6">
-              <div>
-                <h3 className="text-base font-extrabold text-slate-300 uppercase tracking-wide">Listener Free</h3>
-                <p className="text-xs text-slate-450 mt-1">Try the platform, then keep listening with previews.</p>
+        <div className="max-w-5xl mx-auto font-sans">
+          <SubscriptionPlans
+            compact
+            onRequireAuth={() => onNavigate('auth')}
+            onSuccess={() => onNavigate('home')}
+            leadingSlot={(
+              <div className="relative rounded-2xl border border-white/5 bg-slate-950/40 p-5 flex flex-col justify-between h-full">
+                <div>
+                  <h4 className="text-sm font-bold text-white">Free</h4>
+                  <p className="text-2xl font-extrabold text-white mt-2">
+                    ₹0
+                    <span className="text-[10px] text-slate-500 font-bold block mt-1 uppercase">
+                      Free to start
+                    </span>
+                  </p>
+                  <p className="text-[10px] text-slate-400 leading-relaxed mt-3">
+                    Try VeriSonic, then keep exploring with short previews.
+                  </p>
+                  <ul className="mt-4 space-y-2 text-[10px] text-slate-350">
+                    <li className="flex items-center gap-2">
+                      <Check className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
+                      30-second song previews
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
+                      1-minute live radio previews
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
+                      Standard sound quality
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <Check className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
+                      Favorites and playlists
+                    </li>
+                  </ul>
+                </div>
+                <div className="mt-5 space-y-2">
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('auth')}
+                    className="w-full py-2.5 text-xs font-bold rounded-xl uppercase tracking-wider bg-slate-900 hover:bg-slate-800 text-slate-200 border border-white/5 transition"
+                  >
+                    Sign Up Free
+                  </button>
+                </div>
               </div>
-              <div className="text-3xl font-extrabold text-white">
-                ₹0<span className="text-[10px] text-slate-500 font-bold block mt-1 uppercase">Free preview access</span>
-              </div>
-              <ul className="space-y-3.5 text-xs text-slate-400">
-                <li className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-rose-455" /> 30-Second Song Previews
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-rose-455" /> 1-Minute Live Radio Limits
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-rose-455" /> Normal Quality (AAC 128)
-                </li>
-                <li className="flex items-center gap-2 text-slate-650 line-through">
-                  No Lossless FLAC Master streams
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check className="w-4 h-4 text-rose-455" /> Favorites and playlists
-                </li>
-              </ul>
-            </div>
-            <button 
-              onClick={() => onNavigate('auth')}
-              className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold text-xs rounded-xl mt-8 border border-white/5 transition"
-            >
-              Sign Up Free
-            </button>
-          </div>
-
-          <div className="lg:col-span-2">
-            <SubscriptionPlans
-              compact
-              onRequireAuth={() => onNavigate('auth')}
-              onSuccess={() => onNavigate('home')}
-            />
-          </div>
+            )}
+          />
         </div>
       </section>
 
       {/* 9. FAQ ACCORDION */}
-      <section id="faq" className="max-w-3xl mx-auto px-6">
+      <section id="faq" className="max-w-3xl mx-auto px-6 py-16 scroll-mt-24">
         <div className="text-center mb-16 space-y-2">
-          <h2 className="text-2xl md:text-3xl font-extrabold text-white">Frequently Answered Queries</h2>
-          <p className="text-xs text-slate-455">Answers about playback quality and access.</p>
+          <h2 className="text-2xl md:text-3xl font-extrabold text-white">Common questions</h2>
+          <p className="text-xs text-slate-455">Quick answers about listening and plans.</p>
         </div>
 
         <div className="space-y-3">
@@ -545,7 +428,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onNavigate }) => {
               <span className="text-lg font-extrabold text-white">VeriSonic</span>
             </div>
             <p className="text-xs text-slate-455 max-w-sm leading-relaxed">
-              A web platform for music streaming, live radio, and studio-managed catalogs.
+              Music and live radio in your browser — clear sound from real studios.
             </p>
           </div>
         </div>

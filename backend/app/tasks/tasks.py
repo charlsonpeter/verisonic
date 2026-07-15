@@ -230,13 +230,21 @@ def analyze_audio_task(track_id: int, temp_file_path: str):
             report.cutoff_frequency = spectral["cutoff_frequency"]
             report.high_frequency_energy = spectral["high_frequency_energy"]
             report.spectrogram_path = img_key
+            report.is_fake_upscaled = spectral.get("is_fake_upscaled")
+            report.spectral_entropy_high_band = spectral.get("spectral_entropy_high_band")
+            report.authenticity_score = spectral.get("authenticity_score")
+            report.true_quality_tier = spectral.get("true_quality_tier")
         else:
             report = AudioAnalysisReport(
                 track_id=track_id,
                 max_frequency=spectral["max_frequency"],
                 cutoff_frequency=spectral["cutoff_frequency"],
                 high_frequency_energy=spectral["high_frequency_energy"],
-                spectrogram_path=img_key
+                spectrogram_path=img_key,
+                is_fake_upscaled=spectral.get("is_fake_upscaled"),
+                spectral_entropy_high_band=spectral.get("spectral_entropy_high_band"),
+                authenticity_score=spectral.get("authenticity_score"),
+                true_quality_tier=spectral.get("true_quality_tier"),
             )
             db.add(report)
         db.commit()

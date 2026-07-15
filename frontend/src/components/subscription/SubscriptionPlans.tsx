@@ -26,6 +26,8 @@ import { SubscriptionQueueNotice } from './SubscriptionQueueNotice';
 interface SubscriptionPlansProps {
   compact?: boolean;
   modal?: boolean;
+  /** Optional card rendered as the first column in a 3-column landing layout. */
+  leadingSlot?: React.ReactNode;
   onSuccess?: () => void;
   onRequireAuth?: () => void;
 }
@@ -33,6 +35,7 @@ interface SubscriptionPlansProps {
 export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
   compact = false,
   modal = false,
+  leadingSlot,
   onSuccess,
   onRequireAuth,
 }) => {
@@ -282,17 +285,23 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
 
   if (loadError) {
     return (
-      <p className="text-[11px] text-amber-400/90 font-semibold">
-        {loadError}
-      </p>
+      <div className={leadingSlot ? 'grid grid-cols-1 md:grid-cols-3 gap-3 items-stretch' : undefined}>
+        {leadingSlot}
+        <p className={`text-[11px] text-amber-400/90 font-semibold ${leadingSlot ? 'md:col-span-2 self-center' : ''}`}>
+          {loadError}
+        </p>
+      </div>
     );
   }
 
   if (plans.length === 0) {
     return (
-      <p className="text-[11px] text-slate-500 font-semibold">
-        Loading subscription plans…
-      </p>
+      <div className={leadingSlot ? 'grid grid-cols-1 md:grid-cols-3 gap-3 items-stretch' : undefined}>
+        {leadingSlot}
+        <p className={`text-[11px] text-slate-500 font-semibold ${leadingSlot ? 'md:col-span-2 self-center' : ''}`}>
+          Loading subscription plans…
+        </p>
+      </div>
     );
   }
 
@@ -339,9 +348,14 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
         />
       )}
 
-      <div className={`grid gap-3 ${
-        modal || compact ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1 md:grid-cols-2'
+      <div className={`grid gap-3 items-stretch ${
+        leadingSlot
+          ? 'grid-cols-1 md:grid-cols-3'
+          : modal || compact
+            ? 'grid-cols-1 sm:grid-cols-2'
+            : 'grid-cols-1 md:grid-cols-2'
       }`}>
+        {leadingSlot}
         {plans.map((plan) => {
           const isLoading = loadingPlanId === plan.id;
           const action = getPlanAction(plan);
@@ -355,7 +369,7 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
           return (
             <div
               key={plan.id}
-              className={`relative rounded-2xl border flex flex-col justify-between ${
+              className={`relative rounded-2xl border flex flex-col justify-between h-full ${
                 modal ? 'p-4' : 'p-5'
               } ${
                 isCurrent
@@ -390,15 +404,15 @@ export const SubscriptionPlans: React.FC<SubscriptionPlansProps> = ({
                 <ul className={`text-slate-350 ${modal ? 'mt-2 space-y-1 text-[9px]' : 'mt-4 space-y-2 text-[10px]'}`}>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className={`text-rose-400 flex-shrink-0 ${modal ? 'w-3 h-3' : 'w-3.5 h-3.5'}`} />
-                    Unlimited playback
+                    Full songs and radio
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className={`text-rose-400 flex-shrink-0 ${modal ? 'w-3 h-3' : 'w-3.5 h-3.5'}`} />
-                    Lossless & hi-res streams
+                    Clearer sound when available
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle2 className={`text-rose-400 flex-shrink-0 ${modal ? 'w-3 h-3' : 'w-3.5 h-3.5'}`} />
-                    Playlists & favorites
+                    Playlists and favorites
                   </li>
                 </ul>
               </div>

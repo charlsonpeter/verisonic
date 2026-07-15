@@ -293,6 +293,11 @@ class AudioAnalysisReport(Base):
     cutoff_frequency = Column(Float, nullable=True)
     high_frequency_energy = Column(Float, nullable=True)
     spectrogram_path = Column(String, nullable=True) # path in S3/MinIO
+    # Acoustic authenticity (optional; older rows remain NULL → legacy scoring path)
+    is_fake_upscaled = Column(Boolean, nullable=True)
+    spectral_entropy_high_band = Column(Float, nullable=True)
+    authenticity_score = Column(Float, nullable=True)
+    true_quality_tier = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     track = relationship("Track", back_populates="analysis_report")

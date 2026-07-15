@@ -142,6 +142,10 @@ def _resolve_quality_score(
     spectral = {
         "cutoff_frequency": report.cutoff_frequency,
         "max_frequency": report.max_frequency or 0,
+        "is_fake_upscaled": report.is_fake_upscaled,
+        "spectral_entropy_high_band": report.spectral_entropy_high_band,
+        "authenticity_score": report.authenticity_score,
+        "true_quality_tier": report.true_quality_tier,
     }
     quality = calculate_quality_score(metadata, spectral)
     score = quality["quality_score"]
@@ -926,6 +930,10 @@ def get_quality_report(
     spectral = {
         "cutoff_frequency": report.cutoff_frequency or 0,
         "max_frequency": report.max_frequency or 0,
+        "is_fake_upscaled": report.is_fake_upscaled,
+        "spectral_entropy_high_band": report.spectral_entropy_high_band,
+        "authenticity_score": report.authenticity_score,
+        "true_quality_tier": report.true_quality_tier,
     }
     breakdown, computed_score = build_score_breakdown(metadata, spectral)
     quality = calculate_quality_score(metadata, spectral)
@@ -940,6 +948,10 @@ def get_quality_report(
         max_frequency=report.max_frequency,
         cutoff_frequency=report.cutoff_frequency,
         high_frequency_energy=report.high_frequency_energy,
+        is_fake_upscaled=report.is_fake_upscaled,
+        spectral_entropy_high_band=report.spectral_entropy_high_band,
+        authenticity_score=report.authenticity_score,
+        true_quality_tier=report.true_quality_tier,
         spectrogram_path=spectrogram_path,
         created_at=report.created_at,
         base_score=100,

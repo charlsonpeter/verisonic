@@ -38,12 +38,17 @@ export const Contact: React.FC = () => {
         { value: 'general' as const, label: 'General Support / Inquiries' },
       ];
     }
+    if (!token) {
+      return [
+        { value: 'general' as const, label: 'General Support / Inquiries' },
+      ];
+    }
     return [
       { value: 'general' as const, label: 'General Support / Inquiries' },
       { value: 'studio_upgrade' as const, label: 'Request Role Upgrade: Studio Admin' },
       { value: 'radio_upgrade' as const, label: 'Request Role Upgrade: Radio Admin' },
     ];
-  }, [isStudioAdmin, isRadioAdmin]);
+  }, [isStudioAdmin, isRadioAdmin, token]);
 
   const [name, setName] = useState(currentUser?.full_name || '');
   const [email, setEmail] = useState(currentUser?.email || '');
@@ -179,17 +184,25 @@ export const Contact: React.FC = () => {
         Use this form for radio account issues: station profile, stream keys, broadcaster setup, listener revenue, wallet payouts, or account status.
       </p>
     </div>
+  ) : !token ? (
+    <div className="glass-card p-6 rounded-3xl border border-white/5 space-y-4">
+      <h3 className="text-xs font-black text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
+        <ShieldCheck className="w-4.5 h-4.5" /> Get in touch
+      </h3>
+      <p className="text-[11.5px] leading-relaxed text-slate-400 font-sans">
+        Send a general message below. To apply as a studio or radio partner, please sign in first.
+      </p>
+    </div>
   ) : (
     <div className="glass-card p-6 rounded-3xl border border-white/5 space-y-4">
       <h3 className="text-xs font-black text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
-        <ShieldCheck className="w-4.5 h-4.5" /> Promotion workflow
+        <ShieldCheck className="w-4.5 h-4.5" /> Grow with VeriSonic
       </h3>
       <p className="text-[11.5px] leading-relaxed text-slate-400 font-sans">
-        Listeners can apply to become a <strong>Studio Admin</strong> (to upload lossy/lossless audio tracks) or a{' '}
-        <strong>Radio Admin</strong> (to provision continuous FM streams).
+        Listeners can apply to share music as a studio, or run a live radio station, after signing in.
       </p>
       <p className="text-[11.5px] leading-relaxed text-slate-400 font-sans">
-        Once approved, you will unlock specialized administrative panels directly inside your dashboard.
+        Once approved, the right tools appear in your account.
       </p>
     </div>
   );
@@ -221,7 +234,18 @@ export const Contact: React.FC = () => {
   }
 
   return (
-    <div className="w-full max-w-4xl space-y-10 pb-10">
+    <div className={`w-full max-w-4xl space-y-10 pb-10 ${!token ? 'px-6 md:px-8 py-8 mx-auto' : ''}`}>
+      {!token && (
+        <button
+          type="button"
+          onClick={() => {
+            window.location.hash = 'landing';
+          }}
+          className="text-xs font-bold text-slate-400 hover:text-white transition"
+        >
+          ← Back to VeriSonic
+        </button>
+      )}
       <div className="hidden md:block">
         <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
           <Mail className="w-8 h-8 text-rose-400 animate-pulse" /> Contact Support Hub

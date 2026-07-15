@@ -297,6 +297,12 @@ MIGRATIONS = [
         ALTER TABLE tracks ADD COLUMN IF NOT EXISTS lyrics_language VARCHAR;
         ALTER TABLE tracks ADD COLUMN IF NOT EXISTS lyrics_language_probability FLOAT;
     """),
+    ("026_audio_analysis_authenticity", """
+        ALTER TABLE audio_analysis_reports ADD COLUMN IF NOT EXISTS is_fake_upscaled BOOLEAN;
+        ALTER TABLE audio_analysis_reports ADD COLUMN IF NOT EXISTS spectral_entropy_high_band FLOAT;
+        ALTER TABLE audio_analysis_reports ADD COLUMN IF NOT EXISTS authenticity_score FLOAT;
+        ALTER TABLE audio_analysis_reports ADD COLUMN IF NOT EXISTS true_quality_tier VARCHAR;
+    """),
 ]
 
 

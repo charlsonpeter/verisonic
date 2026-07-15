@@ -136,7 +136,7 @@ function DashboardContent() {
 
   // Handle logout redirect or invalid session redirect
   useEffect(() => {
-    if (!token && activeTab !== 'auth' && activeTab !== 'landing') {
+    if (!token && activeTab !== 'auth' && activeTab !== 'landing' && activeTab !== 'contact') {
       replaceHash('landing');
       setActiveTab('landing');
       localStorage.removeItem('activeTab');
@@ -769,7 +769,11 @@ function DashboardContent() {
   };
 
   const isPasswordResetGate = mustResetPassword || activeTab === 'admin-password-reset';
-  const hideAppChrome = activeTab === 'landing' || activeTab === 'auth' || isPasswordResetGate;
+  const hideAppChrome =
+    activeTab === 'landing' ||
+    activeTab === 'auth' ||
+    isPasswordResetGate ||
+    (activeTab === 'contact' && !token);
 
   return (
     <div className="flex flex-1 min-h-0 h-[100dvh] max-h-[100dvh] w-full box-border pt-[env(safe-area-inset-top,0px)] bg-slate-950 text-slate-100 overflow-hidden font-sans select-none relative">
@@ -803,7 +807,7 @@ function DashboardContent() {
         <main
           ref={mainRef}
           className={`flex-1 min-h-0 overflow-y-auto overscroll-y-contain ${hideAppChrome ? '' : 'md:pb-36'} ${
-            activeTab === 'landing' || activeTab === 'auth'
+            activeTab === 'landing' || activeTab === 'auth' || (activeTab === 'contact' && !token)
               ? 'px-0 py-0'
               : 'px-6 md:px-8 max-md:py-3'
           }`}

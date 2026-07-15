@@ -221,6 +221,10 @@ class AudioAnalysisReportResponse(BaseModel):
     max_frequency: Optional[float] = None
     cutoff_frequency: Optional[float] = None
     high_frequency_energy: Optional[float] = None
+    is_fake_upscaled: Optional[bool] = None
+    spectral_entropy_high_band: Optional[float] = None
+    authenticity_score: Optional[float] = None
+    true_quality_tier: Optional[str] = None
     spectrogram_path: Optional[str] = None
     created_at: datetime
 
