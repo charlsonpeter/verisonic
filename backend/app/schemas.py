@@ -215,32 +215,6 @@ class TrackResponse(BaseModel):
         from_attributes = True
 
 
-class LyricsTimedLine(BaseModel):
-    start: float
-    end: float
-    text: str
-
-
-class TranscribeQueuedResponse(BaseModel):
-    task_id: str
-    status: str = "queued"
-    track_id: int
-
-
-class TranscribeStatusResponse(BaseModel):
-    task_id: str
-    state: str  # PENDING | STARTED | SUCCESS | FAILURE | PROGRESS | …
-    status: Optional[str] = None  # success | failed | queued | running
-    progress: Optional[int] = None  # 0–100
-    stage: Optional[str] = None
-    track_id: Optional[int] = None
-    detected_language: Optional[str] = None
-    language_probability: Optional[float] = None
-    lyrics: Optional[str] = None
-    lyrics_timed: Optional[List[LyricsTimedLine]] = None
-    error: Optional[str] = None
-
-
 class AudioAnalysisReportResponse(BaseModel):
     id: int
     track_id: int

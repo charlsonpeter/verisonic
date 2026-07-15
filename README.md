@@ -223,7 +223,6 @@ Key backend settings (see `docker-compose.yml` and `backend/app/core/config.py`)
 - `ENVIRONMENT` — set to `production` in deployed environments (forces Redis for refresh tokens)
 - `CORS_ORIGINS` — comma-separated allowed web origins
 - `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` — enable Premium checkout (INR)
-- `OPENAI_API_KEY` (optional, for lyrics transcription)
 - Email settings (optional, for withdrawal CSV email export)
 
 **Production checklist:** set `ENVIRONMENT=production`, a strong `SECRET_KEY`, strong database/MinIO credentials, Razorpay live keys, and restrict service ports.

@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from app.db.session import get_db, SessionLocal
 from app.models import Track, Artist, Album, Genre, AudioAnalysisReport, ListeningHistory, StreamingLog, TrackComment, User
-from app.schemas import TrackResponse, AudioAnalysisReportResponse, QualityReportDetailResponse, ScoreBreakdownItem, QualityScoreTier, TrackCommentCreate, TrackCommentResponse, ListeningHistoryEntryResponse, PaginatedTrackListResponse, TranscribeQueuedResponse, TranscribeStatusResponse
+from app.schemas import TrackResponse, AudioAnalysisReportResponse, QualityReportDetailResponse, ScoreBreakdownItem, QualityScoreTier, TrackCommentCreate, TrackCommentResponse, ListeningHistoryEntryResponse, PaginatedTrackListResponse
 from app.api.auth import get_current_user, get_current_studio_admin, get_current_admin, get_optional_current_user
 from app.services.storage import (
     generate_presigned_url,
@@ -25,16 +25,13 @@ from app.services.storage import (
     open_object_stream,
 )
 from app.services.audio import build_score_breakdown, QUALITY_SCORE_TIERS, calculate_quality_score
-from app.tasks.tasks import analyze_audio_task, extract_lyrics_task
+from app.tasks.tasks import analyze_audio_task
 from app.core.premium import user_has_premium
 from app.core.config import settings
 from app.core.security import ALGORITHM, create_stream_ticket, validate_stream_ticket
 from app.core.upload_validation import validate_audio_upload, validate_cover_upload
 from app.core.ws_auth import accept_authenticated_websocket, extract_ws_token, resolve_ws_user
 from app.models import User
-from celery_worker import celery_app
-from celery.result import AsyncResult
-
 router = APIRouter(prefix="/music", tags=["music"])
 stream_auth = HTTPBearer(auto_error=False)
 
@@ -287,191 +284,6 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
     return payload
 
 
-@router.get("/transcribe-status/{task_id}", response_model=TranscribeStatusResponse)
-async def get_transcribe_status(
-    task_id: str,
-    current_user=Depends(get_current_studio_admin),
-):
-    """Poll Celery task status for a lyrics extraction job."""
-    from app.services.lyrics_progress import get_latest_lyrics_progress
-
-    result = AsyncResult(task_id, app=celery_app)
-    state = result.state or "PENDING"
-    latest = get_latest_lyrics_progress(task_id) or {}
-
-    if state == "PROGRESS":
-        meta = result.info if isinstance(result.info, dict) else {}
-        merged = {**latest, **meta}
-        return TranscribeStatusResponse(
-            task_id=task_id,
-            state=state,
-            status=merged.get("status") or "running",
-            progress=merged.get("progress"),
-            stage=merged.get("stage"),
-            track_id=merged.get("track_id"),
-            detected_language=merged.get("detected_language"),
-            language_probability=merged.get("language_probability"),
-            lyrics=merged.get("lyrics"),
-            lyrics_timed=merged.get("lyrics_timed"),
-            error=merged.get("error"),
-        )
-
-    if state in ("PENDING", "RECEIVED", "STARTED", "RETRY"):
-        status_label = "queued" if state in ("PENDING", "RECEIVED") else "running"
-        return TranscribeStatusResponse(
-            task_id=task_id,
-            state=state,
-            status=latest.get("status") or status_label,
-            progress=latest.get("progress") or (0 if status_label == "queued" else 5),
-            stage=latest.get("stage") or status_label,
-        )
-
-    if state == "FAILURE":
-        err = str(result.result) if result.result else "Task failed"
-        return TranscribeStatusResponse(
-            task_id=task_id,
-            state=state,
-            status="failed",
-            progress=100,
-            stage="failed",
-            error=err,
-        )
-
-    payload = result.result if isinstance(result.result, dict) else (latest or {})
-    return TranscribeStatusResponse(
-        task_id=task_id,
-        state=state,
-        status=payload.get("status"),
-        progress=payload.get("progress", 100 if payload.get("status") in ("success", "failed") else None),
-        stage=payload.get("stage"),
-        track_id=payload.get("track_id"),
-        detected_language=payload.get("detected_language"),
-        language_probability=payload.get("language_probability"),
-        lyrics=payload.get("lyrics"),
-        lyrics_timed=payload.get("lyrics_timed"),
-        error=payload.get("error"),
-    )
-
-
-@router.websocket("/ws/transcribe/{task_id}")
-async def websocket_transcribe_progress(
-    websocket: WebSocket,
-    task_id: str,
-    token: Optional[str] = None,
-):
-    """Live lyrics-transcription progress via Redis pub/sub (worker → browser)."""
-    import json
-
-    from app.core.redis_client import get_redis
-    from app.services.lyrics_progress import (
-        get_latest_lyrics_progress,
-        progress_channel,
-    )
-
-    resolved_token = extract_ws_token(websocket, token)
-    user = resolve_ws_user(resolved_token)
-    if not user or user.role not in ("admin", "studio_admin"):
-        await websocket.close(code=1008, reason="Unauthorized")
-        return
-
-    await accept_authenticated_websocket(websocket)
-
-    async def send_payload(payload: dict) -> bool:
-        await websocket.send_json(payload)
-        return payload.get("status") in ("success", "failed")
-
-    # Catch-up snapshot if the client connects mid-job
-    latest = get_latest_lyrics_progress(task_id)
-    if latest and await send_payload(latest):
-        return
-
-    # If Celery already finished before WS connect
-    result = AsyncResult(task_id, app=celery_app)
-    if result.state == "SUCCESS" and isinstance(result.result, dict):
-        await send_payload(result.result)
-        return
-    if result.state == "FAILURE":
-        await send_payload({
-            "task_id": task_id,
-            "status": "failed",
-            "progress": 100,
-            "stage": "failed",
-            "error": str(result.result) if result.result else "Task failed",
-        })
-        return
-
-    redis_client = get_redis()
-    if not redis_client:
-        # Fallback: poll Celery result meta
-        try:
-            last_progress = None
-            while True:
-                res = AsyncResult(task_id, app=celery_app)
-                state = res.state or "PENDING"
-                if state == "PROGRESS" and isinstance(res.info, dict):
-                    payload = res.info
-                    prog = payload.get("progress")
-                    if prog != last_progress:
-                        last_progress = prog
-                        if await send_payload(payload):
-                            return
-                elif state == "SUCCESS" and isinstance(res.result, dict):
-                    await send_payload(res.result)
-                    return
-                elif state == "FAILURE":
-                    await send_payload({
-                        "task_id": task_id,
-                        "status": "failed",
-                        "progress": 100,
-                        "stage": "failed",
-                        "error": str(res.result) if res.result else "Task failed",
-                    })
-                    return
-                await asyncio.sleep(0.5)
-        except WebSocketDisconnect:
-            return
-        return
-
-    channel = progress_channel(task_id)
-    pubsub = redis_client.pubsub(ignore_subscribe_messages=True)
-    pubsub.subscribe(channel)
-    try:
-        while True:
-            message = await asyncio.to_thread(pubsub.get_message, True, 1.0)
-            if message and message.get("type") == "message":
-                data = message.get("data")
-                if isinstance(data, bytes):
-                    data = data.decode("utf-8")
-                try:
-                    payload = json.loads(data)
-                except Exception:
-                    continue
-                if await send_payload(payload):
-                    return
-            # Detect orphaned sockets / already-finished tasks
-            res = AsyncResult(task_id, app=celery_app)
-            if res.state == "SUCCESS" and isinstance(res.result, dict):
-                await send_payload(res.result)
-                return
-            if res.state == "FAILURE":
-                await send_payload({
-                    "task_id": task_id,
-                    "status": "failed",
-                    "progress": 100,
-                    "stage": "failed",
-                    "error": str(res.result) if res.result else "Task failed",
-                })
-                return
-    except WebSocketDisconnect:
-        pass
-    finally:
-        try:
-            pubsub.unsubscribe(channel)
-            pubsub.close()
-        except Exception:
-            pass
-
-
 @router.post("/parse-metadata")
 async def parse_metadata(
     file: UploadFile = File(...),
@@ -502,37 +314,6 @@ async def parse_metadata(
                 os.remove(temp_file_path)
             except Exception:
                 pass
-
-
-@router.post("/{track_id}/transcribe", status_code=status.HTTP_202_ACCEPTED, response_model=TranscribeQueuedResponse)
-async def transcribe_track_lyrics(
-    track_id: int,
-    language: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_studio_admin)
-):
-    """
-    Queue AI lyrics extraction (Demucs + faster-whisper) on a Celery worker.
-    Returns 202 Accepted with a task_id for polling /music/transcribe-status/{task_id}.
-    """
-    track = db.query(Track).filter(Track.id == track_id).first()
-    if not track:
-        raise HTTPException(status_code=404, detail="Track not found")
-
-    artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
-    if not artist or (track.artist_id != artist.id and current_user.role != "admin"):
-        raise HTTPException(status_code=403, detail="Not authorized to edit this track")
-
-    if not track.original_file_path:
-        raise HTTPException(status_code=400, detail="Original audio file not found for this track")
-
-    req_lang = language if language else track.language
-    async_result = extract_lyrics_task.delay(track_id, req_lang)
-    return TranscribeQueuedResponse(
-        task_id=async_result.id,
-        status="queued",
-        track_id=track_id,
-    )
 
 
 @router.post("/upload", status_code=status.HTTP_202_ACCEPTED)

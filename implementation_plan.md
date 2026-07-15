@@ -145,7 +145,7 @@ Association table: `track_genres`
 | Prefix | Module | Status |
 |--------|--------|--------|
 | `/api/auth` | Registration, login, refresh, profile, avatar, studio profile, licence/cover uploads, admin users/studios, mode switch, reactivation | ✅ |
-| `/api/music` | Upload, CRUD, search, quality, approve, play logging, listen-progress (wallet credit), transcribe, stream ticket + master stream | ✅ |
+| `/api/music` | Upload, CRUD, search, quality, approve, play logging, listen-progress (wallet credit), stream ticket + master stream | ✅ |
 | `/api/radio` | Stations CRUD, cover/licence uploads, live ingest/playback, broadcast key, WebRTC, schedule add, listen sessions, reactivation | ✅ partial schedule |
 | `/api/playlist` | CRUD, add/remove/reorder tracks | ✅ |
 | `/api/favorites` | List, add, remove | ✅ |

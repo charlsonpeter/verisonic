@@ -47,24 +47,26 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8001
     volumes:
       - ./backend:/app
+    env_file:
+      - .env
     environment:
-      - ENVIRONMENT=development
-      - SECRET_KEY=dev-local-secret-key-change-before-production-deploy!!
-      - POSTGRES_SERVER=db
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=verisonic
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - AWS_ACCESS_KEY_ID=minioadmin
-      - AWS_SECRET_ACCESS_KEY=minioadmin
-      - S3_BUCKET_NAME=verisonic-audio
-      - S3_ENDPOINT_URL=http://minio:9000
-      - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
-      - RAZORPAY_KEY_ID=
-      - RAZORPAY_KEY_SECRET=
-      - TZ=UTC
-      - WEBRTC_BUFFER_SEC=3
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - SECRET_KEY=${SECRET_KEY:-dev-local-secret-key-change-before-production-deploy!!}
+      - POSTGRES_SERVER=${POSTGRES_SERVER:-db}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-verisonic}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-minioadmin}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-verisonic-audio}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID:-}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET:-}
+      - TZ=${TZ:-UTC}
+      - WEBRTC_BUFFER_SEC=${WEBRTC_BUFFER_SEC:-3}
     depends_on:
       - db
       - redis
@@ -75,26 +77,26 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-      args:
-        INSTALL_LYRICS_DEPS: "1"
     container_name: verisonic_worker
     command: celery -A celery_worker.celery_app worker --loglevel=info
     volumes:
       - ./backend:/app
+    env_file:
+      - .env
     environment:
-      - ENVIRONMENT=development
-      - SECRET_KEY=dev-local-secret-key-change-before-production-deploy!!
-      - POSTGRES_SERVER=db
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=verisonic
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - AWS_ACCESS_KEY_ID=minioadmin
-      - AWS_SECRET_ACCESS_KEY=minioadmin
-      - S3_BUCKET_NAME=verisonic-audio
-      - S3_ENDPOINT_URL=http://minio:9000
-      - TZ=UTC
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - SECRET_KEY=${SECRET_KEY:-dev-local-secret-key-change-before-production-deploy!!}
+      - POSTGRES_SERVER=${POSTGRES_SERVER:-db}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-verisonic}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-minioadmin}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-verisonic-audio}
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - TZ=${TZ:-UTC}
     depends_on:
       - db
       - redis

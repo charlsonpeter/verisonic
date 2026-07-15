@@ -375,7 +375,6 @@ Migrations: numbered SQL in `migrations.py` (001+). Do **not** wipe bank account
 | `S3_*` / AWS keys | MinIO bucket |
 | `CORS_ORIGINS` | Allowed web origins |
 | `RAZORPAY_KEY_ID` / `SECRET` | Premium checkout |
-| `OPENAI_API_KEY` | Optional lyrics |
 | SMTP_* | Optional wallet CSV email |
 | `WEBRTC_BUFFER_SEC` | Live buffer |
 

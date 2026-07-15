@@ -45,12 +45,6 @@ class Settings(BaseSettings):
     SMTP_USE_TLS: bool = True
     SMTP_USE_SSL: bool = False
 
-    # AI lyrics (Demucs + faster-whisper) — Celery worker only
-    LYRICS_DEMUCS_MODEL: str = "htdemucs"
-    LYRICS_WHISPER_MODEL: str = "small"
-    LYRICS_DEVICE: str = "auto"  # auto | cuda | cpu
-    LYRICS_WHISPER_COMPUTE_TYPE: str = ""  # empty = float16 on cuda, int8 on cpu
-    LYRICS_UNLOAD_MODELS_AFTER_RUN: bool = False
 
     class Config:
         env_file = ".env"
