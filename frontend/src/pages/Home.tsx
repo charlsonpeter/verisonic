@@ -32,6 +32,30 @@ const RECENT_MOBILE_PAGE_SIZE = 9;
 const RECENT_DESKTOP_BATCH_SIZE = 27;
 const RECENT_DESKTOP_VISIBLE_ROWS = 9;
 
+/** Split into fixed-size pages. Pad the last page to a full 3×3 only when there is more than one page. */
+function chunkIntoMobilePages<T>(items: T[], pageSize: number): (T | null)[][] {
+  if (items.length === 0) return [];
+  const pages: (T | null)[][] = [];
+  for (let i = 0; i < items.length; i += pageSize) {
+    pages.push(items.slice(i, i + pageSize));
+  }
+  if (pages.length > 1) {
+    const last = pages[pages.length - 1];
+    while (last.length < pageSize) {
+      last.push(null);
+    }
+  }
+  return pages;
+}
+
+const CompactTilePlaceholder: React.FC = () => (
+  <div className="w-full min-w-0 pointer-events-none invisible" aria-hidden>
+    <div className="w-full aspect-square rounded-xl mb-1.5" />
+    <div className="h-[10px]" />
+    <div className="h-[9px]" />
+  </div>
+);
+
 const RecentRowCard: React.FC<{ track: Track; onPlay: () => void }> = ({ track, onPlay }) => (
   <div
     role="button"
@@ -133,10 +157,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
   const desktopScrollRef = useRef<HTMLDivElement>(null);
   const desktopLoadMoreRef = useRef<HTMLDivElement>(null);
 
-  const recentMobilePages: Track[][] = [];
-  for (let i = 0; i < recentlyPlayed.length; i += RECENT_MOBILE_PAGE_SIZE) {
-    recentMobilePages.push(recentlyPlayed.slice(i, i + RECENT_MOBILE_PAGE_SIZE));
-  }
+  const recentMobilePages = chunkIntoMobilePages(recentlyPlayed, RECENT_MOBILE_PAGE_SIZE);
 
   const appendRecentTracks = useCallback((tracks: Track[]) => {
     if (tracks.length === 0) return;
@@ -184,10 +205,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
     };
   });
 
-  const trackPages: Track[][] = [];
-  for (let i = 0; i < allTracks.length; i += 9) {
-    trackPages.push(allTracks.slice(i, i + 9));
-  }
+  const trackPages = chunkIntoMobilePages(allTracks, 9);
 
   useEffect(() => {
     const loadStudios = async () => {
@@ -393,14 +411,18 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
                 key={pageIdx}
                 className={MOBILE_GRID_PAGE}
               >
-                {page.map((track) => (
-                  <TrackTile
-                    key={`recent-mobile-${track.id}-${pageIdx}`}
-                    track={track}
-                    onPlay={() => playTrack(track)}
-                    compact
-                  />
-                ))}
+                {page.map((track, slotIdx) =>
+                  track ? (
+                    <TrackTile
+                      key={`recent-mobile-${track.id}-${pageIdx}`}
+                      track={track}
+                      onPlay={() => playTrack(track)}
+                      compact
+                    />
+                  ) : (
+                    <CompactTilePlaceholder key={`recent-pad-${pageIdx}-${slotIdx}`} />
+                  )
+                )}
               </div>
             ))}
             {isLoadingMoreRecent && (
@@ -475,9 +497,18 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
                 key={pageIdx}
                 className={MOBILE_GRID_PAGE}
               >
-                {page.map((track) => (
-                  <TrackTile key={track.id} track={track} onPlay={() => playTrack(track)} compact />
-                ))}
+                {page.map((track, slotIdx) =>
+                  track ? (
+                    <TrackTile
+                      key={track.id}
+                      track={track}
+                      onPlay={() => playTrack(track)}
+                      compact
+                    />
+                  ) : (
+                    <CompactTilePlaceholder key={`trending-pad-${pageIdx}-${slotIdx}`} />
+                  )
+                )}
               </div>
             ))}
           </div>
