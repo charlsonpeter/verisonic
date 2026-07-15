@@ -82,6 +82,8 @@
 
 ## Known open items
 
+These items are not currently tracked outside this repository. Update this list when their status changes.
+
 - [ ] Radio schedule — list/delete/reorder API; no automated scheduled playback
 - [ ] Playlists — public discovery endpoint
 - [ ] Google OAuth — real token verification (mock login disabled)

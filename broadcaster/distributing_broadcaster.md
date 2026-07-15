@@ -1,6 +1,6 @@
 # Distributing & Running the VeriSonic Broadcaster
 
-This document outlines how to compile the VeriSonic desktop broadcaster application into standalone executables across different platforms (macOS, Windows, Linux, Android) and configure background execution.
+This document outlines how to compile the VeriSonic desktop broadcaster application into standalone executables for supported desktop platforms (macOS, Windows, and Linux) and configure background execution.
 
 ---
 
@@ -84,53 +84,11 @@ pyinstaller --noconsole --onefile --windowed ^
 
 ---
 
-## 🤖 2. Mobile Platforms (Android)
+## Android support
 
-To package the PyQt5 broadcaster application for Android, PyInstaller cannot be used. Instead, we use **Buildozer**, which compiles the Python interpreter, PyQt5, and all required library dependencies into an `.apk` bundle.
+Android packaging is not supported by this project. There is no Android-specific application code, build configuration, or CI artifact. Do not treat the exploratory Buildozer steps below as a supported release path.
 
-### Step 1: Install Buildozer Requirements (Linux or macOS)
-*Windows users must run this inside a WSL (Windows Subsystem for Linux) instance.*
-```bash
-# Install Ubuntu dependencies
-sudo apt update
-sudo apt install -y git zip unzip openjdk-17-jdk autoconf libtool pkg-config zlib1g-dev libncurses5-dev libssl-dev cmake clang lldb
-pip install --user buildozer
-```
-
-### Step 2: Initialize Buildozer
-Navigate to your project folder and run:
-```bash
-buildozer init
-```
-This generates a `buildozer.spec` configuration file in your directory.
-
-### Step 3: Configure `buildozer.spec`
-Open `buildozer.spec` and configure the following parameters to package your application and its dependencies:
-```ini
-title = VeriSonic Broadcaster
-package.name = verisonic_broadcaster
-package.domain = com.verisonic
-
-# Requirements (Python dependencies and PyQt5)
-requirements = python3, pyqt5, hostpython3, numpy, sounddevice, websocket-client, lameenc
-
-# Android specific permissions
-android.permissions = RECORD_AUDIO, INTERNET
-
-# Supported orientations
-orientation = portrait
-```
-
-### Step 4: Build the Android Package
-Run the compilation command. Buildozer will automatically download the Android SDK/NDK and compile the project:
-```bash
-buildozer android debug
-```
-* **Result**: A deployable `.apk` file will be created in the `bin/` directory (e.g. `bin/verisonic_broadcaster-1.0-debug.apk`).
-
----
-
-## ⚙️ 3. Background Setup (Run on Login)
+## ⚙️ 2. Background Setup (Run on Login)
 
 ### 🍏 On macOS
 1. Open **System Settings > General > Login Items**.

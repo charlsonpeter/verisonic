@@ -25,7 +25,7 @@ For full platform status, API details, search, wallet/revenue, profiles, and kno
 - **`broadcaster/verisonic_broadcaster.py`** — PyQt5 GUI (Tkinter fallback)
 - Audio device selection, VU meter, WebSocket MP3 streaming, JWT or stream-key auth
 - **Radio admin only** — platform admin accounts are rejected at login
-- CI builds: `.github/workflows/build-broadcaster.yml` (macOS, Linux, Windows)
+- CI builds: `.github/workflows/build-broadcaster.yml` (macOS, Linux, Windows). These are workflow artifacts, not a public release channel.
 
 ### Infrastructure
 - **Docker Compose** bridge network — `backend:8001`, `frontend:5173`, nginx on `:3000`
@@ -78,4 +78,4 @@ python broadcaster/verisonic_broadcaster.py
 
 ## Packaging
 
-See [broadcaster/distributing_broadcaster.md](broadcaster/distributing_broadcaster.md) for PyInstaller builds and distribution.
+See [broadcaster/distributing_broadcaster.md](broadcaster/distributing_broadcaster.md) for PyInstaller builds and CI artifacts. No public downloadable release is currently documented.
