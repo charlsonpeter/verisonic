@@ -762,7 +762,6 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
-  const [isTranscribing, setIsTranscribing] = useState(false);
   const [isLyricsModalOpen, setIsLyricsModalOpen] = useState(false);
   const [lyricsDraft, setLyricsDraft] = useState('');
 
@@ -873,29 +872,6 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedTrackIds.join(',')]);
 
-  const handleTranscribeAI = async () => {
-    if (!isSingleEdit || !editingTrack) return;
-    setIsTranscribing(true);
-    try {
-      const response = await fetch(`/api/music/${editingTrack.id}/transcribe`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const lyrics = data.lyrics || '';
-        setEditLyrics(lyrics);
-        setLyricsDraft(lyrics);
-      } else {
-        showError("Transcription Failed", "Failed to transcribe. Make sure the original audio is uploaded and analyzed.");
-      }
-    } catch (err) {
-      console.error(err);
-      showError("Transcription Error", "Error triggering AI transcription.");
-    } finally {
-      setIsTranscribing(false);
-    }
-  };
 
   const openLyricsModal = () => {
     setLyricsDraft(editLyrics === KEEP_SAME ? '' : editLyrics);
@@ -1769,7 +1745,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                       onChange={setEditLanguage}
                       options={isMultiEdit ? multiOptions.language : [editLanguage]}
                       list="languages-suggestions"
-                      placeholder="e.g. English"
+                      placeholder="e.g. Malayalam"
                     />
                     <BulkTagField
                       label="Genres"
@@ -1791,16 +1767,6 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                     <div className="space-y-1">
                       <div className="flex justify-between items-center">
                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Lyrics</label>
-                        {isSingleEdit && (
-                          <button
-                            type="button"
-                            onClick={handleTranscribeAI}
-                            disabled={isTranscribing}
-                            className="px-2 py-1 bg-rose-600 hover:bg-rose-500 disabled:bg-rose-600/30 text-[10px] text-white font-bold rounded-lg transition"
-                          >
-                            {isTranscribing ? 'Transcribing...' : 'AI Transcribe'}
-                          </button>
-                        )}
                       </div>
                       <BulkTagField
                         label="Lyrics"
@@ -1932,24 +1898,14 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
         panelClassName="bg-slate-900 max-h-[90vh] flex flex-col overflow-hidden"
         bodyClassName="flex-1 overflow-hidden p-0 min-h-0 flex flex-col"
         header={(
-          <div className="flex items-center justify-between gap-3 pr-8">
-            <div>
-              <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                <Edit3 className="w-5 h-5 text-rose-400" />
-                Edit Lyrics
-              </h3>
-              {editingTrack?.title && (
-                <p className="text-xs text-slate-400 mt-0.5 font-sans truncate">{editingTrack.title}</p>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={handleTranscribeAI}
-              disabled={isTranscribing}
-              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:bg-rose-600/30 text-[10px] text-white font-bold rounded-lg transition"
-            >
-              {isTranscribing ? 'Transcribing...' : 'AI Transcribe'}
-            </button>
+          <div className="pr-8">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <Edit3 className="w-5 h-5 text-rose-400" />
+              Edit Lyrics
+            </h3>
+            {editingTrack?.title && (
+              <p className="text-xs text-slate-400 mt-0.5 font-sans truncate">{editingTrack.title}</p>
+            )}
           </div>
         )}
         footer={(

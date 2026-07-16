@@ -292,6 +292,17 @@ MIGRATIONS = [
         ALTER TABLE tracks ADD COLUMN IF NOT EXISTS hls_lossless_path VARCHAR;
         ALTER TABLE tracks ADD COLUMN IF NOT EXISTS hls_hires_path VARCHAR;
     """),
+    ("025_tracks_lyrics_timed", """
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS lyrics_timed JSONB;
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS lyrics_language VARCHAR;
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS lyrics_language_probability FLOAT;
+    """),
+    ("026_audio_analysis_authenticity", """
+        ALTER TABLE audio_analysis_reports ADD COLUMN IF NOT EXISTS is_fake_upscaled BOOLEAN;
+        ALTER TABLE audio_analysis_reports ADD COLUMN IF NOT EXISTS spectral_entropy_high_band FLOAT;
+        ALTER TABLE audio_analysis_reports ADD COLUMN IF NOT EXISTS authenticity_score FLOAT;
+        ALTER TABLE audio_analysis_reports ADD COLUMN IF NOT EXISTS true_quality_tier VARCHAR;
+    """),
 ]
 
 

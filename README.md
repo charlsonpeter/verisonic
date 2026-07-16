@@ -145,19 +145,19 @@ docker compose up --build
 | Service | URL |
 |---------|-----|
 | Web portal | http://localhost:3000 |
-| API docs | http://localhost:3000/docs |
+| API docs (development) | http://localhost:8001/docs |
 | MinIO console | http://localhost:9001 (`minioadmin` / `minioadmin`) |
 
-Nginx listens on port 3000 and proxies to the Vite dev server (5173) and FastAPI backend (8001).
+Nginx listens on port 3000 and proxies `/api` to FastAPI (8001). FastAPI's development-only OpenAPI UI is exposed directly on port 8001; `/docs` on port 3000 is handled by the frontend proxy.
 
 ### 2. Default admin account
 
-On first startup the backend seeds:
+On first startup the backend seeds this local-development account:
 
 - **Email:** `admin@verisonic.com`
 - **Password:** `admin12345`
 
-Use this to log in as platform admin. You will be prompted to set a new password before admin features are unlocked.
+Use this to log in as platform admin. You will be prompted to set a new password before admin features are unlocked. Do not use these credentials in a deployed environment.
 
 Use this account to promote users to studio/radio admin roles and assign subscription tiers.
 
@@ -216,14 +216,19 @@ The Vite dev server proxies `/api` to the backend.
 
 ### Environment variables
 
-Key backend settings (see `docker-compose.yml` and `backend/app/core/config.py`):
+Copy the safe template before configuring a non-default environment:
+
+```bash
+cp .env.example .env
+```
+
+Key backend settings (see `.env.example`, `docker-compose.yml`, and `backend/app/core/config.py`):
 
 - `POSTGRES_*`, `REDIS_HOST`, `S3_ENDPOINT_URL`
 - `SECRET_KEY` — required in production (32+ characters)
 - `ENVIRONMENT` — set to `production` in deployed environments (forces Redis for refresh tokens)
 - `CORS_ORIGINS` — comma-separated allowed web origins
 - `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` — enable Premium checkout (INR)
-- `OPENAI_API_KEY` (optional, for lyrics transcription)
 - Email settings (optional, for withdrawal CSV email export)
 
 **Production checklist:** set `ENVIRONMENT=production`, a strong `SECRET_KEY`, strong database/MinIO credentials, Razorpay live keys, and restrict service ports.

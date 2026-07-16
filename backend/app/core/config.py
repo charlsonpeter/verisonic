@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     SMTP_USE_TLS: bool = True
     SMTP_USE_SSL: bool = False
 
+
     class Config:
         env_file = ".env"
         case_sensitive = True

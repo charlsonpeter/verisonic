@@ -32,7 +32,6 @@ from app.core.security import ALGORITHM, create_stream_ticket, validate_stream_t
 from app.core.upload_validation import validate_audio_upload, validate_cover_upload
 from app.core.ws_auth import accept_authenticated_websocket, extract_ws_token, resolve_ws_user
 from app.models import User
-
 router = APIRouter(prefix="/music", tags=["music"])
 stream_auth = HTTPBearer(auto_error=False)
 
@@ -143,6 +142,10 @@ def _resolve_quality_score(
     spectral = {
         "cutoff_frequency": report.cutoff_frequency,
         "max_frequency": report.max_frequency or 0,
+        "is_fake_upscaled": report.is_fake_upscaled,
+        "spectral_entropy_high_band": report.spectral_entropy_high_band,
+        "authenticity_score": report.authenticity_score,
+        "true_quality_tier": report.true_quality_tier,
     }
     quality = calculate_quality_score(metadata, spectral)
     score = quality["quality_score"]
@@ -259,6 +262,9 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
         "aac_128_path": aac_128_url,
         "cover_art_url": cover_art_url,
         "lyrics": track.lyrics,
+        "lyrics_timed": track.lyrics_timed,
+        "lyrics_language": track.lyrics_language,
+        "lyrics_language_probability": track.lyrics_language_probability,
         "composer": track.composer,
         "lyricist": track.lyricist,
         "year": track.year,
@@ -281,49 +287,6 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
 
     return payload
 
-def transcribe_audio(file_path: str, language: Optional[str] = None, track_title: str = "Unknown", artist_name: str = "Unknown") -> str:
-    """
-    Simulates speech recognition or calls OpenAI API if key exists.
-    Supports multi-language output. If language is not specified, AI detects it automatically.
-    """
-    import os
-    import httpx
-    
-    # Check if OPENAI_API_KEY environment variable is present
-    api_key = os.getenv("OPENAI_API_KEY")
-    if api_key:
-        try:
-            # Call OpenAI Whisper API using standard HTTP request to avoid needing `openai` SDK
-            headers = {"Authorization": f"Bearer {api_key}"}
-            url = "https://api.openai.com/v1/audio/transcriptions"
-            files = {"file": open(file_path, "rb")}
-            data = {"model": "whisper-1"}
-            if language:
-                # Map full names or codes to ISO 639-1 code if needed, otherwise pass it
-                lang_lower = language.lower()
-                if "span" in lang_lower or "esp" in lang_lower or lang_lower == "es":
-                    data["language"] = "es"
-                elif "fren" in lang_lower or "fran" in lang_lower or lang_lower == "fr":
-                    data["language"] = "fr"
-                elif "germ" in lang_lower or "deut" in lang_lower or lang_lower == "de":
-                    data["language"] = "de"
-                elif "hind" in lang_lower or lang_lower == "hi":
-                    data["language"] = "hi"
-                elif "chin" in lang_lower or "zh" in lang_lower or "mand" in lang_lower:
-                    data["language"] = "zh"
-                else:
-                    data["language"] = language
-            response = httpx.post(url, headers=headers, files=files, data=data, timeout=60.0)
-            if response.status_code == 200:
-                res_data = response.json()
-                return res_data.get("text", "")
-            else:
-                print(f"OpenAI transcription failed with status code {response.status_code}: {response.text}")
-        except Exception as ex:
-            print(f"Failed to transcribe via OpenAI Whisper API: {ex}")
-            
-    # Mock AI transcription disabled — return empty when Whisper API is unavailable
-    return ""
 
 @router.post("/parse-metadata")
 async def parse_metadata(
@@ -355,6 +318,7 @@ async def parse_metadata(
                 os.remove(temp_file_path)
             except Exception:
                 pass
+
 
 @router.post("/upload", status_code=status.HTTP_202_ACCEPTED)
 async def upload_music(
@@ -514,64 +478,6 @@ async def upload_music(
     analyze_audio_task.delay(track.id, temp_file_path)
     
     return {"message": "Track uploaded and analysis scheduled", "track_id": track.id}
-
-@router.post("/{track_id}/transcribe")
-async def transcribe_track_lyrics(
-    track_id: int,
-    language: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_studio_admin)
-):
-    """
-    Manually trigger AI transcription for a track's audio file.
-    Supports multiple languages.
-    """
-    track = db.query(Track).filter(Track.id == track_id).first()
-    if not track:
-        raise HTTPException(status_code=404, detail="Track not found")
-        
-    # Check if the user is the owner/artist or admin
-    artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
-    if not artist or (track.artist_id != artist.id and current_user.role != "admin"):
-        raise HTTPException(status_code=403, detail="Not authorized to edit this track")
-        
-    if not track.original_file_path:
-        raise HTTPException(status_code=400, detail="Original audio file not found for this track")
-        
-    # Download file to temp path
-    from app.services.storage import s3_client, settings
-    import tempfile
-    import os
-    
-    ext = os.path.splitext(track.original_file_path)[1].lower() or ".wav"
-    fd, temp_file_path = tempfile.mkstemp(suffix=ext)
-    os.close(fd)
-    
-    try:
-        s3_client.download_file(
-            Bucket=settings.S3_BUCKET_NAME,
-            Key=track.original_file_path,
-            Filename=temp_file_path
-        )
-        
-        artist_name = track.artist_name_override if track.artist_name_override else (track.artist.stage_name if track.artist else "Unknown Artist")
-        # Fallback to configured track language if none explicitly passed in manual request
-        req_lang = language if language else track.language
-        lyrics_text = transcribe_audio(temp_file_path, language=req_lang, track_title=track.title, artist_name=artist_name)
-        
-        track.lyrics = lyrics_text
-        db.commit()
-        db.refresh(track)
-        
-        return {"message": "Transcription completed", "lyrics": lyrics_text}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
-    finally:
-        if os.path.exists(temp_file_path):
-            try:
-                os.remove(temp_file_path)
-            except Exception:
-                pass
 
 @router.get("/autocomplete-suggestions")
 def get_autocomplete_suggestions(
@@ -1024,6 +930,10 @@ def get_quality_report(
     spectral = {
         "cutoff_frequency": report.cutoff_frequency or 0,
         "max_frequency": report.max_frequency or 0,
+        "is_fake_upscaled": report.is_fake_upscaled,
+        "spectral_entropy_high_band": report.spectral_entropy_high_band,
+        "authenticity_score": report.authenticity_score,
+        "true_quality_tier": report.true_quality_tier,
     }
     breakdown, computed_score = build_score_breakdown(metadata, spectral)
     quality = calculate_quality_score(metadata, spectral)
@@ -1038,6 +948,10 @@ def get_quality_report(
         max_frequency=report.max_frequency,
         cutoff_frequency=report.cutoff_frequency,
         high_frequency_energy=report.high_frequency_energy,
+        is_fake_upscaled=report.is_fake_upscaled,
+        spectral_entropy_high_band=report.spectral_entropy_high_band,
+        authenticity_score=report.authenticity_score,
+        true_quality_tier=report.true_quality_tier,
         spectrogram_path=spectrogram_path,
         created_at=report.created_at,
         base_score=100,

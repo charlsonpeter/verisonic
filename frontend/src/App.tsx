@@ -81,6 +81,17 @@ function DashboardContent() {
   const [selectedArtistName, setSelectedArtistName] = useState<string | null>(null);
   const [isQueueOpen, setIsQueueOpen] = useState<boolean>(false);
   const [isLyricsOpen, setIsLyricsOpen] = useState<boolean>(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const onChange = () => setIsMobileViewport(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
 
   const replaceHash = (tab: string) => {
     const next = `#${tab}`;
@@ -125,7 +136,7 @@ function DashboardContent() {
 
   // Handle logout redirect or invalid session redirect
   useEffect(() => {
-    if (!token && activeTab !== 'auth' && activeTab !== 'landing') {
+    if (!token && activeTab !== 'auth' && activeTab !== 'landing' && activeTab !== 'contact') {
       replaceHash('landing');
       setActiveTab('landing');
       localStorage.removeItem('activeTab');
@@ -758,7 +769,11 @@ function DashboardContent() {
   };
 
   const isPasswordResetGate = mustResetPassword || activeTab === 'admin-password-reset';
-  const hideAppChrome = activeTab === 'landing' || activeTab === 'auth' || isPasswordResetGate;
+  const hideAppChrome =
+    activeTab === 'landing' ||
+    activeTab === 'auth' ||
+    isPasswordResetGate ||
+    (activeTab === 'contact' && !token);
 
   return (
     <div className="flex flex-1 min-h-0 h-[100dvh] max-h-[100dvh] w-full box-border pt-[env(safe-area-inset-top,0px)] bg-slate-950 text-slate-100 overflow-hidden font-sans select-none relative">
@@ -792,7 +807,7 @@ function DashboardContent() {
         <main
           ref={mainRef}
           className={`flex-1 min-h-0 overflow-y-auto overscroll-y-contain ${hideAppChrome ? '' : 'md:pb-36'} ${
-            activeTab === 'landing' || activeTab === 'auth'
+            activeTab === 'landing' || activeTab === 'auth' || (activeTab === 'contact' && !token)
               ? 'px-0 py-0'
               : 'px-6 md:px-8 max-md:py-3'
           }`}
@@ -808,13 +823,15 @@ function DashboardContent() {
         <div className="md:hidden flex-shrink-0 pb-[env(safe-area-inset-bottom,0px)] bg-slate-950">
           {!hideAppChrome && (
             <>
-              <AudioPlayer 
-                onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
-                isQueueOpen={isQueueOpen} 
-                onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
-                isLyricsOpen={isLyricsOpen}
-                activeTab={activeTab} 
-              />
+              {isMobileViewport && (
+                <AudioPlayer 
+                  onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
+                  isQueueOpen={isQueueOpen} 
+                  onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
+                  isLyricsOpen={isLyricsOpen}
+                  activeTab={activeTab} 
+                />
+              )}
               <MobileNav activeTab={activeTab} setActiveTab={setActiveTab} />
             </>
           )}
@@ -827,18 +844,16 @@ function DashboardContent() {
       {/* 3.5. Center Lyrics Modal */}
       <LyricsModal isOpen={isLyricsOpen} onClose={() => setIsLyricsOpen(false)} />
 
-      {/* 4. Desktop audio player (fixed overlay) */}
-      <div className="hidden md:block">
-        {!hideAppChrome && (
-          <AudioPlayer 
-            onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
-            isQueueOpen={isQueueOpen} 
-            onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
-            isLyricsOpen={isLyricsOpen}
-            activeTab={activeTab} 
-          />
-        )}
-      </div>
+      {/* 4. Desktop audio player (fixed overlay) — only one player mounted at a time */}
+      {!hideAppChrome && !isMobileViewport && (
+        <AudioPlayer 
+          onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
+          isQueueOpen={isQueueOpen} 
+          onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
+          isLyricsOpen={isLyricsOpen}
+          activeTab={activeTab} 
+        />
+      )}
 
       {/* 5. Mobile nav moved into viewport column above */}
 

@@ -195,6 +195,9 @@ class TrackResponse(BaseModel):
     aac_128_path: Optional[str] = None
     cover_art_url: Optional[str] = None
     lyrics: Optional[str] = None
+    lyrics_timed: Optional[List[dict]] = None
+    lyrics_language: Optional[str] = None
+    lyrics_language_probability: Optional[float] = None
     composer: Optional[str] = None
     lyricist: Optional[str] = None
     year: Optional[int] = None
@@ -211,12 +214,17 @@ class TrackResponse(BaseModel):
     class Config:
         from_attributes = True
 
+
 class AudioAnalysisReportResponse(BaseModel):
     id: int
     track_id: int
     max_frequency: Optional[float] = None
     cutoff_frequency: Optional[float] = None
     high_frequency_energy: Optional[float] = None
+    is_fake_upscaled: Optional[bool] = None
+    spectral_entropy_high_band: Optional[float] = None
+    authenticity_score: Optional[float] = None
+    true_quality_tier: Optional[str] = None
     spectrogram_path: Optional[str] = None
     created_at: datetime
 

@@ -12,7 +12,7 @@ import { RadioPageSkeleton } from '../components/shared/skeleton';
 const API_URL = '/api';
 
 const mobileScrollStrip =
-  'flex md:hidden items-start gap-3 overflow-x-auto pb-1 -mx-4 px-4 snap-x snap-mandatory [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden';
+  'flex md:hidden items-start gap-3 overflow-x-auto pb-1 -mx-6 px-6 scroll-px-6 snap-x snap-mandatory [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden';
 
 export const Radio: React.FC = () => {
   const { playRadioStation, activeRadioStation, isPlaying, togglePlay } = useAudio();

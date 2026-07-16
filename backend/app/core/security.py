@@ -75,15 +75,24 @@ def validate_refresh_token(refresh_token: str) -> int:
     jti = payload.get("jti")
     if user_id is None or token_type != "refresh" or not jti:
         raise ValueError("Invalid refresh token")
+    uid = int(user_id)
     client = get_redis()
     if client is None:
         if settings.REQUIRE_REDIS:
             raise ValueError("Refresh token validation unavailable")
-        return int(user_id)
-    stored = client.get(_refresh_key(int(user_id)))
-    if stored is None or stored.decode() != jti:
+        return uid
+    stored = client.get(_refresh_key(uid))
+    if stored is None:
+        # Dev/local: Redis may have been empty at login or wiped without persistence.
+        # Accept a cryptographically valid refresh JWT and re-bind the JTI.
+        # Production (REQUIRE_REDIS) still rejects missing JTIs.
+        if settings.REQUIRE_REDIS:
+            raise ValueError("Refresh token revoked or expired")
+        _store_refresh_jti(uid, jti)
+        return uid
+    if stored.decode() != jti:
         raise ValueError("Refresh token revoked or expired")
-    return int(user_id)
+    return uid
 
 
 def revoke_refresh_token(user_id: int) -> None:

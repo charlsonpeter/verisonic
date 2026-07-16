@@ -1,6 +1,6 @@
 # VeriSonic — Complete Application Build Guide
 
-This document is a **full blueprint** to rebuild an application with the **same layout, roles, features, and behavior** as VeriSonic. Use it as a product + engineering spec: if a capability is listed here, the reference app implements it (or notes an intentional exception).
+This document is a **full blueprint** to rebuild an application with the **same layout, roles, features, and behavior** as VeriSonic. Use it as a product + engineering spec: if a capability is listed here, the reference app implements it (or notes an intentional exception). For current limitations and work still to do, use [implementation_plan.md](implementation_plan.md) and [task.md](task.md).
 
 **Companion docs:** [README.md](README.md) (quick start), [implementation_plan.md](implementation_plan.md) (status & gaps), [task.md](task.md) (checklist), [walkthrough.md](walkthrough.md) (broadcaster), [broadcaster/distributing_broadcaster.md](broadcaster/distributing_broadcaster.md).
 
@@ -374,8 +374,7 @@ Migrations: numbered SQL in `migrations.py` (001+). Do **not** wipe bank account
 | `REDIS_HOST` / `REDIS_PORT` | Cache, Celery, refresh JTI |
 | `S3_*` / AWS keys | MinIO bucket |
 | `CORS_ORIGINS` | Allowed web origins |
-| `RAZORPAY_KEY_ID` / `SECRET` | Premium checkout |
-| `OPENAI_API_KEY` | Optional lyrics |
+| `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | Premium checkout |
 | SMTP_* | Optional wallet CSV email |
 | `WEBRTC_BUFFER_SEC` | Live buffer |
 
@@ -462,4 +461,4 @@ verisonic/
 - Wiping `owner_bank_accounts` in migrations — **forbidden**
 - Running earnings-reset scripts without confirm / against production
 
-Use this guide as the single source for **product completeness**. Use the codebase as the source for **exact request/response shapes** (`/docs` in development).
+Use this guide for the intended product blueprint. Use `implementation_plan.md` and `task.md` for current completeness, and use the codebase for exact request/response shapes (`/docs` in development).

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Skeleton } from './Skeleton';
-import { MOBILE_SCROLL_STRIP } from './layout';
+import { MOBILE_SCROLL_STRIP, MOBILE_GRID_PAGE } from './layout';
 import { CompactTrackTileSkeleton } from './TrackTileSkeleton';
 
 const DESKTOP_VISIBLE_ROWS = 9;
@@ -8,7 +8,7 @@ const DESKTOP_VISIBLE_ROWS = 9;
 export const RecentlyPlayedSkeleton: React.FC = () => (
   <>
     <div className={MOBILE_SCROLL_STRIP}>
-      <div className="grid grid-cols-3 gap-x-2.5 gap-y-2 flex-shrink-0 snap-start w-[calc(100vw-2rem)] max-w-[22rem]">
+      <div className={MOBILE_GRID_PAGE}>
         {Array.from({ length: 9 }).map((_, idx) => (
           <CompactTrackTileSkeleton key={idx} />
         ))}

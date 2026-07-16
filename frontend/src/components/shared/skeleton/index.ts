@@ -1,5 +1,5 @@
 export { Skeleton } from './Skeleton';
-export { MOBILE_SCROLL_STRIP } from './layout';
+export { MOBILE_SCROLL_STRIP, MOBILE_GRID_PAGE } from './layout';
 export { TrackRowSkeleton } from './TrackRowSkeleton';
 export { TrackTileSkeleton, CompactTrackTileSkeleton } from './TrackTileSkeleton';
 export { RecentlyPlayedSkeleton } from './RecentlyPlayedSkeleton';

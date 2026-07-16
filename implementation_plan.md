@@ -110,7 +110,7 @@ See **[BUILD_GUIDE.md](BUILD_GUIDE.md)** for the complete screen map and accepta
 | Payments | Razorpay Orders API (INR) |
 | Encryption | Field-level encryption for bank account numbers (`field_encryption.py`) |
 
-### 3.2 Database models (21 tables + `schema_migrations`)
+### 3.2 Database models (including `schema_migrations`)
 
 **Core:** `User`, `SubscriptionPayment`, `Artist`, `Album`, `Genre`, `Track`, `Playlist`, `PlaylistTrack`, `RadioStation`, `RadioSchedule`, `ListeningHistory`, `Favorite`, `AudioAnalysisReport`, `StreamingLog`
 
@@ -118,7 +118,7 @@ See **[BUILD_GUIDE.md](BUILD_GUIDE.md)** for the complete screen map and accepta
 
 Association table: `track_genres`
 
-**Migrations:** custom runner in `backend/app/db/migrations.py` (**001–020**).
+**Migrations:** custom runner in `backend/app/db/migrations.py` (**001–025**).
 
 | Migration | Summary |
 |-----------|---------|
@@ -133,6 +133,10 @@ Association table: `track_genres`
 | 019 | Studio cover images (`artists.cover_image_path`) |
 | 020 | User profile images (`users.profile_image_path`) |
 | 021 | Track comments (`track_comments` table) |
+| 022 | Daily-settlement settings and settlement run/credit tables |
+| 023 | Additional track metadata tags |
+| 024 | Quality-specific HLS paths |
+| 025 | Timed lyrics and language metadata |
 
 **Notable `User` fields:** `subscription`, `subscription_cycle`, `subscription_expires_at`, `subscription_activated_at`, `pending_plan_id`, `pending_plan_paid`, `subscription_cancel_at_period_end`, `stream_quality`, `must_reset_password`, `profile_image_path`
 
@@ -145,7 +149,7 @@ Association table: `track_genres`
 | Prefix | Module | Status |
 |--------|--------|--------|
 | `/api/auth` | Registration, login, refresh, profile, avatar, studio profile, licence/cover uploads, admin users/studios, mode switch, reactivation | ✅ |
-| `/api/music` | Upload, CRUD, search, quality, approve, play logging, listen-progress (wallet credit), transcribe, stream ticket + master stream | ✅ |
+| `/api/music` | Upload, CRUD, search, quality, approve, play logging, listen-progress (wallet credit), stream ticket + master stream | ✅ |
 | `/api/radio` | Stations CRUD, cover/licence uploads, live ingest/playback, broadcast key, WebRTC, schedule add, listen sessions, reactivation | ✅ partial schedule |
 | `/api/playlist` | CRUD, add/remove/reorder tracks | ✅ |
 | `/api/favorites` | List, add, remove | ✅ |
@@ -457,7 +461,7 @@ Lossless/hi-res playback uses short-lived stream tickets (`POST /api/music/{id}/
 1. Log in as studio or radio admin (admin mode)
 2. Open **My Wallet** — view balance and earnings chart
 3. Save bank account, request withdrawal
-4. As platform admin: Settings → Revenue settings; process withdrawal in admin revenue API/UI
+4. As platform admin: open Accounts to view or export withdrawal information; withdrawals are already marked paid when created.
 
 ### Subscription checkout (requires Razorpay keys)
 1. Set `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET`
