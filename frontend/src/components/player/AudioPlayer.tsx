@@ -317,18 +317,18 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   return (
     <>
       <footer
-        className={`z-30 transition-all duration-300
-          max-md:relative max-md:flex-shrink-0 max-md:w-full max-md:flex-row max-md:items-center max-md:gap-2.5 max-md:py-2.5 max-md:px-3
-          md:fixed md:flex md:items-center md:justify-between md:px-6
+        className={`z-30
+          max-md:relative max-md:flex-shrink-0 max-md:w-full max-md:flex-row max-md:items-center max-md:gap-2.5 max-md:py-2.5 max-md:px-3 max-md:bg-slate-950
+          md:fixed md:flex md:items-center md:justify-between md:px-6 md:transition-all md:duration-300
           md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-full md:max-w-6xl md:h-24 md:bottom-6
-          bg-slate-950/98 border-t border-white/10 backdrop-blur-lg
-          md:floating-deck md:rounded-3xl md:border md:bg-[rgba(6,8,20,0.72)]
+          border-t border-white/10
+          md:backdrop-blur-lg md:floating-deck md:rounded-3xl md:border md:bg-[rgba(6,8,20,0.72)]
         `}
       >
         {/* Background artwork blur effect */}
         {currentTrack?.cover_art_url && (
           <div 
-            className="absolute inset-0 bg-cover bg-center opacity-5 filter blur-3xl pointer-events-none -z-10 md:rounded-3xl" 
+            className="absolute inset-0 bg-cover bg-center opacity-5 filter blur-3xl pointer-events-none -z-10 max-md:hidden md:rounded-3xl" 
             style={{ backgroundImage: `url(${currentTrack.cover_art_url})` }}
           />
         )}
@@ -603,10 +603,12 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       {/* MOBILE FULL-SCREEN EXPANDED PLAYER DECK */}
       {isMobileExpanded && (
         <div className="fixed inset-0 bg-slate-950/98 backdrop-blur-2xl z-[999] flex flex-col justify-between p-6 animate-slide-up select-none md:hidden">
-          {/* Background Ambient Glow */}
+          {/* Background Ambient Glow — hidden when lyrics are open for readability */}
           {currentTrack?.cover_art_url && (
             <div 
-              className="absolute inset-0 bg-cover bg-center opacity-[0.08] filter blur-3xl pointer-events-none -z-10" 
+              className={`absolute inset-0 bg-cover bg-center filter blur-3xl pointer-events-none -z-10 transition-opacity duration-500 ${
+                mobileLyricsOpen ? 'opacity-0' : 'opacity-[0.08]'
+              }`}
               style={{ backgroundImage: `url(${currentTrack.cover_art_url})` }}
             />
           )}
@@ -642,7 +644,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             <div
               className={`flex flex-col items-center flex-shrink-0 transition-all duration-500 ease-in-out ${
                 mobileLyricsOpen
-                  ? 'opacity-0 scale-95 pointer-events-none'
+                  ? 'opacity-0 scale-95 pointer-events-none invisible'
                   : 'opacity-100 scale-100'
               }`}
               aria-hidden={mobileLyricsOpen}
@@ -682,7 +684,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               <button
                 type="button"
                 onClick={() => setMobileLyricsOpen(false)}
-                className={`absolute z-10 top-4 bottom-4 left-1/2 -translate-x-1/2 w-screen max-w-[100vw] flex flex-col overflow-hidden active:scale-[0.99] transition-all duration-500 ease-in-out ${
+                className={`absolute z-10 inset-0 w-full flex flex-col overflow-hidden active:scale-[0.99] transition-all duration-500 ease-in-out ${
                   mobileLyricsOpen
                     ? 'opacity-100 pointer-events-auto'
                     : 'opacity-0 pointer-events-none'
@@ -693,11 +695,11 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               >
                 <div
                   ref={mobileLyricsScrollRef}
-                  className={`relative z-10 w-full h-full min-h-0 overflow-y-auto overscroll-y-contain px-5 py-5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden scroll-smooth transition-all duration-500 ease-in-out ${
+                  className={`relative z-10 w-full h-full min-h-0 overflow-y-auto overscroll-y-contain px-6 py-6 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden scroll-smooth transition-all duration-500 ease-in-out ${
                     mobileLyricsOpen ? 'translate-y-0' : 'translate-y-3'
                   }`}
                 >
-                  <div className={`space-y-2.5 text-center ${mobileLyricsSynced ? 'py-20' : ''}`}>
+                  <div className={`text-center ${mobileLyricsSynced ? 'space-y-6 py-[30vh]' : 'space-y-3 py-4'}`}>
                     {mobileParsedLyrics.length > 0 ? (
                       mobileParsedLyrics.map((line, idx) => {
                         const isActive = mobileLyricsSynced && idx === mobileActiveLineIndex;
@@ -706,12 +708,12 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                           <p
                             key={idx}
                             ref={isActive ? mobileActiveLineRef : null}
-                            className={`text-sm leading-relaxed transition-all duration-300 ${
+                            className={`text-sm leading-relaxed transition-all duration-300 [text-shadow:0_2px_12px_rgba(0,0,0,0.85)] ${
                               isActive
                                 ? 'text-rose-400 font-extrabold opacity-100'
                                 : mobileLyricsSynced
-                                  ? 'text-slate-400 font-semibold opacity-40'
-                                  : 'text-slate-100'
+                                  ? 'text-white/80 font-semibold opacity-90'
+                                  : 'text-slate-100 font-semibold'
                             }`}
                           >
                             {line.text}
@@ -719,7 +721,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                         );
                       })
                     ) : (
-                      <p className="text-xs text-slate-500">No lyrics available.</p>
+                      <p className="text-sm text-slate-400">No lyrics available.</p>
                     )}
                   </div>
                 </div>
