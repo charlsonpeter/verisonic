@@ -10,6 +10,7 @@ share/
 pyvenv.cfg
 pip-selfcheck.json
 *tmp*
+celerybeat-schedule
 
 # Python Caches and Bytecode
 __pycache__/
