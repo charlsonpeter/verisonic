@@ -50,6 +50,7 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8001
     volumes:
       - ./backend:/app
+      - ./cert:/app/cert:ro
     env_file:
       - .env
     environment:
@@ -68,6 +69,13 @@ services:
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
       - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID:-}
       - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET:-}
+      - LYRICS_EXTRACTION_ENABLED=${LYRICS_EXTRACTION_ENABLED:-false}
+      - LYRICS_API_URL=${LYRICS_API_URL:-https://lrclib.net/api}
+      - LALAL_API_KEY=${LALAL_API_KEY:-}
+      - GOOGLE_CLOUD_PROJECT_ID=${GOOGLE_CLOUD_PROJECT_ID:-}
+      - GOOGLE_VERTEX_LOCATION=${GOOGLE_VERTEX_LOCATION:-us-central1}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
       - TZ=${TZ:-UTC}
       - WEBRTC_BUFFER_SEC=${WEBRTC_BUFFER_SEC:-3}
     depends_on:
@@ -84,6 +92,7 @@ services:
     command: celery -A celery_worker.celery_app worker --loglevel=info
     volumes:
       - ./backend:/app
+      - ./cert:/app/cert:ro
     env_file:
       - .env
     environment:
@@ -99,6 +108,13 @@ services:
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-minioadmin}
       - S3_BUCKET_NAME=${S3_BUCKET_NAME:-verisonic-audio}
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
+      - LYRICS_EXTRACTION_ENABLED=${LYRICS_EXTRACTION_ENABLED:-false}
+      - LYRICS_API_URL=${LYRICS_API_URL:-https://lrclib.net/api}
+      - LALAL_API_KEY=${LALAL_API_KEY:-}
+      - GOOGLE_CLOUD_PROJECT_ID=${GOOGLE_CLOUD_PROJECT_ID:-}
+      - GOOGLE_VERTEX_LOCATION=${GOOGLE_VERTEX_LOCATION:-us-central1}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
       - TZ=${TZ:-UTC}
     depends_on:
       - db

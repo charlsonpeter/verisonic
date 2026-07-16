@@ -25,7 +25,7 @@ from app.services.storage import (
     open_object_stream,
 )
 from app.services.audio import build_score_breakdown, QUALITY_SCORE_TIERS, calculate_quality_score
-from app.tasks.tasks import analyze_audio_task
+from app.tasks.tasks import analyze_audio_task, extract_lyrics_task
 from app.core.premium import user_has_premium
 from app.core.config import settings
 from app.core.security import ALGORITHM, create_stream_ticket, validate_stream_ticket
@@ -594,6 +594,19 @@ def _apply_manage_track_search(query, search: Optional[str], *, include_owner: b
 ManageTrackStatus = Literal["analyzing", "transcoding", "ready", "rejected"]
 
 
+class MusicCapabilitiesResponse(BaseModel):
+    lyrics_extraction_enabled: bool
+
+
+@router.get("/capabilities", response_model=MusicCapabilitiesResponse)
+def get_music_capabilities(
+    current_user=Depends(get_current_studio_admin),
+):
+    return MusicCapabilitiesResponse(
+        lyrics_extraction_enabled=settings.LYRICS_EXTRACTION_ENABLED,
+    )
+
+
 def _apply_manage_track_status(query, status_filter: Optional[ManageTrackStatus]):
     """Filter by Live Status labels used on the manage tracks screen."""
     if not status_filter:
@@ -991,6 +1004,135 @@ def manually_approve_track(
         transcode_audio_task.delay(track.id, None)
         
     return serialize_track(track, db, viewer=current_user)
+
+
+class LyricsExtractionResponse(BaseModel):
+    status: str
+    track_id: int
+    message: str
+    task_id: str
+
+
+class LyricsExtractionStatusResponse(BaseModel):
+    status: Literal["pending", "progress", "success", "error"]
+    track_id: Optional[int] = None
+    source: Optional[str] = None
+    error: Optional[str] = None
+    stage: Optional[str] = None
+    progress: Optional[int] = None
+    message: Optional[str] = None
+
+
+LyricsScriptMode = Literal["native", "latin"]
+
+
+@router.post("/{track_id}/extract-lyrics", response_model=LyricsExtractionResponse)
+def queue_lyrics_extraction(
+    track_id: int,
+    script_mode: LyricsScriptMode = Query(
+        "native",
+        description="Lyrics output script: native or latin transliteration",
+    ),
+    lyrics_text: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Manually queue hybrid lyrics extraction for a track (studio owner or admin).
+    When lyrics_text is provided, timestamps are generated for the pasted lines only.
+    """
+    from app.services.lyrics_pipeline import (
+        LyricsPipelineError,
+        validate_pipeline_config,
+        validate_sync_pipeline_config,
+    )
+
+    sync_mode = bool(lyrics_text and lyrics_text.strip())
+
+    try:
+        validate_pipeline_config(settings)
+        if sync_mode:
+            validate_sync_pipeline_config(
+                google_project_id=settings.GOOGLE_CLOUD_PROJECT_ID,
+            )
+    except LyricsPipelineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    track = db.query(Track).filter(Track.id == track_id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    is_admin = current_user.role == "admin"
+    artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+    is_owner = artist and track.artist_id == artist.id
+    if not is_admin and not is_owner:
+        raise HTTPException(status_code=403, detail="You do not have permission to extract lyrics for this track")
+
+    if not track.original_file_path:
+        raise HTTPException(status_code=400, detail="Original audio file not found for this track")
+
+    task = extract_lyrics_task.delay(
+        track_id,
+        script_mode,
+        lyrics_text=lyrics_text.strip() if sync_mode else None,
+    )
+    return LyricsExtractionResponse(
+        status="queued",
+        track_id=track_id,
+        message=(
+            "Lyrics timestamp sync queued. This may take several minutes."
+            if sync_mode
+            else "Lyrics extraction queued. This may take several minutes."
+        ),
+        task_id=task.id,
+    )
+
+
+@router.get("/extract-lyrics/status/{task_id}", response_model=LyricsExtractionStatusResponse)
+def get_lyrics_extraction_status(
+    task_id: str,
+    current_user=Depends(get_current_user),
+):
+    from celery.result import AsyncResult
+    from celery_worker import celery_app
+
+    result = AsyncResult(task_id, app=celery_app)
+    if result.state == "PROGRESS":
+        meta = result.info if isinstance(result.info, dict) else {}
+        return LyricsExtractionStatusResponse(
+            status="progress",
+            stage=meta.get("stage"),
+            progress=meta.get("progress"),
+            message=meta.get("message"),
+        )
+
+    if result.state in ("PENDING", "RECEIVED", "STARTED", "RETRY"):
+        return LyricsExtractionStatusResponse(
+            status="pending",
+            progress=0,
+            message="Queued — waiting for worker...",
+        )
+
+    if result.state == "SUCCESS":
+        payload = result.result if isinstance(result.result, dict) else {}
+        if payload.get("status") == "success":
+            return LyricsExtractionStatusResponse(
+                status="success",
+                track_id=payload.get("track_id"),
+                source=payload.get("source"),
+            )
+        return LyricsExtractionStatusResponse(
+            status="error",
+            track_id=payload.get("track_id"),
+            error=payload.get("error") or "Lyrics extraction failed.",
+        )
+
+    if result.state == "FAILURE":
+        error = str(result.result) if result.result else "Lyrics extraction failed."
+        return LyricsExtractionStatusResponse(status="error", error=error)
+
+    return LyricsExtractionStatusResponse(status="pending")
+
 
 @router.post("/{id}/play", status_code=status.HTTP_200_OK)
 def log_track_play(

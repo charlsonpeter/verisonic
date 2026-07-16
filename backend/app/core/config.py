@@ -45,6 +45,15 @@ class Settings(BaseSettings):
     SMTP_USE_TLS: bool = True
     SMTP_USE_SSL: bool = False
 
+    # Lyrics extraction (manual trigger; hybrid pipeline)
+    LYRICS_EXTRACTION_ENABLED: bool = False
+    LYRICS_API_URL: str = "https://lrclib.net/api"
+    LALAL_API_KEY: str = ""
+    GOOGLE_CLOUD_PROJECT_ID: str = ""
+    GOOGLE_VERTEX_LOCATION: str = "us-central1"
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+    GOOGLE_APPLICATION_CREDENTIALS: str = ""
+
 
     class Config:
         env_file = ".env"

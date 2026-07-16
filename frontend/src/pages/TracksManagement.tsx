@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Music, Trash2, CheckCircle2, XCircle, RefreshCw, Star, Play, Ban, Check, Edit3, X, UploadCloud, AlertTriangle, ShieldCheck, Camera, ChevronDown } from 'lucide-react';
+import { Music, Trash2, CheckCircle2, XCircle, RefreshCw, Star, Play, Ban, Check, Edit3, X, UploadCloud, AlertTriangle, ShieldCheck, Camera, ChevronDown, Sparkles } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
 import { AppModal } from '../components/shared/AppModal';
@@ -21,12 +21,23 @@ interface UploadQueueItem {
 }
 
 type TrackStatusFilter = 'all' | 'analyzing' | 'transcoding' | 'ready' | 'rejected';
+type LyricsScriptMode = 'native' | 'latin';
+
+interface LyricsExtractionProgress {
+  message: string;
+  progress: number;
+  stage?: string;
+}
 
 interface TracksManagementProps {
   onViewReport?: (track: any) => void;
 }
 
 const KEEP_SAME = '__KEEP_SAME__';
+const LRC_TIMESTAMP_LINE_RE = /^\[\d{1,2}:\d{2}(?:\.\d{1,3})?\]\s*/;
+
+const lyricsHaveTimestamps = (text: string) =>
+  text.split('\n').some((line) => LRC_TIMESTAMP_LINE_RE.test(line.trim()));
 const KEEP_SAME_LABEL = '<Keep Same>';
 
 const formatTrackOwnerName = (track: { owner_name?: string | null; owner_email?: string | null }) =>
@@ -290,6 +301,35 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<TrackStatusFilter>('all');
+  const [lyricsExtractionEnabled, setLyricsExtractionEnabled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!token || (!isStaffInAdminMode && !isPlatformAdmin)) {
+      setLyricsExtractionEnabled(false);
+      return;
+    }
+
+    setLyricsExtractionEnabled(false);
+    void fetch('/api/music/capabilities', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (res) => {
+        if (!res.ok) return false;
+        const data = await res.json();
+        return data.lyrics_extraction_enabled === true;
+      })
+      .then((enabled) => {
+        if (!cancelled) setLyricsExtractionEnabled(enabled);
+      })
+      .catch(() => {
+        if (!cancelled) setLyricsExtractionEnabled(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token, isStaffInAdminMode, isPlatformAdmin]);
 
   const tracksList = useLazyList<any>({
     fetchPage: useCallback(async (offset, limit) => {
@@ -764,6 +804,10 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
 
   const [isLyricsModalOpen, setIsLyricsModalOpen] = useState(false);
   const [lyricsDraft, setLyricsDraft] = useState('');
+  const [lyricsScriptMode, setLyricsScriptMode] = useState<LyricsScriptMode>('native');
+  const [isGeneratingLyrics, setIsGeneratingLyrics] = useState(false);
+  const [lyricsExtractionProgress, setLyricsExtractionProgress] = useState<LyricsExtractionProgress | null>(null);
+  const lyricsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const isMultiEdit = selectedTrackIds.length > 1;
   const isSingleEdit = selectedTrackIds.length === 1;
@@ -875,12 +919,154 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
 
   const openLyricsModal = () => {
     setLyricsDraft(editLyrics === KEEP_SAME ? '' : editLyrics);
+    setLyricsScriptMode('native');
+    if (!isGeneratingLyrics) setLyricsExtractionProgress(null);
     setIsLyricsModalOpen(true);
   };
 
   const applyLyricsDraft = () => {
     setEditLyrics(lyricsDraft);
     setIsLyricsModalOpen(false);
+  };
+
+  const stopLyricsPolling = useCallback(() => {
+    if (lyricsPollRef.current) {
+      clearInterval(lyricsPollRef.current);
+      lyricsPollRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => stopLyricsPolling(), [stopLyricsPolling]);
+
+  const startLyricsPolling = useCallback((trackId: number, baselineLyrics: string, taskId?: string, syncMode = false) => {
+    stopLyricsPolling();
+    let attempts = 0;
+    const maxAttempts = 120;
+
+    lyricsPollRef.current = setInterval(async () => {
+      attempts += 1;
+      if (attempts > maxAttempts) {
+        stopLyricsPolling();
+        setIsGeneratingLyrics(false);
+        setLyricsExtractionProgress({
+          message: 'Timed out waiting for lyrics. Try refreshing the page.',
+          progress: 100,
+        });
+        return;
+      }
+
+      try {
+        if (taskId) {
+          const statusRes = await fetch(`/api/music/extract-lyrics/status/${taskId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            if (statusData.status === 'error') {
+              stopLyricsPolling();
+              setIsGeneratingLyrics(false);
+              setLyricsExtractionProgress(null);
+              toastError(statusData.error || 'Lyrics extraction failed.');
+              return;
+            }
+            if (statusData.status === 'progress') {
+              setLyricsExtractionProgress({
+                message: statusData.message || 'Processing...',
+                progress: Math.max(0, Math.min(100, statusData.progress ?? 0)),
+                stage: statusData.stage,
+              });
+              return;
+            }
+            if (statusData.status === 'pending') {
+              setLyricsExtractionProgress({
+                message: statusData.message || 'Queued — waiting for worker...',
+                progress: statusData.progress ?? 2,
+                stage: 'queued',
+              });
+              return;
+            }
+            if (statusData.status === 'success') {
+              setLyricsExtractionProgress({
+                message: 'Finalizing lyrics...',
+                progress: 98,
+                stage: 'finalizing',
+              });
+              // Fall through to fetch updated lyrics below.
+            }
+          }
+        }
+
+        const res = await fetch(`/api/music/${trackId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const newLyrics = (data.lyrics || '').trim();
+        if (newLyrics && newLyrics !== baselineLyrics.trim()) {
+          stopLyricsPolling();
+          setEditLyrics(newLyrics);
+          setLyricsDraft(newLyrics);
+          setIsGeneratingLyrics(false);
+          setLyricsExtractionProgress(null);
+          toastSuccess(syncMode ? 'Timestamps generated successfully.' : 'Lyrics generated successfully.');
+          fetchTracks();
+        }
+      } catch {
+        // Keep polling on transient errors
+      }
+    }, 3000);
+  }, [fetchTracks, stopLyricsPolling, token]);
+
+  const handleGenerateLyrics = async () => {
+    if (!isSingleEdit || !editingTrack || !token) return;
+
+    const draft = lyricsDraft.trim();
+    const syncMode = draft.length > 0;
+
+    if (syncMode) {
+      const confirmed = await showConfirm(
+        lyricsHaveTimestamps(draft) ? 'Re-sync timestamps?' : 'Generate timestamps?',
+        lyricsHaveTimestamps(draft)
+          ? 'This will align your lyric lines to the audio and update the timestamps.'
+          : 'This will add timestamps to your pasted lyrics without changing the text.',
+        'Generate timestamps'
+      );
+      if (!confirmed) return;
+    }
+
+    setIsGeneratingLyrics(true);
+    setLyricsExtractionProgress({
+      message: syncMode ? 'Queued — preparing timestamp sync...' : 'Queued — preparing lyrics extraction...',
+      progress: 2,
+      stage: 'queued',
+    });
+
+    try {
+      const params = new URLSearchParams({ script_mode: lyricsScriptMode });
+      const formData = new FormData();
+      if (syncMode) {
+        formData.append('lyrics_text', lyricsDraft);
+      }
+      const res = await fetch(`/api/music/${editingTrack.id}/extract-lyrics?${params}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: syncMode ? formData : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setIsGeneratingLyrics(false);
+        setLyricsExtractionProgress(null);
+        toastError(data.detail || (syncMode ? 'Failed to queue timestamp sync.' : 'Failed to queue lyrics extraction.'));
+        return;
+      }
+
+      toastSuccess(data.message || (syncMode ? 'Timestamp sync queued.' : 'Lyrics extraction queued.'));
+      startLyricsPolling(editingTrack.id, lyricsDraft, data.task_id, syncMode);
+    } catch {
+      setIsGeneratingLyrics(false);
+      setLyricsExtractionProgress(null);
+      toastError('Connection failed.');
+    }
   };
 
   const handleEditClick = (track: any) => {
@@ -1765,7 +1951,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                       placeholder="Lyricist"
                     />
                     <div className="space-y-1">
-                      <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2">
                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Lyrics</label>
                       </div>
                       <BulkTagField
@@ -1927,6 +2113,53 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
           </div>
         )}
       >
+        {lyricsExtractionEnabled && isSingleEdit && editingTrack && (
+          <div className="p-4 border-t border-white/5 bg-slate-900/70 space-y-2">
+            <div className="flex items-end justify-end gap-2">
+              <select
+                aria-label="Lyrics format"
+                value={lyricsScriptMode}
+                onChange={(e) => setLyricsScriptMode(e.target.value as LyricsScriptMode)}
+                disabled={isGeneratingLyrics}
+                className="w-36 bg-slate-950 border border-white/10 px-2 py-1 rounded-lg text-[10px] font-semibold text-slate-200 outline-none focus:border-violet-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <option value="native">Native language</option>
+                <option value="latin">A–Z (Romanized)</option>
+              </select>
+              <button
+                type="button"
+                onClick={handleGenerateLyrics}
+                disabled={isGeneratingLyrics || isSavingEdit}
+                className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-violet-600/20 text-violet-300 border border-violet-500/30 hover:bg-violet-600/30 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
+                <Sparkles className="w-3 h-3" />
+                {isGeneratingLyrics
+                  ? 'Generating...'
+                  : lyricsDraft.trim()
+                    ? 'Generate timestamps'
+                    : 'Generate lyrics'}
+              </button>
+            </div>
+            {lyricsExtractionProgress && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[10px] text-violet-300/90 font-sans leading-snug">
+                    {lyricsExtractionProgress.message}
+                  </p>
+                  <span className="text-[10px] font-bold text-violet-200 tabular-nums shrink-0">
+                    {lyricsExtractionProgress.progress}%
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-500 transition-all duration-500 ease-out"
+                    style={{ width: `${lyricsExtractionProgress.progress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         <textarea
           value={lyricsDraft}
           onChange={(e) => setLyricsDraft(e.target.value)}

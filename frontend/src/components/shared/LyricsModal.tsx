@@ -10,47 +10,67 @@ interface LyricsModalProps {
 
 interface ParsedLine {
   time: number;
+  end: number;
   text: string;
   words: string[];
 }
 
+function parseLrcTimestamp(line: string): { time: number; text: string } | null {
+  const timestampRegex = /^\[(\d{1,2}):(\d{2})(?:\.(\d{2}))?\]\s*(.*)$/;
+  const match = line.match(timestampRegex);
+  if (!match) return null;
+
+  const mins = parseInt(match[1], 10);
+  const secs = parseInt(match[2], 10);
+  const centis = match[3] ? parseInt(match[3], 10) : 0;
+  return {
+    time: mins * 60 + secs + centis / 100,
+    text: match[4].trim(),
+  };
+}
+
 function parseLyricsLines(lines: string[]): ParsedLine[] {
-  const timestampRegex = /^\[(\d{2}):(\d{2})(?:\.(\d{2}))?\]\s*(.*)$/;
   const parsed: ParsedLine[] = [];
 
   lines.forEach((line) => {
-    const match = line.match(timestampRegex);
-    if (match) {
-      const mins = parseInt(match[1], 10);
-      const secs = parseInt(match[2], 10);
-      const centis = match[3] ? parseInt(match[3], 10) : 0;
-      const time = mins * 60 + secs + centis / 100;
-      const text = match[4].trim();
+    const timestamped = parseLrcTimestamp(line);
+    if (timestamped) {
       parsed.push({
-        time,
-        text,
-        words: text.split(/\s+/).filter(w => w.length > 0),
+        time: timestamped.time,
+        end: timestamped.time + 3.5,
+        text: timestamped.text,
+        words: timestamped.text.split(/\s+/).filter(w => w.length > 0),
       });
-    } else {
-      const prevTime = parsed.length > 0 ? parsed[parsed.length - 1].time + 3.5 : 0;
-      parsed.push({
-        time: prevTime,
-        text: line,
-        words: line.split(/\s+/).filter(w => w.length > 0),
-      });
+      return;
     }
+
+    const prevTime = parsed.length > 0 ? parsed[parsed.length - 1].time + 3.5 : 0;
+    parsed.push({
+      time: prevTime,
+      end: prevTime + 3.5,
+      text: line,
+      words: line.split(/\s+/).filter(w => w.length > 0),
+    });
   });
 
-  return parsed.sort((a, b) => a.time - b.time);
+  for (let i = 0; i < parsed.length; i += 1) {
+    if (i + 1 < parsed.length) {
+      parsed[i].end = parsed[i + 1].time;
+    }
+  }
+
+  return parsed;
 }
 
 function lineIndexForTime(parsedLines: ParsedLine[], time: number): number {
   let activeIdx = -1;
   for (let i = 0; i < parsedLines.length; i++) {
-    if (time >= parsedLines[i].time) {
+    const line = parsedLines[i];
+    if (time >= line.time && time < line.end) {
+      return i;
+    }
+    if (time >= line.time) {
       activeIdx = i;
-    } else {
-      break;
     }
   }
   return activeIdx;
@@ -69,7 +89,7 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
     if (!lyricsText || lyricsText.trim() === '') return [];
 
     const rawLines = lyricsText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-    const timestampRegex = /^\[(\d{2}):(\d{2})(?:\.(\d{2}))?\]\s*(.*)$/;
+    const timestampRegex = /^\[(\d{1,2}):(\d{2})(?:\.(\d{2}))?\]\s*(.*)$/;
     const hasTimestamps = rawLines.some(line => timestampRegex.test(line));
 
     if (hasTimestamps) {
@@ -78,6 +98,7 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
 
     return rawLines.map(lineText => ({
       time: -1,
+      end: -1,
       text: lineText,
       words: [],
     }));

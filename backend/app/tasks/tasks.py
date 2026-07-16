@@ -579,6 +579,111 @@ def queue_missing_hls_retranscodes_task():
         db.close()
         _release_retranscode_sweep_lock(sweep_token)
 
+@celery_app.task(bind=True, name="app.tasks.tasks.extract_lyrics_task")
+def extract_lyrics_task(
+    self,
+    track_id: int,
+    script_mode: str = "native",
+    lyrics_text: str | None = None,
+):
+    """
+    Manually triggered hybrid lyrics extraction for a track.
+    Downloads the original audio, runs the pipeline, and stores LRC + timed segments.
+    """
+    from app.services.lyrics_pipeline import (
+        LyricsPipelineError,
+        run_hybrid_lyrics_pipeline,
+        validate_pipeline_config,
+    )
+    from app.core.config import settings
+    from app.services.storage import s3_client
+
+    def update_progress(stage: str, progress: int, message: str) -> None:
+        self.update_state(
+            state="PROGRESS",
+            meta={
+                "stage": stage,
+                "progress": progress,
+                "message": message,
+            },
+        )
+
+    db = SessionLocal()
+    temp_dir = tempfile.mkdtemp()
+    input_file_path = None
+
+    try:
+        validate_pipeline_config(settings)
+        update_progress("starting", 5, "Starting lyrics extraction...")
+
+        track = db.query(Track).filter(Track.id == track_id).first()
+        if not track:
+            return {"status": "error", "error": "Track not found"}
+
+        if not track.original_file_path:
+            return {"status": "error", "error": "Original audio file not found for this track"}
+
+        ext = os.path.splitext(track.original_file_path)[1].lower() or ".wav"
+        fd, input_file_path = tempfile.mkstemp(suffix=ext, dir=temp_dir)
+        os.close(fd)
+
+        update_progress("download", 15, "Downloading audio from storage...")
+        s3_client.download_file(
+            Bucket=settings.S3_BUCKET_NAME,
+            Key=track.original_file_path,
+            Filename=input_file_path,
+        )
+
+        artist_name = (
+            track.artist_name_override
+            if track.artist_name_override
+            else (track.artist.stage_name if track.artist else "Unknown Artist")
+        )
+        album_name = track.album.title if track.album else None
+
+        update_progress("pipeline", 20, "Running lyrics pipeline...")
+        result = run_hybrid_lyrics_pipeline(
+            input_file_path,
+            track.title,
+            artist_name,
+            output_script=script_mode,
+            lyrics_api_url=settings.LYRICS_API_URL,
+            album_name=album_name,
+            duration=track.duration,
+            existing_lyrics=lyrics_text,
+            lalal_api_key=settings.LALAL_API_KEY,
+            google_project_id=settings.GOOGLE_CLOUD_PROJECT_ID,
+            google_vertex_location=settings.GOOGLE_VERTEX_LOCATION,
+            google_credentials_path=settings.GOOGLE_APPLICATION_CREDENTIALS,
+            gemini_model=settings.GEMINI_MODEL,
+            progress_callback=update_progress,
+        )
+
+        update_progress("saving", 95, "Saving lyrics to track...")
+        track.lyrics = result.lrc_text
+        track.lyrics_timed = result.timed
+        if result.language:
+            track.lyrics_language = result.language
+        db.commit()
+
+        return {
+            "status": "success",
+            "track_id": track_id,
+            "source": result.source,
+        }
+    except LyricsPipelineError as exc:
+        db.rollback()
+        print(f"Lyrics pipeline error for track {track_id}: {exc}")
+        return {"status": "error", "error": str(exc)}
+    except Exception as exc:
+        db.rollback()
+        print(f"Error in extract_lyrics_task: {exc}")
+        return {"status": "error", "error": str(exc)}
+    finally:
+        db.close()
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 @celery_app.task(name="app.tasks.tasks.settle_daily_revenue_task")
 def settle_daily_revenue_task(settlement_date: str | None = None):
     """Settle previous UTC day (or an explicit YYYY-MM-DD) into owner wallets."""
