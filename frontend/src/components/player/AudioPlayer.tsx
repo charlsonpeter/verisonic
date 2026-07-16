@@ -8,6 +8,11 @@ import { useAudio } from '../../context/AudioContext';
 import { Equalizer } from './Equalizer';
 import { useAuth } from '../../context/AuthContext';
 import { AddToPlaylistButton } from '../shared/AddToPlaylistButton';
+import {
+  isSynchronizedLyrics,
+  lineIndexForTime,
+  parseLyricsFromText,
+} from '../../utils/lrc';
 
 interface AudioPlayerProps {
   onToggleQueue: () => void;
@@ -35,7 +40,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
   const [isMobileExpanded, setIsMobileExpanded] = React.useState(false);
   const [mobileLyricsOpen, setMobileLyricsOpen] = React.useState(false);
+  const [mobileActiveLineIndex, setMobileActiveLineIndex] = React.useState(-1);
   const mobilePlayerHistoryRef = React.useRef(false);
+  const mobileLyricsScrollRef = React.useRef<HTMLDivElement | null>(null);
+  const mobileActiveLineRef = React.useRef<HTMLParagraphElement | null>(null);
 
   const openMobileExpanded = React.useCallback(() => {
     setIsMobileExpanded(true);
@@ -94,13 +102,36 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     setPlaybackSpeed(1);
   };
 
-  const mobileLyricsLines = React.useMemo(() => {
+  const mobileParsedLyrics = React.useMemo(() => {
     if (!currentTrack?.lyrics) return [];
-    return currentTrack.lyrics
-      .split('\n')
-      .map(line => line.replace(/^\[\d{2}:\d{2}(?:\.\d{2})?\]\s*/, '').trim())
-      .filter(line => line.length > 0 && line !== 'None' && line !== 'null');
+    return parseLyricsFromText(currentTrack.lyrics);
   }, [currentTrack?.lyrics]);
+
+  const mobileLyricsSynced = React.useMemo(
+    () => isSynchronizedLyrics(mobileParsedLyrics),
+    [mobileParsedLyrics],
+  );
+
+  React.useEffect(() => {
+    if (!mobileLyricsOpen || !mobileLyricsSynced) {
+      setMobileActiveLineIndex(-1);
+      return;
+    }
+
+    return subscribeTime((time) => {
+      const next = lineIndexForTime(mobileParsedLyrics, time);
+      setMobileActiveLineIndex((prev) => (prev === next ? prev : next));
+    });
+  }, [mobileLyricsOpen, mobileLyricsSynced, mobileParsedLyrics, subscribeTime]);
+
+  React.useEffect(() => {
+    if (mobileLyricsSynced && mobileActiveLineRef.current) {
+      mobileActiveLineRef.current.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    }
+  }, [mobileActiveLineIndex, mobileLyricsSynced]);
 
   const { userMode, currentUser } = useAuth();
   const isRadioAdminInAdminMode = !!(
@@ -607,8 +638,15 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
           {/* Album Cover Visual Center — parent holds cover + full-area lyrics overlay */}
           <div className="flex-1 flex flex-col items-center justify-center py-6 min-h-0 w-full relative">
-            {/* Inner div: cover art only */}
-            <div className="flex flex-col items-center flex-shrink-0">
+            {/* Cover art — fades out when lyrics are shown */}
+            <div
+              className={`flex flex-col items-center flex-shrink-0 transition-all duration-500 ease-in-out ${
+                mobileLyricsOpen
+                  ? 'opacity-0 scale-95 pointer-events-none'
+                  : 'opacity-100 scale-100'
+              }`}
+              aria-hidden={mobileLyricsOpen}
+            >
               <button
                 type="button"
                 onClick={() => {
@@ -616,10 +654,11 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                     setMobileLyricsOpen(true);
                   }
                 }}
-                className={`relative block p-0 w-60 h-60 sm:w-72 sm:h-72 rounded-3xl overflow-hidden border border-white/10 shadow-2xl transition active:scale-[0.98] ${
+                className={`relative block p-0 w-60 h-60 sm:w-72 sm:h-72 rounded-3xl overflow-hidden border border-white/10 shadow-2xl transition-transform duration-300 active:scale-[0.98] ${
                   hasLyrics && !isRadioAdminInAdminMode ? 'cursor-pointer' : 'cursor-default'
                 }`}
                 aria-label={hasLyrics ? 'Show lyrics' : 'Album art'}
+                tabIndex={mobileLyricsOpen ? -1 : 0}
               >
                 <div className="absolute inset-0 bg-gradient-to-tr from-slate-900 to-rose-950">
                   {currentTrack?.cover_art_url ? (
@@ -638,32 +677,47 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               )}
             </div>
 
-            {/* Lyrics overlay — sibling outside cover div, fills parent */}
-            {mobileLyricsOpen && hasLyrics && !isRadioAdminInAdminMode && (
+            {/* Lyrics layer — transparent overlay, tap anywhere to close */}
+            {hasLyrics && !isRadioAdminInAdminMode && (
               <button
                 type="button"
                 onClick={() => setMobileLyricsOpen(false)}
-                className="absolute z-10 top-4 bottom-4 left-1/2 -translate-x-1/2 w-screen max-w-[100vw] flex flex-col overflow-hidden active:scale-[0.99] transition"
+                className={`absolute z-10 top-4 bottom-4 left-1/2 -translate-x-1/2 w-screen max-w-[100vw] flex flex-col overflow-hidden active:scale-[0.99] transition-all duration-500 ease-in-out ${
+                  mobileLyricsOpen
+                    ? 'opacity-100 pointer-events-auto'
+                    : 'opacity-0 pointer-events-none'
+                }`}
                 aria-label="Hide lyrics"
+                aria-hidden={!mobileLyricsOpen}
+                tabIndex={mobileLyricsOpen ? 0 : -1}
               >
-                {currentTrack?.cover_art_url && (
-                  <div
-                    className="absolute inset-0 bg-cover bg-center scale-110 blur-2xl opacity-20 pointer-events-none"
-                    style={{ backgroundImage: `url(${currentTrack.cover_art_url})` }}
-                    aria-hidden
-                  />
-                )}
-                <div className="absolute inset-0 bg-slate-950/75 backdrop-blur-xl" aria-hidden />
                 <div
-                  className="relative z-10 w-full h-full min-h-0 overflow-y-auto overscroll-y-contain px-5 py-5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden"
+                  ref={mobileLyricsScrollRef}
+                  className={`relative z-10 w-full h-full min-h-0 overflow-y-auto overscroll-y-contain px-5 py-5 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden scroll-smooth transition-all duration-500 ease-in-out ${
+                    mobileLyricsOpen ? 'translate-y-0' : 'translate-y-3'
+                  }`}
                 >
-                  <div className="space-y-2.5 text-center">
-                    {mobileLyricsLines.length > 0 ? (
-                      mobileLyricsLines.map((line, idx) => (
-                        <p key={idx} className="text-sm text-slate-100 leading-relaxed">
-                          {line}
-                        </p>
-                      ))
+                  <div className={`space-y-2.5 text-center ${mobileLyricsSynced ? 'py-20' : ''}`}>
+                    {mobileParsedLyrics.length > 0 ? (
+                      mobileParsedLyrics.map((line, idx) => {
+                        const isActive = mobileLyricsSynced && idx === mobileActiveLineIndex;
+
+                        return (
+                          <p
+                            key={idx}
+                            ref={isActive ? mobileActiveLineRef : null}
+                            className={`text-sm leading-relaxed transition-all duration-300 ${
+                              isActive
+                                ? 'text-rose-400 font-extrabold opacity-100'
+                                : mobileLyricsSynced
+                                  ? 'text-slate-400 font-semibold opacity-40'
+                                  : 'text-slate-100'
+                            }`}
+                          >
+                            {line.text}
+                          </p>
+                        );
+                      })
                     ) : (
                       <p className="text-xs text-slate-500">No lyrics available.</p>
                     )}
