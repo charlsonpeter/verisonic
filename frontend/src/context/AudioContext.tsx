@@ -193,6 +193,10 @@ const LISTEN_SAMPLE_MAX_DELTA_SEC = 5;
 const AUTOPLAY_PREFETCH_REMAINING = 3;
 /** Related-track batch size for lazy queue growth. */
 const AUTOPLAY_BATCH_SIZE = 12;
+/** Start preloading the next track's stream when this many seconds remain. */
+const AUTOPLAY_PRELOAD_SECONDS = 30;
+/** Retry play() while backgrounded when the browser blocked autoplay. */
+const BACKGROUND_PLAY_RETRY_MS = 2000;
 
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { token, isPremium, canConfigureStreamQuality, userMode, serverUserMode, currentUser, isStaffInAdminMode, updateStreamQuality } = useAuth();
@@ -302,12 +306,32 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const playNextRef = useRef<() => void>(() => {});
   const handleTrackEndedRef = useRef<() => void>(() => {});
   const maybePrefetchAutoplayRef = useRef<() => void>(() => {});
+  const preloadNextTrackStreamRef = useRef<() => void>(() => {});
+  /** True while swapping sources during auto-advance — suppresses background pause/resume races. */
+  const sourceTransitionRef = useRef(false);
+  const preloadHlsRef = useRef<Hls | null>(null);
+  const preloadedTrackIdRef = useRef<number | null>(null);
+  const preloadedStreamUrlRef = useRef<string | null>(null);
+  const preloadInFlightRef = useRef(false);
 
-  const resetAudioElementForNewSource = () => {
+  const destroyPreloadHls = () => {
+    if (preloadHlsRef.current) {
+      preloadHlsRef.current.destroy();
+      preloadHlsRef.current = null;
+    }
+    preloadedTrackIdRef.current = null;
+    preloadedStreamUrlRef.current = null;
+  };
+
+  const resetAudioElementForNewSource = (opts?: { keepPlaying?: boolean }) => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    audio.pause();
+    if (opts?.keepPlaying) {
+      sourceTransitionRef.current = true;
+    } else {
+      audio.pause();
+    }
 
     if (hlsRef.current) {
       hlsRef.current.stopLoad();
@@ -333,7 +357,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     audio.removeAttribute('src');
     audio.src = '';
     audio.srcObject = null;
-    audio.load();
+    if (!opts?.keepPlaying) {
+      audio.load();
+    }
   };
 
   const stopAllPlayback = () => {
@@ -347,6 +373,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       fadeIntervalRef.current = null;
     }
 
+    destroyPreloadHls();
     resetAudioElementForNewSource();
     if (webrtcPCRef.current) {
       webrtcPCRef.current.close();
@@ -502,6 +529,13 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     maybePrefetchAutoplayRef.current();
   }, [currentTrack?.id, currentQueueIndex, playQueue.length, activeRadioStation?.id, repeatMode]);
+
+  // Preload the next track's HLS manifest as soon as playback starts
+  useEffect(() => {
+    if (currentTrack && isPlaying && !activeRadioStation) {
+      preloadNextTrackStreamRef.current();
+    }
+  }, [currentTrack?.id, isPlaying, activeRadioStation?.id]);
   useEffect(() => { isShuffleRef.current = isShuffle; }, [isShuffle]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
@@ -724,6 +758,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     };
     const onPause = () => {
+      if (sourceTransitionRef.current) {
+        sourceTransitionRef.current = false;
+        return;
+      }
       // If the page is hidden (background/minimize/lock) AND the user did NOT explicitly pause,
       // Chrome is pausing our audio — immediately try to resume it
       if (document.hidden && !userPausedRef.current) {
@@ -789,6 +827,20 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const listened = sampleAccumulatedListenTime(audio.currentTime);
         maybeReportTrackListenProgressRef.current(track, listened);
       }
+
+      // Preload next track stream and extend queue while approaching the end (critical on mobile)
+      if (
+        !activeRadioStationRef.current &&
+        !audio.paused &&
+        audio.duration &&
+        isFinite(audio.duration)
+      ) {
+        const remaining = audio.duration - t;
+        if (remaining > 0 && remaining <= AUTOPLAY_PRELOAD_SECONDS) {
+          preloadNextTrackStreamRef.current();
+          maybePrefetchAutoplayRef.current();
+        }
+      }
     };
     const onDurationChange = () => setDuration(audio.duration || 0);
     const onEnded = () => handleTrackEndedRef.current();
@@ -831,6 +883,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       audio.removeEventListener('ended', onEnded);
       audio.removeEventListener('ratechange', onRateChange);
       audio.removeEventListener('error', onError);
+      destroyPreloadHls();
       audio.pause();
       if (hlsRef.current) {
         hlsRef.current.destroy();
@@ -920,6 +973,20 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('pageshow', handlePageShow);
     };
+  }, [tryContinuePlayback]);
+
+  // Keep retrying play() while backgrounded if the browser blocked track-advance autoplay
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (
+        pendingContinuePlaybackRef.current &&
+        !userPausedRef.current &&
+        audioRef.current
+      ) {
+        tryContinuePlayback();
+      }
+    }, BACKGROUND_PLAY_RETRY_MS);
+    return () => clearInterval(id);
   }, [tryContinuePlayback]);
 
   // Wire AnalyserNode once for the canvas equalizer (no React state updates per frame)
@@ -1086,6 +1153,76 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
   maybePrefetchAutoplayRef.current = maybePrefetchAutoplay;
 
+  const getNextQueueTrack = (): Track | null => {
+    const queue = playQueueRef.current;
+    const index = currentQueueIndexRef.current;
+    if (queue.length === 0) return null;
+    if (isShuffleRef.current) {
+      return queue[Math.floor(Math.random() * queue.length)] ?? null;
+    }
+    if (index + 1 < queue.length) return queue[index + 1];
+    if (repeatModeRef.current === 'all') return queue[0] ?? null;
+    return null;
+  };
+
+  const buildStreamCandidatesForTrack = (track: Track): string[] => {
+    const role = currentUserRef.current?.real_role || currentUserRef.current?.role;
+    const isOwnUpload =
+      role === 'studio_admin' &&
+      !!currentUserRef.current?.artist_profile?.id &&
+      track.artist_id === currentUserRef.current.artist_profile.id;
+    const canPlayOriginalMaster = isOwnUpload || role === 'admin';
+    return getStreamCandidatesForQuality(
+      track,
+      getEffectiveQuality(qualityLevelSettingRef.current, canConfigureStreamQualityRef.current),
+      isPremiumRef.current || canPlayOriginalMaster,
+    );
+  };
+
+  const preloadNextTrackStream = () => {
+    if (activeRadioStationRef.current || userPausedRef.current) return;
+
+    const nextTrack = getNextQueueTrack();
+    if (!nextTrack || nextTrack.id >= 100000) return;
+    if (preloadedTrackIdRef.current === nextTrack.id || preloadInFlightRef.current) return;
+
+    const candidates = buildStreamCandidatesForTrack(nextTrack);
+    if (candidates.length === 0) return;
+
+    const streamPath = candidates[0];
+    preloadInFlightRef.current = true;
+
+    void (async () => {
+      try {
+        let streamUrl = isMasterStreamPath(streamPath)
+          ? await resolveMasterStreamUrl(streamPath, nextTrack)
+          : resolveStorageUrl(streamPath);
+        if (!streamUrl) return;
+
+        destroyPreloadHls();
+        preloadedTrackIdRef.current = nextTrack.id;
+        preloadedStreamUrlRef.current = streamUrl;
+
+        if (streamUrl.includes('.m3u8') && Hls.isSupported()) {
+          const hls = new Hls();
+          preloadHlsRef.current = hls;
+          hls.loadSource(streamUrl);
+          hls.on(Hls.Events.ERROR, (_event, data) => {
+            if (data.fatal) destroyPreloadHls();
+          });
+        } else if (streamUrl.includes('.m3u8')) {
+          void fetch(streamUrl).catch(() => {});
+        }
+      } catch (e) {
+        console.warn('Failed to preload next track stream:', e);
+        destroyPreloadHls();
+      } finally {
+        preloadInFlightRef.current = false;
+      }
+    })();
+  };
+  preloadNextTrackStreamRef.current = preloadNextTrackStream;
+
   const handleTrackEnded = () => {
     if (repeatModeRef.current === 'one') {
       if (audioRef.current) {
@@ -1096,7 +1233,24 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
 
     const queue = playQueueRef.current;
-    const atEnd = queue.length === 0 || currentQueueIndexRef.current >= queue.length - 1;
+    const index = currentQueueIndexRef.current;
+
+    // Synchronous advance when the next track is already in the queue (mobile background requirement)
+    const hasQueuedNext =
+      !activeRadioStationRef.current &&
+      queue.length > 0 &&
+      (isShuffleRef.current || index + 1 < queue.length || repeatModeRef.current === 'all');
+
+    if (hasQueuedNext) {
+      sourceTransitionRef.current = true;
+      if ('mediaSession' in navigator && !userPausedRef.current) {
+        navigator.mediaSession.playbackState = 'playing';
+      }
+      playNextRef.current();
+      return;
+    }
+
+    const atEnd = queue.length === 0 || index >= queue.length - 1;
     if (atEnd && repeatModeRef.current !== 'all') {
       // Library autoplay: when the queue is exhausted, continue with related tracks
       if (!activeRadioStationRef.current && currentTrackRef.current) {
@@ -1521,10 +1675,48 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       seekRestoreCleanup?.();
       seekRestoreCleanup = null;
-      resetAudioElementForNewSource();
+
+      const isAutoAdvance = !shouldRestorePosition && autoPlay && !isRadio;
+      const keepPlaying = isAutoAdvance && (document.hidden || pendingContinuePlaybackRef.current);
+      const canUsePreload =
+        isAutoAdvance &&
+        preloadedTrackIdRef.current === trackToPlay.id &&
+        preloadedStreamUrlRef.current === streamUrl;
+
+      sourceTransitionRef.current = keepPlaying;
+      resetAudioElementForNewSource({ keepPlaying });
 
       if (streamUrl.includes('.m3u8')) {
         if (Hls.isSupported()) {
+          if (canUsePreload && preloadHlsRef.current) {
+            const hls = preloadHlsRef.current;
+            preloadHlsRef.current = null;
+            preloadedTrackIdRef.current = null;
+            preloadedStreamUrlRef.current = null;
+            hlsRef.current = hls;
+            hls.attachMedia(audioRef.current);
+            hls.on(Hls.Events.ERROR, (_event, data) => {
+              if (!data.fatal) return;
+              console.warn('HLS fatal error on preloaded stream, recovering:', data);
+              seekRestoreCleanup?.();
+              seekRestoreCleanup = null;
+              hls.destroy();
+              hlsRef.current = null;
+              void afterStreamFailure(index);
+            });
+            if (hls.levels.length > 0) {
+              onStreamReady(true);
+            } else {
+              const onPreloadManifest = () => {
+                hls.off(Hls.Events.MANIFEST_PARSED, onPreloadManifest);
+                onStreamReady(true);
+              };
+              hls.on(Hls.Events.MANIFEST_PARSED, onPreloadManifest);
+            }
+            return;
+          }
+
+          destroyPreloadHls();
           const hls = new Hls();
           hlsRef.current = hls;
           hls.loadSource(streamUrl);
