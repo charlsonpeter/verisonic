@@ -1,15 +1,16 @@
+import datetime
 import math
 import unicodedata
 from typing import List, Optional, Set
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.auth import get_optional_current_user
 from app.api.music import serialize_track
 from app.db.session import get_db
-from app.models import Artist, ListeningHistory, Track, User, track_genres
+from app.models import Artist, ListeningHistory, Track, TrackReaction, User, track_genres
 from app.schemas import (
     ArtistAlbumSummary,
     ArtistDetailResponse,
@@ -349,3 +350,100 @@ def get_track_radio(
             break
 
     return [serialize_track(t, db, viewer=current_user) for t in picked]
+
+
+@router.get("/trending", response_model=List[TrackResponse])
+def get_trending_tracks(
+    limit: int = Query(50, ge=1, le=100),
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
+    """
+    Rank tracks by net reactions (likes - dislikes) within a recent window.
+    Falls back to listening-history popularity when no positive net reactions exist.
+    """
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=days)
+    like_case = case((TrackReaction.reaction == "like", 1), else_=0)
+    dislike_case = case((TrackReaction.reaction == "dislike", 1), else_=0)
+
+    reaction_rows = (
+        db.query(
+            TrackReaction.track_id,
+            func.sum(like_case).label("likes"),
+            func.sum(dislike_case).label("dislikes"),
+        )
+        .filter(TrackReaction.updated_at >= cutoff)
+        .group_by(TrackReaction.track_id)
+        .all()
+    )
+
+    scored: list[tuple[int, int, int]] = []
+    for row in reaction_rows:
+        likes = int(row.likes or 0)
+        dislikes = int(row.dislikes or 0)
+        net = likes - dislikes
+        if net > 0:
+            scored.append((row.track_id, net, likes))
+
+    scored.sort(key=lambda item: (-item[1], -item[2], item[0]))
+    ranked_ids = [track_id for track_id, _, _ in scored[:limit]]
+
+    if ranked_ids:
+        tracks = (
+            db.query(Track)
+            .options(joinedload(Track.artist), joinedload(Track.album), joinedload(Track.genres))
+            .join(Artist, Track.artist_id == Artist.id)
+            .filter(
+                Track.id.in_(ranked_ids),
+                Track.approved == True,
+                Track.hls_playlist_path.isnot(None),
+                Artist.is_active == True,
+            )
+            .all()
+        )
+        by_id = {t.id: t for t in tracks}
+        ordered = [by_id[tid] for tid in ranked_ids if tid in by_id]
+        return [serialize_track(t, db, viewer=current_user) for t in ordered]
+
+    # Fallback: listening-history popularity when reactions are sparse
+    play_rows = (
+        db.query(ListeningHistory.track_id, func.count(ListeningHistory.id).label("plays"))
+        .filter(ListeningHistory.played_at >= cutoff)
+        .group_by(ListeningHistory.track_id)
+        .order_by(func.count(ListeningHistory.id).desc(), ListeningHistory.track_id.asc())
+        .limit(limit * 2)
+        .all()
+    )
+    if not play_rows:
+        recent = (
+            db.query(Track)
+            .options(joinedload(Track.artist), joinedload(Track.album), joinedload(Track.genres))
+            .join(Artist, Track.artist_id == Artist.id)
+            .filter(
+                Track.approved == True,
+                Track.hls_playlist_path.isnot(None),
+                Artist.is_active == True,
+            )
+            .order_by(Track.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        return [serialize_track(t, db, viewer=current_user) for t in recent]
+
+    play_ids = [row.track_id for row in play_rows]
+    tracks = (
+        db.query(Track)
+        .options(joinedload(Track.artist), joinedload(Track.album), joinedload(Track.genres))
+        .join(Artist, Track.artist_id == Artist.id)
+        .filter(
+            Track.id.in_(play_ids),
+            Track.approved == True,
+            Track.hls_playlist_path.isnot(None),
+            Artist.is_active == True,
+        )
+        .all()
+    )
+    by_id = {t.id: t for t in tracks}
+    ordered = [by_id[tid] for tid in play_ids if tid in by_id][:limit]
+    return [serialize_track(t, db, viewer=current_user) for t in ordered]

@@ -102,7 +102,7 @@ class StudioProfileUpdate(ArtistProfileFields):
 
 class UserResponse(BaseModel):
     id: int
-    email: EmailStr
+    email: str
     full_name: Optional[str] = None
     profile_image_url: Optional[str] = None
     role: str
@@ -210,6 +210,9 @@ class TrackResponse(BaseModel):
     created_at: datetime
     owner_name: Optional[str] = None
     owner_email: Optional[str] = None
+    like_count: Optional[int] = None
+    dislike_count: Optional[int] = None
+    comment_count: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -423,17 +426,43 @@ class DashboardResponse(BaseModel):
 
 class TrackCommentCreate(BaseModel):
     body: str
+    parent_id: Optional[int] = None
 
 class TrackCommentResponse(BaseModel):
     id: int
     track_id: int
     user_id: int
+    parent_id: Optional[int] = None
     author_name: Optional[str] = None
     body: str
     created_at: datetime
+    like_count: int = 0
+    dislike_count: int = 0
+    user_reaction: Optional[str] = None
+    is_staff_reply: bool = False
+    reply_count: int = 0
+    replies: List["TrackCommentResponse"] = []
 
     class Config:
         from_attributes = True
+
+
+TrackCommentResponse.model_rebuild()
+
+
+class PaginatedCommentListResponse(BaseModel):
+    items: List[TrackCommentResponse]
+    total: int
+    has_more: bool
+
+
+class TrackEngagementResponse(BaseModel):
+    track_id: int
+    title: str
+    artist_name: Optional[str] = None
+    like_count: int = 0
+    dislike_count: int = 0
+    comment_count: int = 0
 
 
 class ListeningHistoryEntryResponse(BaseModel):

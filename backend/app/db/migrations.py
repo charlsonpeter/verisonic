@@ -303,6 +303,35 @@ MIGRATIONS = [
         ALTER TABLE audio_analysis_reports ADD COLUMN IF NOT EXISTS authenticity_score FLOAT;
         ALTER TABLE audio_analysis_reports ADD COLUMN IF NOT EXISTS true_quality_tier VARCHAR;
     """),
+    ("027_track_reactions", """
+        CREATE TABLE IF NOT EXISTS track_reactions (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            track_id INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+            reaction VARCHAR NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_track_reactions_user_track ON track_reactions (user_id, track_id);
+        CREATE INDEX IF NOT EXISTS ix_track_reactions_track_id ON track_reactions (track_id);
+        CREATE INDEX IF NOT EXISTS ix_track_reactions_user_id ON track_reactions (user_id);
+        CREATE INDEX IF NOT EXISTS ix_track_reactions_updated_at ON track_reactions (updated_at);
+    """),
+    ("028_comment_replies_and_reactions", """
+        ALTER TABLE track_comments ADD COLUMN IF NOT EXISTS parent_id INTEGER REFERENCES track_comments(id) ON DELETE CASCADE;
+        CREATE INDEX IF NOT EXISTS ix_track_comments_parent_id ON track_comments (parent_id);
+        CREATE TABLE IF NOT EXISTS comment_reactions (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            comment_id INTEGER NOT NULL REFERENCES track_comments(id) ON DELETE CASCADE,
+            reaction VARCHAR NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_comment_reactions_user_comment ON comment_reactions (user_id, comment_id);
+        CREATE INDEX IF NOT EXISTS ix_comment_reactions_comment_id ON comment_reactions (comment_id);
+        CREATE INDEX IF NOT EXISTS ix_comment_reactions_user_id ON comment_reactions (user_id);
+    """),
 ]
 
 

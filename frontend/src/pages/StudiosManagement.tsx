@@ -74,6 +74,7 @@ export const StudiosManagement: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'disabled' | 'pending'>('all');
   const [formValues, setFormValues] = useState(emptyForm);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [licenceDocumentUrl, setLicenceDocumentUrl] = useState<string | null>(null);
 
@@ -88,9 +89,16 @@ export const StudiosManagement: React.FC = () => {
       if (searchQuery.trim()) params.set('search', searchQuery.trim());
       if (statusFilter !== 'all') params.set('status', statusFilter);
       const res = await fetch(`/api/auth/admin/studios?${params}`, { headers: authHeaders });
-      if (!res.ok) return { items: [], hasMore: false };
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (offset === 0) {
+          setListError(typeof data.detail === 'string' ? data.detail : 'Could not load studios.');
+        }
+        return { items: [], hasMore: false };
+      }
+      if (offset === 0) setListError(null);
       const data = await res.json();
-      return { items: data.items, hasMore: data.has_more };
+      return { items: data.items ?? [], hasMore: Boolean(data.has_more) };
     }, [token, searchQuery, statusFilter]),
     resetKey: viewMode === 'list' ? `${searchQuery}-${statusFilter}` : null,
     enabled: viewMode === 'list' && !!token,
@@ -276,6 +284,12 @@ export const StudiosManagement: React.FC = () => {
               </select>
             </div>
           </div>
+
+          {listError && (
+            <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+              {listError}
+            </div>
+          )}
 
           <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
             {isLoading ? (

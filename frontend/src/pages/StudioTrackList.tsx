@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Music, RefreshCw, Play } from 'lucide-react';
+import { Music, RefreshCw, Play, ThumbsUp, ThumbsDown, MessageSquare } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
 import { trackHasPlayableStream } from '../utils/streamQuality';
@@ -8,6 +8,7 @@ import { TableSkeleton, TrackCardSkeleton } from '../components/shared/skeleton'
 import { formatLocalDate } from '../utils/dateTime';
 import { useLazyList, DEFAULT_LAZY_PAGE_SIZE } from '../hooks/useLazyList';
 import { LazyListSentinel } from '../components/shared/LazyListSentinel';
+import { TrackEngagementModal } from '../components/shared/TrackEngagementModal';
 
 function getStatusDetails(t: {
   quality_score: number | null;
@@ -30,6 +31,7 @@ export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> 
   const { token, isStaffInAdminMode, isSwitchingMode } = useAuth();
   const { playTrack, currentTrack, isPlaying } = useAudio();
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [engagementTrack, setEngagementTrack] = useState<any | null>(null);
 
   const tracksList = useLazyList<any>({
     fetchPage: useCallback(async (offset, limit) => {
@@ -61,6 +63,27 @@ export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> 
   const tracks = tracksList.items;
   const isLoading = tracksList.loading;
   const fetchTracks = () => { void tracksList.reload(); };
+
+  const renderEngagement = (t: any) => (
+    <button
+      type="button"
+      onClick={() => setEngagementTrack(t)}
+      className="inline-flex items-center gap-2 text-[10px] font-bold text-slate-400 hover:text-white transition"
+      title="View engagement"
+    >
+      <span className="inline-flex items-center gap-0.5 text-emerald-400">
+        <ThumbsUp className="w-3 h-3" /> {t.like_count ?? 0}
+      </span>
+      <span className="text-slate-600">·</span>
+      <span className="inline-flex items-center gap-0.5 text-rose-400">
+        <ThumbsDown className="w-3 h-3" /> {t.dislike_count ?? 0}
+      </span>
+      <span className="text-slate-600">·</span>
+      <span className="inline-flex items-center gap-0.5 text-slate-300">
+        <MessageSquare className="w-3 h-3" /> {t.comment_count ?? 0}
+      </span>
+    </button>
+  );
 
   useEffect(() => {
     if (!token) return;
@@ -179,6 +202,7 @@ export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> 
                 <th className="p-5">Score</th>
                 <th className="p-5">Status</th>
                 <th className="p-5">Uploaded</th>
+                <th className="p-5">Engagement</th>
                 <th className="p-5 text-center">Play</th>
               </tr>
             </thead>
@@ -242,6 +266,7 @@ export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> 
                     <td className="p-5 text-slate-450 text-[10px] font-medium">
                       {t.created_at ? formatLocalDate(t.created_at) : '—'}
                     </td>
+                    <td className="p-5">{renderEngagement(t)}</td>
                     <td className="p-5 text-center">
                       <button
                         onClick={() => playTrack(t)}
@@ -344,6 +369,7 @@ export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> 
                 </div>
 
                 <p className="text-[9px] text-slate-500 leading-normal">{status.desc}</p>
+                <div>{renderEngagement(t)}</div>
               </div>
             );
           })
@@ -354,6 +380,13 @@ export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> 
           onLoadMore={tracksList.loadMore}
         />
       </div>
+
+      <TrackEngagementModal
+        trackId={engagementTrack?.id ?? null}
+        trackTitle={engagementTrack?.title}
+        open={!!engagementTrack}
+        onClose={() => setEngagementTrack(null)}
+      />
     </div>
   );
 };

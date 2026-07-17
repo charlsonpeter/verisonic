@@ -231,23 +231,21 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
     const loadTracks = async () => {
       setIsLoading(true);
       try {
-        const res = await fetch('/api/music?approved_only=true');
+        const res = await fetch('/api/discovery/trending?limit=50');
         if (res.ok) {
           const data = await res.json();
-          if (data.length > 0) {
-            setAllTracks(data);
-            return;
-          }
+          setAllTracks(data);
+          return;
         }
-        throw new Error();
+        throw new Error('trending fetch failed');
       } catch (e) {
-        console.error("Failed to load tracks from backend API:", e);
+        console.error('Failed to load trending tracks:', e);
         setAllTracks([]);
       } finally {
         setIsLoading(false);
       }
     };
-    loadTracks();
+    void loadTracks();
   }, []);
 
   useEffect(() => {

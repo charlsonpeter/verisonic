@@ -2,10 +2,11 @@ import React from 'react';
 import { 
   Play, Pause, SkipForward, SkipBack, Shuffle, Repeat, 
   Volume2, VolumeX, ListMusic, Heart, Monitor, AlignLeft,
-  ChevronDown, ChevronsLeft, ChevronsRight
+  ChevronDown, ChevronsLeft, ChevronsRight, ThumbsUp, ThumbsDown, Info
 } from 'lucide-react';
 import { useAudio } from '../../context/AudioContext';
 import { Equalizer } from './Equalizer';
+import { TrackInfoPanel } from './TrackInfoPanel';
 import { useAuth } from '../../context/AuthContext';
 import { AddToPlaylistButton } from '../shared/AddToPlaylistButton';
 import {
@@ -34,12 +35,16 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const { 
     currentTrack, activeRadioStation, isPlaying, duration, getCurrentTime, subscribeTime,
     volume, isMuted, isRadioSync, playbackSpeed, repeatMode, isShuffle, 
-    favorites, togglePlay, seek, adjustVolume, toggleMute, setPlaybackSpeed, 
-    setRepeatMode, toggleShuffle, toggleFavorite, playNext, playPrevious
+    favorites, trackReactions, togglePlay, seek, adjustVolume, toggleMute, setPlaybackSpeed, 
+    setRepeatMode, toggleShuffle, toggleFavorite, setTrackReaction, playNext, playPrevious
   } = useAudio();
+
+  const { userMode, currentUser, token } = useAuth();
 
   const [isMobileExpanded, setIsMobileExpanded] = React.useState(false);
   const [mobileLyricsOpen, setMobileLyricsOpen] = React.useState(false);
+  const [mobileInfoOpen, setMobileInfoOpen] = React.useState(false);
+  const [desktopInfoOpen, setDesktopInfoOpen] = React.useState(false);
   const [mobileActiveLineIndex, setMobileActiveLineIndex] = React.useState(-1);
   const mobilePlayerHistoryRef = React.useRef(false);
   const mobileLyricsScrollRef = React.useRef<HTMLDivElement | null>(null);
@@ -65,6 +70,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     }
     setIsMobileExpanded(false);
     setMobileLyricsOpen(false);
+    setMobileInfoOpen(false);
   }, []);
 
   React.useEffect(() => {
@@ -72,13 +78,21 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       mobilePlayerHistoryRef.current = false;
       setIsMobileExpanded(false);
       setMobileLyricsOpen(false);
+      setMobileInfoOpen(false);
     };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
   React.useEffect(() => {
-    if (!isMobileExpanded) setMobileLyricsOpen(false);
+    setDesktopInfoOpen(false);
+  }, [currentTrack?.id]);
+
+  React.useEffect(() => {
+    if (!isMobileExpanded) {
+      setMobileLyricsOpen(false);
+      setMobileInfoOpen(false);
+    }
   }, [isMobileExpanded]);
 
   const speedStepIndex = SPEED_STEPS.findIndex(
@@ -133,7 +147,6 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     }
   }, [mobileActiveLineIndex, mobileLyricsSynced]);
 
-  const { userMode, currentUser } = useAuth();
   const isRadioAdminInAdminMode = !!(
     userMode === 'admin' &&
     currentUser &&
@@ -292,6 +305,24 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   if (!currentTrack && !activeRadioStation) return null;
 
   const isFav = currentTrack ? favorites.includes(currentTrack.id) : false;
+  const currentReaction = currentTrack ? trackReactions[currentTrack.id] ?? null : null;
+  const canReact = !!(currentTrack && token && !isRadioAdminInAdminMode && !activeRadioStation);
+
+  const handleReactionClick = (reaction: 'like' | 'dislike') => {
+    if (!currentTrack || !canReact) return;
+    setTrackReaction(currentTrack.id, currentReaction === reaction ? null : reaction);
+  };
+
+  const reactionRoundClass = (active: boolean, activeTone: 'like' | 'dislike') =>
+    active
+      ? activeTone === 'like'
+        ? 'text-emerald-400 bg-emerald-500/10'
+        : 'text-orange-400 bg-orange-500/10'
+      : 'text-slate-450';
+
+  const desktopPlayerControlClass = (active: boolean) =>
+    `transition disabled:opacity-30 ${active ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'}`;
+
   const hasLyrics = !!(
     currentTrack && 
     currentTrack.lyrics && 
@@ -353,13 +384,18 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               <h4 className="font-bold text-white text-sm truncate max-w-[150px]">
                 {activeRadioStation ? getRadioDisplayInfo()?.title : currentTrack?.title}
               </h4>
-              {currentTrack && !isRadioAdminInAdminMode && (
-                <button 
-                  onClick={(e) => { e.stopPropagation(); toggleFavorite(currentTrack.id); }} 
-                  className={`flex-shrink-0 transition ${isFav ? 'text-rose-500 scale-110' : 'text-slate-500 hover:text-slate-350'}`}
-                  title={isFav ? "Remove from Favorites" : "Add to Favorites"}
+              {currentTrack && !activeRadioStation && !isRadioAdminInAdminMode && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDesktopInfoOpen(true);
+                  }}
+                  className={`flex-shrink-0 transition ${desktopInfoOpen ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'}`}
+                  title="Track info"
+                  aria-label="Track info and comments"
                 >
-                  <Heart className={`w-4 h-4 ${isFav ? 'fill-current' : ''}`} />
+                  <Info className="w-4 h-4" />
                 </button>
               )}
             </div>
@@ -460,8 +496,65 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
         {/* Desktop: Primary media controls */}
         <div className="hidden md:flex flex-1 items-center justify-center min-w-0 px-4">
-          <div className="inline-flex flex-col items-center gap-2.5">
-            <div className="flex items-center justify-center gap-6">
+          <div className="inline-flex flex-col items-center w-full max-w-lg">
+            <div
+              className="grid w-full items-center gap-x-4 gap-y-2"
+              style={{ gridTemplateColumns: '1.25rem 1fr 1.25rem' }}
+            >
+              {currentTrack && !isRadioAdminInAdminMode ? (
+                <>
+                  <div className="col-start-1 row-start-1 flex justify-center">
+                    {canReact ? (
+                      <button
+                        type="button"
+                        onClick={() => handleReactionClick('like')}
+                        className={desktopPlayerControlClass(currentReaction === 'like')}
+                        title={currentReaction === 'like' ? 'Remove like' : 'Like'}
+                        aria-label={currentReaction === 'like' ? 'Remove like' : 'Like'}
+                      >
+                        <ThumbsUp className={`w-4 h-4 ${currentReaction === 'like' ? 'fill-current' : ''}`} />
+                      </button>
+                    ) : (
+                      <span className="w-4" aria-hidden />
+                    )}
+                  </div>
+                  <div className="col-start-3 row-start-1 flex justify-center">
+                    {canReact ? (
+                      <button
+                        type="button"
+                        onClick={() => handleReactionClick('dislike')}
+                        className={desktopPlayerControlClass(currentReaction === 'dislike')}
+                        title={currentReaction === 'dislike' ? 'Remove unlike' : 'Unlike'}
+                        aria-label={currentReaction === 'dislike' ? 'Remove unlike' : 'Unlike'}
+                      >
+                        <ThumbsDown className={`w-4 h-4 ${currentReaction === 'dislike' ? 'fill-current' : ''}`} />
+                      </button>
+                    ) : (
+                      <span className="w-4" aria-hidden />
+                    )}
+                  </div>
+                  <div className="col-start-1 row-start-2 flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() => toggleFavorite(currentTrack.id)}
+                      className={desktopPlayerControlClass(isFav)}
+                      title={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
+                      aria-label={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
+                    >
+                      <Heart className={`w-4 h-4 ${isFav ? 'fill-current' : ''}`} />
+                    </button>
+                  </div>
+                  <div className="col-start-3 row-start-2 flex justify-center">
+                    {!activeRadioStation ? (
+                      <AddToPlaylistButton track={currentTrack} variant="player" />
+                    ) : (
+                      <span className="w-4" aria-hidden />
+                    )}
+                  </div>
+                </>
+              ) : null}
+
+              <div className="col-start-2 row-start-1 flex items-center justify-center gap-6">
               <button 
                 onClick={toggleShuffle} 
                 disabled={isRadioSync || isRadioAdminInAdminMode}
@@ -513,31 +606,32 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                   <span className="absolute -top-1.5 -right-1.5 text-[8px] bg-rose-500 text-white font-extrabold w-3 h-3 rounded-full flex items-center justify-center font-sans">1</span>
                 )}
               </button>
-            </div>
+              </div>
 
-            <div className={`flex items-center gap-1.5 text-slate-500 font-bold font-sans ${isRadioSync ? 'w-[15rem]' : 'w-[13.5rem]'}`}>
-              <span
-                ref={desktopElapsedRef}
-                className={`shrink-0 text-right tabular-nums ${isRadioSync ? 'w-11 text-[9px]' : 'w-9 text-[10px]'}`}
-              >
-                0:00
-              </span>
-              <input 
-                ref={desktopSliderRef}
-                type="range" 
-                min="0"
-                max={seekMax}
-                defaultValue={0}
-                onPointerDown={handleSeekPointerDown}
-                onChange={(e) => handleSeekChange(parseFloat(e.target.value))}
-                onKeyDown={handleSeekKeyDown}
-                onKeyUp={finishSeek}
-                disabled={isRadioSync}
-                className="flex-1 min-w-0 accent-rose-500 h-1 bg-slate-800 rounded-lg outline-none cursor-pointer audio-knob"
-              />
-              <span className={`shrink-0 text-left tabular-nums ${isRadioSync ? 'w-11 text-[9px]' : 'w-9 text-[10px]'}`}>
-                {isRadioSync ? "24:00:00" : formatTime(duration)}
-              </span>
+              <div className="col-start-2 row-start-2 flex items-center gap-1.5 text-slate-500 font-bold font-sans w-full min-w-0">
+                <span
+                  ref={desktopElapsedRef}
+                  className={`shrink-0 text-right tabular-nums ${isRadioSync ? 'w-11 text-[9px]' : 'w-9 text-[10px]'}`}
+                >
+                  0:00
+                </span>
+                <input 
+                  ref={desktopSliderRef}
+                  type="range" 
+                  min="0"
+                  max={seekMax}
+                  defaultValue={0}
+                  onPointerDown={handleSeekPointerDown}
+                  onChange={(e) => handleSeekChange(parseFloat(e.target.value))}
+                  onKeyDown={handleSeekKeyDown}
+                  onKeyUp={finishSeek}
+                  disabled={isRadioSync}
+                  className="flex-1 min-w-0 accent-rose-500 h-1 bg-slate-800 rounded-lg outline-none cursor-pointer audio-knob"
+                />
+                <span className={`shrink-0 text-left tabular-nums ${isRadioSync ? 'w-11 text-[9px]' : 'w-9 text-[10px]'}`}>
+                  {isRadioSync ? "24:00:00" : formatTime(duration)}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -624,7 +718,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           <div className="mobile-player-ambient__scrim" aria-hidden />
           <div className="mobile-player-ambient__tint" aria-hidden />
 
-          <div className="mobile-player-expanded__content">
+          <div className="mobile-player-expanded__content relative">
           {/* Header */}
           <div className="flex items-center justify-between w-full">
             <button 
@@ -743,8 +837,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
           {/* Info, Progress & Controls */}
           <div className="space-y-6">
-            <div className="flex items-center justify-between w-full">
-              <div className="min-w-0 flex-1 pr-4">
+            <div className="flex items-start justify-between gap-3 w-full">
+              <div className="min-w-0 flex-1">
                 <h2 className="text-base font-black text-white truncate">
                   {activeRadioStation ? getRadioDisplayInfo()?.title : currentTrack?.title}
                 </h2>
@@ -752,59 +846,94 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                   {activeRadioStation ? getRadioDisplayInfo()?.subtitle : currentTrack?.artist_name}
                 </p>
               </div>
-              {currentTrack && !isRadioAdminInAdminMode && (
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  {!activeRadioStation && (
-                    <AddToPlaylistButton track={currentTrack} variant="round" />
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => toggleFavorite(currentTrack.id)}
-                    className={`w-10 h-10 rounded-full bg-white/5 flex items-center justify-center transition active:scale-90 ${isFav ? 'text-rose-500 bg-rose-500/10' : 'text-slate-450'}`}
-                    title={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
-                    aria-label={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
-                  >
-                    <Heart className={`w-4.5 h-4.5 ${isFav ? 'fill-current' : ''}`} />
-                  </button>
-                </div>
+              {currentTrack && !activeRadioStation && !isRadioAdminInAdminMode && (
+                <button
+                  type="button"
+                  onClick={() => setMobileInfoOpen(true)}
+                  className="w-10 h-10 rounded-full bg-white/5 border border-white/5 flex items-center justify-center text-slate-300 active:scale-95 transition flex-shrink-0"
+                  aria-label="Track info and comments"
+                  title="Track info"
+                >
+                  <Info className="w-4.5 h-4.5" />
+                </button>
               )}
             </div>
 
-            {/* Speed + seek bar */}
+            {/* Speed + actions + seek bar */}
             <div className="space-y-2">
-              {!isRadioSync && (
-                <div className="flex items-center justify-center gap-4">
-                  <button
-                    type="button"
-                    onClick={decreaseSpeed}
-                    disabled={currentSpeedIndex <= 0}
-                    className="w-9 h-9 rounded-full flex items-center justify-center text-slate-400 active:scale-95 active:text-white transition disabled:opacity-30"
-                    aria-label="Decrease speed"
-                    title="Slower"
-                  >
-                    <ChevronsLeft className="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={resetSpeed}
-                    className="text-xs font-bold text-slate-300 tabular-nums min-w-[3rem] text-center active:scale-95 active:text-white transition"
-                    aria-label="Reset speed to 1x"
-                    title="Reset to 1x"
-                  >
-                    {playbackSpeed}x
-                  </button>
-                  <button
-                    type="button"
-                    onClick={increaseSpeed}
-                    disabled={currentSpeedIndex >= SPEED_STEPS.length - 1}
-                    className="w-9 h-9 rounded-full flex items-center justify-center text-slate-400 active:scale-95 active:text-white transition disabled:opacity-30"
-                    aria-label="Increase speed"
-                    title="Faster"
-                  >
-                    <ChevronsRight className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
+              <div className="relative flex items-center justify-center w-full min-h-10">
+                {canReact && (
+                  <div className="absolute left-0 top-1/2 -translate-y-1/2 flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleReactionClick('like')}
+                      className={`w-10 h-10 rounded-full bg-white/5 flex items-center justify-center transition active:scale-90 ${reactionRoundClass(currentReaction === 'like', 'like')}`}
+                      title={currentReaction === 'like' ? 'Remove like' : 'Like'}
+                      aria-label={currentReaction === 'like' ? 'Remove like' : 'Like'}
+                    >
+                      <ThumbsUp className={`w-4.5 h-4.5 ${currentReaction === 'like' ? 'fill-current' : ''}`} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleReactionClick('dislike')}
+                      className={`w-10 h-10 rounded-full bg-white/5 flex items-center justify-center transition active:scale-90 ${reactionRoundClass(currentReaction === 'dislike', 'dislike')}`}
+                      title={currentReaction === 'dislike' ? 'Remove unlike' : 'Unlike'}
+                      aria-label={currentReaction === 'dislike' ? 'Remove unlike' : 'Unlike'}
+                    >
+                      <ThumbsDown className={`w-4.5 h-4.5 ${currentReaction === 'dislike' ? 'fill-current' : ''}`} />
+                    </button>
+                  </div>
+                )}
+                {!isRadioSync && (
+                  <div className="flex items-center justify-center gap-4">
+                    <button
+                      type="button"
+                      onClick={decreaseSpeed}
+                      disabled={currentSpeedIndex <= 0}
+                      className="w-9 h-9 rounded-full flex items-center justify-center text-slate-400 active:scale-95 active:text-white transition disabled:opacity-30"
+                      aria-label="Decrease speed"
+                      title="Slower"
+                    >
+                      <ChevronsLeft className="w-4 h-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={resetSpeed}
+                      className="text-xs font-bold text-slate-300 tabular-nums min-w-[3rem] text-center active:scale-95 active:text-white transition"
+                      aria-label="Reset speed to 1x"
+                      title="Reset to 1x"
+                    >
+                      {playbackSpeed}x
+                    </button>
+                    <button
+                      type="button"
+                      onClick={increaseSpeed}
+                      disabled={currentSpeedIndex >= SPEED_STEPS.length - 1}
+                      className="w-9 h-9 rounded-full flex items-center justify-center text-slate-400 active:scale-95 active:text-white transition disabled:opacity-30"
+                      aria-label="Increase speed"
+                      title="Faster"
+                    >
+                      <ChevronsRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+                {currentTrack && !isRadioAdminInAdminMode && (
+                  <div className="absolute right-0 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                    {!activeRadioStation && (
+                      <AddToPlaylistButton track={currentTrack} variant="round" />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => toggleFavorite(currentTrack.id)}
+                      className={`w-10 h-10 rounded-full bg-white/5 flex items-center justify-center transition active:scale-90 ${isFav ? 'text-rose-500 bg-rose-500/10' : 'text-slate-450'}`}
+                      title={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
+                      aria-label={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
+                    >
+                      <Heart className={`w-4.5 h-4.5 ${isFav ? 'fill-current' : ''}`} />
+                    </button>
+                  </div>
+                )}
+              </div>
 
               <input
                 ref={expandedSliderRef}
@@ -877,8 +1006,24 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               </button>
             </div>
           </div>
+          {currentTrack && !activeRadioStation && (
+            <TrackInfoPanel
+              track={currentTrack}
+              open={mobileInfoOpen}
+              onClose={() => setMobileInfoOpen(false)}
+            />
+          )}
           </div>
         </div>
+      )}
+
+      {currentTrack && !activeRadioStation && (
+        <TrackInfoPanel
+          track={currentTrack}
+          open={desktopInfoOpen}
+          onClose={() => setDesktopInfoOpen(false)}
+          presentation="modal"
+        />
       )}
     </>
   );

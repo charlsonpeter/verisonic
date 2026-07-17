@@ -50,6 +50,9 @@ const UsersManagement = lazy(() => import('./pages/UsersManagement').then((m) =>
 const AccountsManagement = lazy(() => import('./pages/AccountsManagement').then((m) => ({ default: m.AccountsManagement })));
 const TracksManagement = lazy(() => import('./pages/TracksManagement').then((m) => ({ default: m.TracksManagement })));
 const StudioTrackList = lazy(() => import('./pages/StudioTrackList').then((m) => ({ default: m.StudioTrackList })));
+const StudioTracksEngagement = lazy(() =>
+  import('./pages/StudioTracksEngagement').then((m) => ({ default: m.StudioTracksEngagement }))
+);
 const Contact = lazy(() => import('./pages/Contact').then((m) => ({ default: m.Contact })));
 const BroadcasterDownload = lazy(() => import('./pages/BroadcasterDownload').then((m) => ({ default: m.BroadcasterDownload })));
 const AdminAnalytics = lazy(() => import('./pages/AdminAnalytics').then((m) => ({ default: m.AdminAnalytics })));
@@ -183,8 +186,17 @@ function DashboardContent() {
   }, [activeTab, currentUser?.role, currentUser?.real_role]);
 
   useEffect(() => {
-    if (activeTab === 'contact' && currentUser?.role === 'admin') {
+    if (
+      activeTab === 'contact' &&
+      currentUser?.role === 'admin'
+    ) {
       setActiveTab('accounts');
+    }
+  }, [activeTab, currentUser?.role]);
+
+  useEffect(() => {
+    if (activeTab === 'studio-tracks-engagement' && currentUser?.role !== 'admin') {
+      setActiveTab('home');
     }
   }, [activeTab, currentUser?.role]);
 
@@ -461,6 +473,8 @@ function DashboardContent() {
         return <TracksManagement onViewReport={viewQualityReport} />;
       case 'track-list':
         return <StudioTrackList onViewReport={viewQualityReport} />;
+      case 'studio-tracks-engagement':
+        return <StudioTracksEngagement />;
       case 'contact':
         return <Contact />;
       case 'broadcaster-download':

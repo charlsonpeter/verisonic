@@ -6,8 +6,8 @@ from jose import jwt, JWTError
 from typing import List, Optional
 
 from app.db.session import get_db
-from app.models import User, Artist
-from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, UserSettingsUpdate, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, StudioProfileUpdate, RequestReactivationSchema, SwitchModeRequest, PaginatedUserListResponse, PaginatedArtistListResponse
+from app.models import User, Artist, Track
+from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, UserSettingsUpdate, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, StudioProfileUpdate, RequestReactivationSchema, SwitchModeRequest, PaginatedUserListResponse, PaginatedArtistListResponse, PaginatedTrackListResponse
 from app.core.security import (
     verify_password, get_password_hash, create_access_token, create_refresh_token,
     validate_refresh_token, revoke_refresh_token, ALGORITHM, REFRESH_COOKIE_NAME,
@@ -887,7 +887,11 @@ def get_studios_admin(
     """
     Admin studio (artist) management: list studios with pagination and filters.
     """
-    query = db.query(Artist).options(joinedload(Artist.user))
+    query = (
+        db.query(Artist)
+        .options(joinedload(Artist.user))
+        .filter(Artist.user_id.isnot(None))
+    )
     query = _apply_studio_search_filter(query, search)
     query = _apply_studio_status_filter(query, status)
     total = query.count()
@@ -897,6 +901,49 @@ def get_studios_admin(
         items=items,
         total=total,
         has_more=offset + len(artists) < total,
+    )
+
+
+@router.get("/admin/studios/{artist_id}/tracks", response_model=PaginatedTrackListResponse)
+def get_studio_tracks_admin(
+    artist_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Super admin: paginated tracks for a studio with engagement counts.
+    """
+    artist = db.query(Artist).filter(Artist.id == artist_id).first()
+    if not artist:
+        raise HTTPException(status_code=404, detail="Studio/Artist not found")
+
+    from app.services.track_management import apply_manage_track_search
+    from app.api.music import serialize_track
+
+    query = (
+        db.query(Track)
+        .options(
+            joinedload(Track.analysis_report),
+            joinedload(Track.artist).joinedload(Artist.user),
+            joinedload(Track.album),
+            joinedload(Track.genres),
+        )
+        .filter(Track.artist_id == artist_id, Track.approved == True)
+    )
+    query = apply_manage_track_search(query, search, include_owner=False)
+    total = query.count()
+    tracks = query.order_by(Track.created_at.desc()).offset(offset).limit(limit).all()
+    items = [
+        serialize_track(t, db, viewer=current_user, include_engagement=True)
+        for t in tracks
+    ]
+    return PaginatedTrackListResponse(
+        items=items,
+        total=total,
+        has_more=offset + len(tracks) < total,
     )
 
 @router.put("/admin/studios/{artist_id}", response_model=ArtistResponse)

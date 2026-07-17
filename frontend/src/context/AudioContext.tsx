@@ -108,6 +108,8 @@ export interface RadioStation {
 
 type RepeatMode = 'none' | 'all' | 'one';
 
+export type TrackReactionValue = 'like' | 'dislike';
+
 type TimeListener = (time: number) => void;
 
 interface AudioContextType {
@@ -126,6 +128,7 @@ interface AudioContextType {
   repeatMode: RepeatMode;
   isShuffle: boolean;
   favorites: number[];
+  trackReactions: Record<number, TrackReactionValue>;
   playQueue: Track[];
   currentQueueIndex: number;
   showPremiumModal: boolean;
@@ -147,6 +150,7 @@ interface AudioContextType {
   setRepeatMode: (mode: RepeatMode) => void;
   toggleShuffle: () => void;
   toggleFavorite: (trackId: number) => void;
+  setTrackReaction: (trackId: number, reaction: TrackReactionValue | null) => void;
   addToQueue: (track: Track) => void;
   playQueueTracks: (tracks: Track[]) => void;
   removeFromQueue: (trackId: number) => void;
@@ -213,6 +217,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('none');
   const [isShuffle, setIsShuffle] = useState<boolean>(false);
   const [favorites, setFavorites] = useState<number[]>([]);
+  const [trackReactions, setTrackReactions] = useState<Record<number, TrackReactionValue>>({});
   const [playQueue, setPlayQueue] = useState<Track[]>([]);
   const [currentQueueIndex, setCurrentQueueIndex] = useState<number>(-1);
   const [showPremiumModal, setShowPremiumModal] = useState<boolean>(false);
@@ -635,6 +640,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   useEffect(() => {
     setFavorites([]);
+    setTrackReactions({});
     if (!token) {
       return;
     }
@@ -649,6 +655,25 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       } catch (e) {
         console.warn('Failed to load favorites:', e);
+      }
+    })();
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/reactions`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json() as Record<string, TrackReactionValue>;
+          const parsed: Record<number, TrackReactionValue> = {};
+          for (const [trackId, reaction] of Object.entries(data)) {
+            if (reaction === 'like' || reaction === 'dislike') {
+              parsed[Number(trackId)] = reaction;
+            }
+          }
+          setTrackReactions(parsed);
+        }
+      } catch (e) {
+        console.warn('Failed to load track reactions:', e);
       }
     })();
   }, [token]);
@@ -2225,6 +2250,50 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
+  const setTrackReaction = async (trackId: number, reaction: TrackReactionValue | null) => {
+    if (!token) return;
+    const previous = trackReactions[trackId] ?? null;
+    setTrackReactions(prev => {
+      const next = { ...prev };
+      if (reaction === null) {
+        delete next[trackId];
+      } else {
+        next[trackId] = reaction;
+      }
+      return next;
+    });
+    try {
+      if (reaction === null) {
+        const res = await fetch(`${API_URL}/reactions/${trackId}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok && res.status !== 404) throw new Error('failed');
+      } else {
+        const res = await fetch(`${API_URL}/reactions/${trackId}`, {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ reaction }),
+        });
+        if (!res.ok) throw new Error('failed');
+      }
+    } catch (e) {
+      setTrackReactions(prev => {
+        const next = { ...prev };
+        if (previous === null) {
+          delete next[trackId];
+        } else {
+          next[trackId] = previous;
+        }
+        return next;
+      });
+      console.warn('Failed to sync track reaction:', e);
+    }
+  };
+
   const addToQueue = (track: Track) => {
     setPlayQueue(prev => {
       if (prev.some(t => t.id === track.id)) return prev;
@@ -2397,6 +2466,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       repeatMode,
       isShuffle,
       favorites,
+      trackReactions,
       playQueue,
       currentQueueIndex,
       showPremiumModal,
@@ -2418,6 +2488,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setRepeatMode,
       toggleShuffle,
       toggleFavorite,
+      setTrackReaction,
       addToQueue,
       playQueueTracks,
       removeFromQueue,

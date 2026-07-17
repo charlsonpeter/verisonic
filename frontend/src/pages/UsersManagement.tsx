@@ -53,6 +53,7 @@ const parseUpgradeRequest = (bio?: string | null) => {
 export const UsersManagement: React.FC = () => {
   const { token, currentUser } = useAuth();
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
   const usersList = useLazyList<any>({
@@ -63,9 +64,16 @@ export const UsersManagement: React.FC = () => {
       const res = await fetch(`/api/auth/admin/users?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) return { items: [], hasMore: false };
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (offset === 0) {
+          setListError(typeof data.detail === 'string' ? data.detail : 'Could not load users.');
+        }
+        return { items: [], hasMore: false };
+      }
+      if (offset === 0) setListError(null);
       const data = await res.json();
-      return { items: data.items, hasMore: data.has_more };
+      return { items: data.items ?? [], hasMore: Boolean(data.has_more) };
     }, [token, searchQuery]),
     resetKey: token ? `users-${searchQuery}` : null,
     enabled: !!token,
@@ -224,6 +232,12 @@ export const UsersManagement: React.FC = () => {
           placeholder="Search by name or email..."
         />
       </div>
+
+      {listError && (
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+          {listError}
+        </div>
+      )}
 
       <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
         {isLoading ? (

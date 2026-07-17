@@ -13,8 +13,8 @@ interface PlaylistOption {
 
 interface AddToPlaylistButtonProps {
   track: Track;
-  /** `row` = compact list control; `round` = mobile expanded player chip */
-  variant?: 'row' | 'round';
+  /** `row` = compact list control; `round` = mobile expanded player chip; `player` = desktop transport-style icon */
+  variant?: 'row' | 'round' | 'player';
   className?: string;
 }
 
@@ -70,7 +70,7 @@ export const AddToPlaylistButton: React.FC<AddToPlaylistButtonProps> = ({
       window.innerWidth - menuWidth - 12,
     );
 
-    if (variant === 'round') {
+    if (variant === 'round' || variant === 'player') {
       // Anchor just above the trigger (works regardless of menu height)
       setMenuPos({
         bottom: Math.max(12, window.innerHeight - rect.top + gap),
@@ -195,6 +195,10 @@ export const AddToPlaylistButton: React.FC<AddToPlaylistButtonProps> = ({
       ? `w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-slate-450 transition active:scale-90 ${
           open ? 'text-rose-400 bg-rose-500/10' : ''
         } ${className}`
+      : variant === 'player'
+        ? `transition disabled:opacity-30 ${
+            open ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'
+          } ${className}`
       : `p-1.5 rounded-lg hover:bg-slate-800 text-slate-500 hover:text-rose-400 transition ${className}`;
 
   return (
@@ -212,6 +216,8 @@ export const AddToPlaylistButton: React.FC<AddToPlaylistButtonProps> = ({
       >
         {variant === 'round' ? (
           <Plus className="w-4.5 h-4.5" />
+        ) : variant === 'player' ? (
+          <Plus className="w-4 h-4" />
         ) : (
           <FolderHeart className="w-3.5 h-3.5" />
         )}

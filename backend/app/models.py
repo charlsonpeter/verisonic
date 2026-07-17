@@ -40,6 +40,8 @@ class User(Base):
     artist_profile = relationship("Artist", back_populates="user", uselist=False)
     playlists = relationship("Playlist", back_populates="user")
     favorites = relationship("Favorite", back_populates="user")
+    track_reactions = relationship("TrackReaction", back_populates="user", cascade="all, delete-orphan")
+    comment_reactions = relationship("CommentReaction", back_populates="user", cascade="all, delete-orphan")
     listening_history = relationship("ListeningHistory", back_populates="user")
     track_comments = relationship("TrackComment", back_populates="user", cascade="all, delete-orphan")
     subscription_payments = relationship("SubscriptionPayment", back_populates="user")
@@ -170,6 +172,7 @@ class Track(Base):
     playlist_tracks = relationship("PlaylistTrack", back_populates="track", cascade="all, delete-orphan")
     listening_history = relationship("ListeningHistory", back_populates="track", cascade="all, delete-orphan")
     favorites = relationship("Favorite", back_populates="track", cascade="all, delete-orphan")
+    reactions = relationship("TrackReaction", back_populates="track", cascade="all, delete-orphan")
     comments = relationship("TrackComment", back_populates="track", cascade="all, delete-orphan")
 
 class Playlist(Base):
@@ -266,11 +269,30 @@ class TrackComment(Base):
     id = Column(Integer, primary_key=True, index=True)
     track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    parent_id = Column(Integer, ForeignKey("track_comments.id", ondelete="CASCADE"), nullable=True, index=True)
     body = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     track = relationship("Track", back_populates="comments")
     user = relationship("User", back_populates="track_comments")
+    parent = relationship("TrackComment", remote_side=[id], back_populates="replies")
+    replies = relationship("TrackComment", back_populates="parent", cascade="all, delete-orphan")
+    reactions = relationship("CommentReaction", back_populates="comment", cascade="all, delete-orphan")
+
+class CommentReaction(Base):
+    __tablename__ = "comment_reactions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "comment_id", name="uq_comment_reactions_user_comment"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    comment_id = Column(Integer, ForeignKey("track_comments.id", ondelete="CASCADE"), nullable=False, index=True)
+    reaction = Column(String, nullable=False)  # like | dislike
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="comment_reactions")
+    comment = relationship("TrackComment", back_populates="reactions")
 
 class Favorite(Base):
     __tablename__ = "favorites"
@@ -284,6 +306,21 @@ class Favorite(Base):
 
     user = relationship("User", back_populates="favorites")
     track = relationship("Track", back_populates="favorites")
+
+class TrackReaction(Base):
+    __tablename__ = "track_reactions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "track_id", name="uq_track_reactions_user_track"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False, index=True)
+    reaction = Column(String, nullable=False)  # like | dislike
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="track_reactions")
+    track = relationship("Track", back_populates="reactions")
 
 class AudioAnalysisReport(Base):
     __tablename__ = "audio_analysis_reports"

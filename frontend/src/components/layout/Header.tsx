@@ -76,9 +76,12 @@ export const Header: React.FC<HeaderProps> = ({
       : [
         { id: 'home', label: 'Home Feed', icon: Compass },
         { id: 'radio', label: 'Radio Stations', icon: Radio },
+        ...(isPlatformAdmin ? [{ id: 'studio-tracks-engagement', label: 'Studio Tracks', icon: Music }] : []),
         { id: 'favorites', label: 'Favorites', icon: Heart },
         ...(canUsePlaylists || !token ? [{ id: 'playlists', label: 'Playlists', icon: FolderHeart }] : []),
-        ...(isPlatformAdmin ? [{ id: 'accounts', label: 'Accounts', icon: Landmark }] : []),
+        ...(isPlatformAdmin ? [
+          { id: 'accounts', label: 'Accounts', icon: Landmark },
+        ] : []),
         ...(!isPlatformAdmin ? [contactNavItem] : []),
       ];
 
@@ -423,6 +426,13 @@ export const Header: React.FC<HeaderProps> = ({
 
                 {currentUser.role === 'admin' && (
                   <>
+                    <button
+                      onClick={() => handleDropdownSelect('studio-tracks-engagement')}
+                      className="md:hidden w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"
+                    >
+                      <Music className="w-4 h-4 text-slate-450" />
+                      Studio Tracks
+                    </button>
                     <button 
                       onClick={() => handleDropdownSelect('analytics')}
                       className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-450 hover:bg-slate-800 hover:text-white transition"

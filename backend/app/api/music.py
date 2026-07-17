@@ -13,7 +13,8 @@ from pydantic import BaseModel
 
 from app.db.session import get_db, SessionLocal
 from app.models import Track, Artist, Album, Genre, AudioAnalysisReport, ListeningHistory, StreamingLog, TrackComment, User
-from app.schemas import TrackResponse, AudioAnalysisReportResponse, QualityReportDetailResponse, ScoreBreakdownItem, QualityScoreTier, TrackCommentCreate, TrackCommentResponse, ListeningHistoryEntryResponse, PaginatedTrackListResponse
+from app.schemas import TrackResponse, AudioAnalysisReportResponse, QualityReportDetailResponse, ScoreBreakdownItem, QualityScoreTier, TrackCommentCreate, TrackCommentResponse, TrackEngagementResponse, PaginatedCommentListResponse, ListeningHistoryEntryResponse, PaginatedTrackListResponse
+from app.services.engagement import engagement_counts_for_tracks, load_paginated_comments_for_track
 from app.api.auth import get_current_user, get_current_studio_admin, get_current_admin, get_optional_current_user
 from app.services.storage import (
     generate_presigned_url,
@@ -192,7 +193,7 @@ def _resolve_stream_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
 
 # Helper to serialize Track into response with pre-signed URLs
-def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) -> dict:
+def serialize_track(track: Track, db: Session, viewer: Optional[User] = None, *, include_engagement: bool = False) -> dict:
     artist_name = track.artist_name_override if track.artist_name_override else (track.artist.stage_name if track.artist else "Unknown Artist")
     album_title = track.album.title if track.album else None
     
@@ -284,6 +285,12 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
         if owner:
             payload["owner_name"] = owner.full_name or owner.email.split("@")[0]
             payload["owner_email"] = owner.email
+
+    if include_engagement:
+        counts = engagement_counts_for_tracks(db, [track.id]).get(track.id, {})
+        payload["like_count"] = counts.get("like_count", 0)
+        payload["dislike_count"] = counts.get("dislike_count", 0)
+        payload["comment_count"] = counts.get("comment_count", 0)
 
     return payload
 
@@ -569,26 +576,7 @@ def list_tracks(
     return [serialize_track(t, db, viewer=current_user) for t in tracks]
 
 
-def _apply_manage_track_search(query, search: Optional[str], *, include_owner: bool = False):
-    if not search or not search.strip():
-        return query
-    search_pattern = f"%{search.strip()}%"
-    query = query.outerjoin(Artist, Track.artist_id == Artist.id).outerjoin(
-        Album, Track.album_id == Album.id
-    )
-    filters = [
-        Track.title.ilike(search_pattern),
-        Track.artist_name_override.ilike(search_pattern),
-        Artist.stage_name.ilike(search_pattern),
-        Album.title.ilike(search_pattern),
-    ]
-    if include_owner:
-        query = query.outerjoin(User, Artist.user_id == User.id)
-        filters.extend([
-            User.full_name.ilike(search_pattern),
-            User.email.ilike(search_pattern),
-        ])
-    return query.filter(or_(*filters))
+from app.services.track_management import apply_manage_track_search as _apply_manage_track_search
 
 
 ManageTrackStatus = Literal["analyzing", "transcoding", "ready", "rejected"]
@@ -680,7 +668,11 @@ def manage_tracks(
         _resolve_quality_score(t, db, persist=True)
     db.commit()
 
-    items = [serialize_track(t, db, viewer=current_user) for t in tracks]
+    include_engagement = approved_only or current_user.role == "admin"
+    items = [
+        serialize_track(t, db, viewer=current_user, include_engagement=include_engagement)
+        for t in tracks
+    ]
     return PaginatedTrackListResponse(
         items=items,
         total=total,
@@ -688,15 +680,39 @@ def manage_tracks(
     )
 
 
-def _serialize_comment(comment: TrackComment) -> dict:
-    return {
-        "id": comment.id,
-        "track_id": comment.track_id,
-        "user_id": comment.user_id,
-        "author_name": comment.user.full_name if comment.user else None,
-        "body": comment.body,
-        "created_at": comment.created_at,
-    }
+def _serialize_comment(comment: TrackComment, db: Session, viewer: Optional[User] = None) -> dict:
+    from app.services.engagement import serialize_comment
+    return serialize_comment(comment, db, viewer)
+
+
+@router.get("/manage/{track_id}/engagement", response_model=TrackEngagementResponse)
+def get_track_engagement(
+    track_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_studio_admin),
+):
+    track = (
+        db.query(Track)
+        .options(joinedload(Track.artist))
+        .filter(Track.id == track_id)
+        .first()
+    )
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+    if not _user_can_manage_track(current_user, track, db):
+        raise HTTPException(status_code=403, detail="Not authorized to view engagement for this track")
+
+    counts = engagement_counts_for_tracks(db, [track.id]).get(track.id, {})
+    artist_name = track.artist_name_override or (track.artist.stage_name if track.artist else None)
+
+    return TrackEngagementResponse(
+        track_id=track.id,
+        title=track.title,
+        artist_name=artist_name,
+        like_count=counts.get("like_count", 0),
+        dislike_count=counts.get("dislike_count", 0),
+        comment_count=counts.get("comment_count", 0),
+    )
 
 
 @router.get("/listening-history", response_model=List[ListeningHistoryEntryResponse])
@@ -1512,22 +1528,37 @@ async def update_track(
     return serialize_track(track, db, viewer=current_user)
 
 
-@router.get("/{track_id}/comments", response_model=List[TrackCommentResponse])
+@router.get("/{track_id}/comments", response_model=PaginatedCommentListResponse)
 def list_track_comments(
     track_id: int,
+    limit: int = Query(10, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    parent_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user),
 ):
     track = db.query(Track).filter(Track.id == track_id).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
-    comments = (
-        db.query(TrackComment)
-        .options(joinedload(TrackComment.user))
-        .filter(TrackComment.track_id == track_id)
-        .order_by(TrackComment.created_at.desc())
-        .all()
+
+    if parent_id is not None:
+        parent = (
+            db.query(TrackComment)
+            .filter(TrackComment.id == parent_id, TrackComment.track_id == track_id)
+            .first()
+        )
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent comment not found")
+
+    items, total, has_more = load_paginated_comments_for_track(
+        db,
+        track_id,
+        current_user,
+        limit=limit,
+        offset=offset,
+        parent_id=parent_id,
     )
-    return [_serialize_comment(c) for c in comments]
+    return PaginatedCommentListResponse(items=items, total=total, has_more=has_more)
 
 
 @router.post("/{track_id}/comments", response_model=TrackCommentResponse, status_code=status.HTTP_201_CREATED)
@@ -1547,9 +1578,31 @@ def create_track_comment(
         raise HTTPException(status_code=400, detail="Comment cannot be empty")
     if len(body) > 2000:
         raise HTTPException(status_code=400, detail="Comment is too long (max 2000 characters)")
-    comment = TrackComment(track_id=track_id, user_id=current_user.id, body=body)
+
+    parent_id = comment_in.parent_id
+    if parent_id is not None:
+        parent = (
+            db.query(TrackComment)
+            .filter(TrackComment.id == parent_id, TrackComment.track_id == track_id)
+            .first()
+        )
+        if not parent:
+            raise HTTPException(status_code=400, detail="Parent comment not found on this track")
+        if parent.parent_id is not None:
+            raise HTTPException(status_code=400, detail="Replies can only be made to top-level comments")
+
+    comment = TrackComment(
+        track_id=track_id,
+        user_id=current_user.id,
+        body=body,
+        parent_id=parent_id,
+    )
     db.add(comment)
     db.commit()
     db.refresh(comment)
     comment.user = current_user
-    return _serialize_comment(comment)
+    from app.services.engagement import serialize_comment
+    reply_count = 0
+    if parent_id is None:
+        reply_count = 0
+    return serialize_comment(comment, db, current_user, reply_count=reply_count)
