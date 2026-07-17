@@ -73,8 +73,8 @@ export const AppModal: React.FC<AppModalProps> = ({
 
   const overlayBaseClass =
     variant === 'fullscreen'
-      ? 'fixed inset-0 z-50 flex flex-col bg-slate-950/60 backdrop-blur-lg animate-fade-in overflow-hidden'
-      : `fixed inset-0 z-50 flex bg-slate-950/50 backdrop-blur-sm p-4 animate-fade-in overflow-y-auto ${
+      ? 'fixed inset-0 z-50 flex flex-col bg-slate-950/90 max-md:backdrop-blur-none md:bg-slate-950/60 md:backdrop-blur-lg animate-fade-in overflow-hidden'
+      : `fixed inset-0 z-50 flex bg-slate-950/85 max-md:backdrop-blur-none md:bg-slate-950/50 md:backdrop-blur-sm p-4 animate-fade-in overflow-y-auto ${
           align === 'start' ? 'items-start justify-center' : 'items-center justify-center'
         }`;
 

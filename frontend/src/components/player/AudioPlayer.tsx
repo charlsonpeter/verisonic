@@ -602,16 +602,13 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
       {/* MOBILE FULL-SCREEN EXPANDED PLAYER DECK */}
       {isMobileExpanded && (
-        <div className="fixed inset-0 bg-slate-950/98 backdrop-blur-2xl z-[999] flex flex-col justify-between p-6 animate-slide-up select-none md:hidden">
-          {/* Background Ambient Glow — hidden when lyrics are open for readability */}
-          {currentTrack?.cover_art_url && (
-            <div 
-              className={`absolute inset-0 bg-cover bg-center filter blur-3xl pointer-events-none -z-10 transition-opacity duration-500 ${
-                mobileLyricsOpen ? 'opacity-0' : 'opacity-[0.08]'
-              }`}
-              style={{ backgroundImage: `url(${currentTrack.cover_art_url})` }}
-            />
-          )}
+        <div className="fixed inset-0 bg-slate-950 z-[999] flex flex-col justify-between p-6 animate-slide-up select-none md:hidden">
+          {/* Subtle tint — no blur (avoids mobile compositor flicker) */}
+          <div
+            className={`absolute inset-0 pointer-events-none -z-10 transition-opacity duration-500 bg-gradient-to-b from-rose-950/15 via-transparent to-transparent ${
+              mobileLyricsOpen ? 'opacity-0' : 'opacity-100'
+            }`}
+          />
 
           {/* Header */}
           <div className="flex items-center justify-between w-full">

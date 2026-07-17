@@ -55,6 +55,14 @@
   border: 1px solid transparent;
 }
 
+@media (max-width: 767px) {
+  .glass-card {
+    background: rgb(15 23 42);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
 .glass-card-hover {
   transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
 }

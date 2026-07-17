@@ -778,8 +778,8 @@ function DashboardContent() {
   return (
     <div className="flex flex-1 min-h-0 h-[100dvh] max-h-[100dvh] w-full box-border pt-[env(safe-area-inset-top,0px)] bg-slate-950 text-slate-100 overflow-hidden font-sans select-none relative">
       {/* Background Blobs */}
-      <div className="absolute top-10 left-10 w-96 h-96 bg-rose-600/5 rounded-full blur-[110px] pointer-events-none animate-blob-1" />
-      <div className="absolute top-1/3 right-1/4 w-[35rem] h-[35rem] bg-pink-600/5 rounded-full blur-[130px] pointer-events-none animate-blob-2" />
+      <div className="absolute top-10 left-10 w-96 h-96 bg-rose-600/5 rounded-full blur-[110px] pointer-events-none animate-blob-1 max-md:hidden" />
+      <div className="absolute top-1/3 right-1/4 w-[35rem] h-[35rem] bg-pink-600/5 rounded-full blur-[130px] pointer-events-none animate-blob-2 max-md:hidden" />
       
       {/* 2. Main content viewport */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden">

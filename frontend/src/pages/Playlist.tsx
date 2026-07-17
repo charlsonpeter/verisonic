@@ -330,7 +330,7 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
       {/* Mobile track screen — no hidden playlist header sibling */}
       {showTracksOnMobile && selected && (
         <div className="lg:hidden space-y-4">
-          <div className="sticky top-0 z-20 -mx-6 px-6 py-3 bg-slate-950/95 backdrop-blur-md border-b border-white/5 flex items-center gap-3">
+          <div className="sticky top-0 z-20 -mx-6 px-6 py-3 bg-slate-950 border-b border-white/5 flex items-center gap-3">
             <button
               type="button"
               onClick={() => setMobileTracksOpen(false)}

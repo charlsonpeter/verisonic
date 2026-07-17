@@ -121,7 +121,7 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
   return (
     <div 
       onClick={() => handleStationPlay(station, isCurrent, playRadioStation, togglePlay)}
-      className={`glass-card rounded-3xl p-5 border transition duration-300 relative overflow-hidden group cursor-pointer ${
+      className={`md:glass-card max-md:bg-slate-900 rounded-3xl p-5 border transition duration-300 relative overflow-hidden group cursor-pointer ${
         station.is_online === false
           ? 'opacity-60 hover:opacity-85 border-white/5 bg-slate-900/5'
           : isCurrent 
@@ -129,9 +129,9 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
             : 'border-white/5 bg-slate-900/10 hover:border-slate-800 hover:bg-slate-900/30'
       }`}
     >
-      {/* Background ambient pulse */}
+      {/* Background ambient pulse — desktop only; blur animates poorly on mobile */}
       {isCurrentlyPlaying && (
-        <div className="absolute top-0 right-0 w-24 h-24 bg-rose-500/5 rounded-full blur-2xl animate-pulse" />
+        <div className="absolute top-0 right-0 w-24 h-24 bg-rose-500/5 rounded-full blur-2xl animate-pulse max-md:hidden" />
       )}
 
       <div className="flex items-start gap-5 relative z-10">

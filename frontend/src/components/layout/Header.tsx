@@ -104,7 +104,7 @@ export const Header: React.FC<HeaderProps> = ({
       : getPageTitle(activeTab, { currentUser, userMode });
 
   return (
-    <header className="relative flex-shrink-0 px-4 md:px-5 lg:px-8 py-2.5 md:py-3 lg:py-4 min-h-[3rem] md:min-h-0 flex items-center justify-between gap-2 border-b border-white/5 bg-slate-950/80 md:bg-slate-950/45 backdrop-blur-xl md:backdrop-blur-md z-30">
+    <header className="relative flex-shrink-0 px-4 md:px-5 lg:px-8 py-2.5 md:py-3 lg:py-4 min-h-[3rem] md:min-h-0 flex items-center justify-between gap-2 border-b border-white/5 bg-slate-950 md:bg-slate-950/45 md:backdrop-blur-md z-30">
       
       {mobilePageTitle && (
         <h1 className="md:hidden absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[15px] font-bold text-white truncate max-w-[50vw] pointer-events-none text-center tracking-tight">
@@ -310,7 +310,7 @@ export const Header: React.FC<HeaderProps> = ({
 
             {/* Dropdown Menu Overlay Card */}
             {dropdownOpen && (
-              <div className="absolute right-0 top-10 md:top-11 w-56 bg-slate-900 border border-white/5 rounded-2xl p-2 shadow-2xl z-40 space-y-0.5 backdrop-blur-xl">
+              <div className="absolute right-0 top-10 md:top-11 w-56 bg-slate-900 border border-white/5 rounded-2xl p-2 shadow-2xl z-40 space-y-0.5 md:backdrop-blur-xl">
                 
                 {/* User info */}
                 <div className="p-2.5 border-b border-white/3 mb-1.5 flex items-center gap-2.5">
