@@ -320,6 +320,87 @@
   animation: slide-up 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+/* Mobile expanded player — filter-blur on cover art (not backdrop-blur over live DOM) */
+.mobile-player-expanded {
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.mobile-player-ambient {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  contain: strict;
+  transform: translateZ(0);
+}
+
+.mobile-player-ambient__blur {
+  position: absolute;
+  inset: -30%;
+  background-size: cover;
+  background-position: center;
+  filter: blur(64px) saturate(1.15);
+  -webkit-filter: blur(64px) saturate(1.15);
+  transform: translateZ(0);
+  opacity: 0.9;
+}
+
+.mobile-player-ambient__blur--fallback {
+  inset: 0;
+  background: linear-gradient(145deg, rgb(15 23 42), rgb(76 5 25));
+  filter: none;
+  -webkit-filter: none;
+  opacity: 1;
+}
+
+.mobile-player-ambient__scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: rgb(2 6 23);
+  opacity: 0.48;
+  transition: opacity 0.45s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.mobile-player-expanded--lyrics .mobile-player-ambient__scrim {
+  opacity: 0.8;
+}
+
+.mobile-player-ambient__tint {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    rgba(136, 19, 55, 0.14) 0%,
+    transparent 45%,
+    rgba(2, 6, 23, 0.4) 100%
+  );
+}
+
+.mobile-player-expanded--lyrics .mobile-player-ambient__tint {
+  background: linear-gradient(
+    to bottom,
+    rgba(2, 6, 23, 0.55) 0%,
+    rgba(2, 6, 23, 0.72) 50%,
+    rgba(2, 6, 23, 0.88) 100%
+  );
+}
+
+.mobile-player-expanded__content {
+  position: relative;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 100%;
+  min-height: 0;
+}
+
 @keyframes slide-down {
   from {
     transform: translateY(-8px);

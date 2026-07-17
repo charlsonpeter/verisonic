@@ -314,6 +314,9 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
   const badge = getQualityBadge();
 
+  const expandedCoverUrl =
+    currentTrack?.cover_art_url || activeRadioStation?.cover_art_url || null;
+
   return (
     <>
       <footer
@@ -602,14 +605,26 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
       {/* MOBILE FULL-SCREEN EXPANDED PLAYER DECK */}
       {isMobileExpanded && (
-        <div className="fixed inset-0 bg-slate-950 z-[999] flex flex-col justify-between p-6 animate-slide-up select-none md:hidden">
-          {/* Subtle tint — no blur (avoids mobile compositor flicker) */}
-          <div
-            className={`absolute inset-0 pointer-events-none -z-10 transition-opacity duration-500 bg-gradient-to-b from-rose-950/15 via-transparent to-transparent ${
-              mobileLyricsOpen ? 'opacity-0' : 'opacity-100'
-            }`}
-          />
+        <div
+          className={`mobile-player-expanded fixed inset-0 z-[999] p-6 animate-slide-up select-none md:hidden ${
+            mobileLyricsOpen ? 'mobile-player-expanded--lyrics' : ''
+          }`}
+        >
+          {/* Ambient blur: filter on cover art only — never backdrop-blur over scrolling page */}
+          <div className="mobile-player-ambient" aria-hidden>
+            {expandedCoverUrl ? (
+              <div
+                className="mobile-player-ambient__blur"
+                style={{ backgroundImage: `url(${expandedCoverUrl})` }}
+              />
+            ) : (
+              <div className="mobile-player-ambient__blur mobile-player-ambient__blur--fallback" />
+            )}
+          </div>
+          <div className="mobile-player-ambient__scrim" aria-hidden />
+          <div className="mobile-player-ambient__tint" aria-hidden />
 
+          <div className="mobile-player-expanded__content">
           {/* Header */}
           <div className="flex items-center justify-between w-full">
             <button 
@@ -861,6 +876,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                 )}
               </button>
             </div>
+          </div>
           </div>
         </div>
       )}
