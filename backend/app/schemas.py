@@ -526,3 +526,68 @@ class PaginatedRadioStationListResponse(BaseModel):
     items: List[RadioStationResponse]
     total: int
     has_more: bool
+
+
+class EngagementAccountResponse(BaseModel):
+    kind: str  # "studio" | "radio"
+    id: int
+    name: str
+    city: Optional[str] = None
+    country: Optional[str] = None
+    owner_name: Optional[str] = None
+    is_active: bool
+    has_programs: bool = False
+
+
+class PaginatedEngagementAccountListResponse(BaseModel):
+    items: List[EngagementAccountResponse]
+    total: int
+    has_more: bool
+
+
+class RadioProgramEngagementResponse(BaseModel):
+    station_id: int
+    program_key: str
+    title: str
+    rj_name: Optional[str] = None
+    time_from: Optional[str] = None
+    time_to: Optional[str] = None
+    like_count: int = 0
+    dislike_count: int = 0
+    comment_count: int = 0
+
+
+class RadioProgramListResponse(BaseModel):
+    items: List[RadioProgramEngagementResponse]
+    total: int
+
+
+class RadioProgramCommentCreate(BaseModel):
+    body: str
+    parent_id: Optional[int] = None
+
+
+class RadioProgramCommentResponse(BaseModel):
+    id: int
+    station_id: int
+    program_key: str
+    user_id: int
+    parent_id: Optional[int] = None
+    author_name: Optional[str] = None
+    body: str
+    created_at: datetime
+    like_count: int = 0
+    dislike_count: int = 0
+    user_reaction: Optional[str] = None
+    is_staff_reply: bool = False
+    reply_count: int = 0
+    replies: List["RadioProgramCommentResponse"] = []
+
+
+RadioProgramCommentResponse.model_rebuild()
+
+
+class PaginatedRadioProgramCommentListResponse(BaseModel):
+    items: List[RadioProgramCommentResponse]
+    total: int
+    has_more: bool

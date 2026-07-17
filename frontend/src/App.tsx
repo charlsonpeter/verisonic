@@ -195,7 +195,13 @@ function DashboardContent() {
   }, [activeTab, currentUser?.role]);
 
   useEffect(() => {
-    if (activeTab === 'studio-tracks-engagement' && currentUser?.role !== 'admin') {
+    if (activeTab === 'studio-tracks-engagement') {
+      setActiveTab('engagements');
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'engagements' && currentUser?.role !== 'admin') {
       setActiveTab('home');
     }
   }, [activeTab, currentUser?.role]);
@@ -473,6 +479,7 @@ function DashboardContent() {
         return <TracksManagement onViewReport={viewQualityReport} />;
       case 'track-list':
         return <StudioTrackList onViewReport={viewQualityReport} />;
+      case 'engagements':
       case 'studio-tracks-engagement':
         return <StudioTracksEngagement />;
       case 'contact':

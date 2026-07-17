@@ -3,31 +3,163 @@ from typing import Dict, List, Optional, Tuple
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import CommentReaction, TrackComment, TrackReaction, User
+from app.models import Artist, CommentReaction, RadioStation, TrackComment, TrackReaction, User
 
 PLATFORM_COMMENT_AUTHOR_NAME = "VeriSonic"
+
+
+def _effective_role(user: User) -> str:
+    return getattr(user, "_real_role", None) or user.role
 
 
 def is_platform_admin_user(user: Optional[User]) -> bool:
     if not user:
         return False
-    role = getattr(user, "_real_role", None) or user.role
-    return role == "admin"
-
-
-def comment_author_display_name(user: Optional[User]) -> Optional[str]:
-    if not user:
-        return None
-    if is_platform_admin_user(user):
-        return PLATFORM_COMMENT_AUTHOR_NAME
-    return user.full_name or None
+    return _effective_role(user) == "admin"
 
 
 def is_staff_user(user: Optional[User]) -> bool:
     if not user:
         return False
-    role = getattr(user, "_real_role", None) or user.role
-    return role in ("admin", "studio_admin")
+    return _effective_role(user) in ("admin", "studio_admin", "radio_admin")
+
+
+def _studio_display_name(user: User, db: Optional[Session] = None) -> Optional[str]:
+    artist = user.artist_profile
+    if artist is None and db is not None:
+        artist = db.query(Artist).filter(Artist.user_id == user.id).first()
+    if artist and artist.stage_name and artist.stage_name.strip():
+        return artist.stage_name.strip()
+    return None
+
+
+def _radio_station_display_name(
+    user: User,
+    db: Optional[Session],
+    *,
+    station_id: Optional[int] = None,
+    station_names_by_owner: Optional[Dict[int, str]] = None,
+) -> Optional[str]:
+    if station_names_by_owner is not None and user.id in station_names_by_owner:
+        if station_id is not None:
+            if db is not None:
+                station = (
+                    db.query(RadioStation)
+                    .filter(RadioStation.owner_id == user.id, RadioStation.id == station_id)
+                    .first()
+                )
+                if station and station.name and station.name.strip():
+                    return station.name.strip()
+        return station_names_by_owner.get(user.id)
+
+    if db is None:
+        return None
+
+    query = db.query(RadioStation).filter(RadioStation.owner_id == user.id)
+    if station_id is not None:
+        station = query.filter(RadioStation.id == station_id).first()
+        if station and station.name and station.name.strip():
+            return station.name.strip()
+    station = query.order_by(RadioStation.id.asc()).first()
+    if station and station.name and station.name.strip():
+        return station.name.strip()
+    return None
+
+
+def comment_author_display_name(
+    user: Optional[User],
+    db: Optional[Session] = None,
+    *,
+    station_id: Optional[int] = None,
+    station_names_by_owner: Optional[Dict[int, str]] = None,
+) -> Optional[str]:
+    if not user:
+        return None
+    role = _effective_role(user)
+    if role == "admin":
+        return PLATFORM_COMMENT_AUTHOR_NAME
+    if role == "studio_admin":
+        studio_name = _studio_display_name(user, db)
+        if studio_name:
+            return studio_name
+    if role == "radio_admin":
+        station_name = _radio_station_display_name(
+            user,
+            db,
+            station_id=station_id,
+            station_names_by_owner=station_names_by_owner,
+        )
+        if station_name:
+            return station_name
+    return user.full_name or None
+
+
+def uses_branded_author_name(
+    user: Optional[User],
+    db: Optional[Session] = None,
+    *,
+    station_id: Optional[int] = None,
+    station_names_by_owner: Optional[Dict[int, str]] = None,
+) -> bool:
+    if not user:
+        return False
+    role = _effective_role(user)
+    if role == "admin":
+        return True
+    if role == "studio_admin":
+        return _studio_display_name(user, db) is not None
+    if role == "radio_admin":
+        return _radio_station_display_name(
+            user,
+            db,
+            station_id=station_id,
+            station_names_by_owner=station_names_by_owner,
+        ) is not None
+    return False
+
+
+class CommentAuthorContext:
+    def __init__(self, db: Session, station_id: Optional[int] = None):
+        self.db = db
+        self.station_id = station_id
+        self._station_names_by_owner: Dict[int, str] = {}
+        self._prepared = False
+
+    def prepare(self, users: List[Optional[User]]) -> None:
+        if self._prepared:
+            return
+        owner_ids = [
+            user.id
+            for user in users
+            if user and _effective_role(user) == "radio_admin"
+        ]
+        if owner_ids:
+            rows = (
+                self.db.query(RadioStation.owner_id, RadioStation.name)
+                .filter(RadioStation.owner_id.in_(owner_ids))
+                .order_by(RadioStation.id.asc())
+                .all()
+            )
+            for owner_id, name in rows:
+                if owner_id not in self._station_names_by_owner and name and name.strip():
+                    self._station_names_by_owner[owner_id] = name.strip()
+        self._prepared = True
+
+    def author_name(self, user: Optional[User]) -> Optional[str]:
+        return comment_author_display_name(
+            user,
+            self.db,
+            station_id=self.station_id,
+            station_names_by_owner=self._station_names_by_owner,
+        )
+
+    def uses_branded_name(self, user: Optional[User]) -> bool:
+        return uses_branded_author_name(
+            user,
+            self.db,
+            station_id=self.station_id,
+            station_names_by_owner=self._station_names_by_owner,
+        )
 
 
 def engagement_counts_for_tracks(db: Session, track_ids: List[int]) -> Dict[int, dict]:
@@ -132,9 +264,14 @@ def serialize_comment(
     *,
     reaction_map: Optional[Dict[int, dict]] = None,
     reply_count: int = 0,
+    author_context: Optional[CommentAuthorContext] = None,
 ) -> dict:
     if reaction_map is None:
         reaction_map = comment_reaction_counts(db, [comment.id], viewer.id if viewer else None)
+
+    if author_context is None:
+        author_context = CommentAuthorContext(db)
+        author_context.prepare([comment.user])
 
     counts = reaction_map.get(comment.id, {"like_count": 0, "dislike_count": 0, "user_reaction": None})
     return {
@@ -142,7 +279,7 @@ def serialize_comment(
         "track_id": comment.track_id,
         "user_id": comment.user_id,
         "parent_id": comment.parent_id,
-        "author_name": comment_author_display_name(comment.user),
+        "author_name": author_context.author_name(comment.user),
         "body": comment.body,
         "created_at": comment.created_at,
         "like_count": counts["like_count"],
@@ -151,7 +288,7 @@ def serialize_comment(
         "is_staff_reply": bool(
             comment.parent_id
             and is_staff_user(comment.user)
-            and not is_platform_admin_user(comment.user)
+            and not author_context.uses_branded_name(comment.user)
         ),
         "reply_count": reply_count,
         "replies": [],
@@ -169,7 +306,7 @@ def load_paginated_comments_for_track(
 ) -> Tuple[List[dict], int, bool]:
     query = (
         db.query(TrackComment)
-        .options(joinedload(TrackComment.user))
+        .options(joinedload(TrackComment.user).joinedload(User.artist_profile))
         .filter(TrackComment.track_id == track_id)
     )
     if parent_id is None:
@@ -183,6 +320,9 @@ def load_paginated_comments_for_track(
     reaction_map = comment_reaction_counts(db, comment_ids, viewer.id if viewer else None)
     reply_counts = reply_counts_for_comments(db, comment_ids) if parent_id is None else {}
 
+    author_context = CommentAuthorContext(db)
+    author_context.prepare([comment.user for comment in comments])
+
     items = [
         serialize_comment(
             comment,
@@ -190,6 +330,7 @@ def load_paginated_comments_for_track(
             viewer,
             reaction_map=reaction_map,
             reply_count=reply_counts.get(comment.id, 0) if parent_id is None else 0,
+            author_context=author_context,
         )
         for comment in comments
     ]

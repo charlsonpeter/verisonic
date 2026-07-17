@@ -41,8 +41,9 @@ export function getPageTitle(activeTab: string, ctx: PageTitleContext = {}): str
       return 'Manage Tracks';
     case 'track-list':
       return 'Tracks List';
+    case 'engagements':
     case 'studio-tracks-engagement':
-      return 'Studio Tracks';
+      return 'Engagements';
     case 'broadcaster-download':
       return 'Broadcaster App';
     case 'analytics':

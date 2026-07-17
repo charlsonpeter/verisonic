@@ -332,6 +332,47 @@ MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS ix_comment_reactions_comment_id ON comment_reactions (comment_id);
         CREATE INDEX IF NOT EXISTS ix_comment_reactions_user_id ON comment_reactions (user_id);
     """),
+    ("029_radio_program_engagement", """
+        CREATE TABLE IF NOT EXISTS radio_program_reactions (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            station_id INTEGER NOT NULL REFERENCES radio_stations(id) ON DELETE CASCADE,
+            program_key VARCHAR NOT NULL,
+            reaction VARCHAR NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_radio_program_reactions_user_program
+            ON radio_program_reactions (user_id, station_id, program_key);
+        CREATE INDEX IF NOT EXISTS ix_radio_program_reactions_station_id ON radio_program_reactions (station_id);
+        CREATE INDEX IF NOT EXISTS ix_radio_program_reactions_program_key ON radio_program_reactions (program_key);
+
+        CREATE TABLE IF NOT EXISTS radio_program_comments (
+            id SERIAL PRIMARY KEY,
+            station_id INTEGER NOT NULL REFERENCES radio_stations(id) ON DELETE CASCADE,
+            program_key VARCHAR NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            parent_id INTEGER REFERENCES radio_program_comments(id) ON DELETE CASCADE,
+            body VARCHAR NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS ix_radio_program_comments_station_program
+            ON radio_program_comments (station_id, program_key);
+        CREATE INDEX IF NOT EXISTS ix_radio_program_comments_parent_id ON radio_program_comments (parent_id);
+
+        CREATE TABLE IF NOT EXISTS radio_program_comment_reactions (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            comment_id INTEGER NOT NULL REFERENCES radio_program_comments(id) ON DELETE CASCADE,
+            reaction VARCHAR NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_radio_program_comment_reactions_user_comment
+            ON radio_program_comment_reactions (user_id, comment_id);
+        CREATE INDEX IF NOT EXISTS ix_radio_program_comment_reactions_comment_id
+            ON radio_program_comment_reactions (comment_id);
+    """),
 ]
 
 

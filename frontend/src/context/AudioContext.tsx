@@ -129,6 +129,7 @@ interface AudioContextType {
   isShuffle: boolean;
   favorites: number[];
   trackReactions: Record<number, TrackReactionValue>;
+  radioProgramReactions: Record<string, TrackReactionValue>;
   playQueue: Track[];
   currentQueueIndex: number;
   showPremiumModal: boolean;
@@ -151,6 +152,11 @@ interface AudioContextType {
   toggleShuffle: () => void;
   toggleFavorite: (trackId: number) => void;
   setTrackReaction: (trackId: number, reaction: TrackReactionValue | null) => void;
+  setRadioProgramReaction: (
+    stationId: number,
+    programKey: string,
+    reaction: TrackReactionValue | null,
+  ) => void;
   addToQueue: (track: Track) => void;
   playQueueTracks: (tracks: Track[]) => void;
   removeFromQueue: (trackId: number) => void;
@@ -218,6 +224,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [isShuffle, setIsShuffle] = useState<boolean>(false);
   const [favorites, setFavorites] = useState<number[]>([]);
   const [trackReactions, setTrackReactions] = useState<Record<number, TrackReactionValue>>({});
+  const [radioProgramReactions, setRadioProgramReactions] = useState<Record<string, TrackReactionValue>>({});
   const [playQueue, setPlayQueue] = useState<Track[]>([]);
   const [currentQueueIndex, setCurrentQueueIndex] = useState<number>(-1);
   const [showPremiumModal, setShowPremiumModal] = useState<boolean>(false);
@@ -641,6 +648,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => {
     setFavorites([]);
     setTrackReactions({});
+    setRadioProgramReactions({});
     if (!token) {
       return;
     }
@@ -674,6 +682,25 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       } catch (e) {
         console.warn('Failed to load track reactions:', e);
+      }
+    })();
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/reactions/radio-programs`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json() as Record<string, TrackReactionValue>;
+          const parsed: Record<string, TrackReactionValue> = {};
+          for (const [key, reaction] of Object.entries(data)) {
+            if (reaction === 'like' || reaction === 'dislike') {
+              parsed[key] = reaction;
+            }
+          }
+          setRadioProgramReactions(parsed);
+        }
+      } catch (e) {
+        console.warn('Failed to load radio program reactions:', e);
       }
     })();
   }, [token]);
@@ -2250,6 +2277,56 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
+  const setRadioProgramReaction = async (
+    stationId: number,
+    programKey: string,
+    reaction: TrackReactionValue | null,
+  ) => {
+    if (!token) return;
+    const key = `${stationId}:${programKey}`;
+    const previous = radioProgramReactions[key] ?? null;
+    setRadioProgramReactions((prev) => {
+      const next = { ...prev };
+      if (reaction === null) {
+        delete next[key];
+      } else {
+        next[key] = reaction;
+      }
+      return next;
+    });
+    try {
+      const encodedKey = encodeURIComponent(programKey);
+      if (reaction === null) {
+        const res = await fetch(`${API_URL}/reactions/radio/${stationId}/${encodedKey}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok && res.status !== 404) throw new Error('failed');
+      } else {
+        const res = await fetch(`${API_URL}/reactions/radio/${stationId}/${encodedKey}`, {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ reaction }),
+        });
+        if (!res.ok) throw new Error('failed');
+      }
+    } catch (e) {
+      setRadioProgramReactions((prev) => {
+        const next = { ...prev };
+        if (previous === null) {
+          delete next[key];
+        } else {
+          next[key] = previous;
+        }
+        return next;
+      });
+      console.warn('Failed to sync radio program reaction:', e);
+    }
+  };
+
   const setTrackReaction = async (trackId: number, reaction: TrackReactionValue | null) => {
     if (!token) return;
     const previous = trackReactions[trackId] ?? null;
@@ -2467,6 +2544,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       isShuffle,
       favorites,
       trackReactions,
+      radioProgramReactions,
       playQueue,
       currentQueueIndex,
       showPremiumModal,
@@ -2489,6 +2567,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       toggleShuffle,
       toggleFavorite,
       setTrackReaction,
+      setRadioProgramReaction,
       addToQueue,
       playQueueTracks,
       removeFromQueue,

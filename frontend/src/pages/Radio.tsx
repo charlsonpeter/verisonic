@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import { Radio as RadioIcon, RadioIcon as LiveIcon, Plus, Sparkles, X, Users, Calendar, Play, Pause, Wifi, MapPin } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Radio as RadioIcon, RadioIcon as LiveIcon, Plus, Sparkles, X, Users, Calendar, Play, Pause, Wifi, MapPin, MessageSquare, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { useAudio, RadioStation } from '../context/AudioContext';
 import { useAuth } from '../context/AuthContext';
 import { RadioCard, RadioTile } from '../components/shared/RadioCard';
 import { AppModal } from '../components/shared/AppModal';
 import { TimePicker } from '../components/shared/TimePicker';
+import { ProgramEngagementModal } from '../components/shared/ProgramEngagementModal';
 import { showError } from '../utils/swal';
+import { getProgramScheduleOverlapError } from '../utils/programSchedule';
 import { fetchBroadcastKey, getAccessToken } from '../utils/authTokens';
 import { RadioPageSkeleton } from '../components/shared/skeleton';
 
@@ -118,10 +120,20 @@ export const Radio: React.FC = () => {
 
   // ── Program / Schedule editing ────────────────────────────────────────────
   interface ProgramDetail {
+    id?: string;
     title: string;
     rj: string;
     timeFrom: string;
     timeTo: string;
+    like_count?: number;
+    dislike_count?: number;
+    comment_count?: number;
+  }
+
+  interface ProgramEngagementSelection {
+    stationId: number;
+    programKey: string;
+    title: string;
   }
 
   const getTimezoneOffsetMs = (timeZone: string, date = new Date()): number => {
@@ -203,6 +215,14 @@ export const Radio: React.FC = () => {
   const [editPrograms, setEditPrograms] = useState<ProgramDetail[]>([]);
   const [editRjDetails, setEditRjDetails] = useState('');
   const [isSavingMetadata, setIsSavingMetadata] = useState(false);
+  const [programEngagementSelection, setProgramEngagementSelection] =
+    useState<ProgramEngagementSelection | null>(null);
+  const [programsEngagementLoading, setProgramsEngagementLoading] = useState(false);
+
+  const programScheduleOverlapError = useMemo(
+    () => getProgramScheduleOverlapError(editPrograms),
+    [editPrograms],
+  );
 
   const startEditingMetadata = (st: any) => {
     setEditRjDetails(st.rj_details || '');
@@ -212,6 +232,7 @@ export const Radio: React.FC = () => {
         const parsed = JSON.parse(st.programs_list);
         if (Array.isArray(parsed)) {
           initialPrograms = parsed.map((p: any) => ({
+            id: p.id ? String(p.id) : undefined,
             title: p.title || '',
             rj: p.rj || '',
             timeFrom: convertUtcToStationTime(p.timeFrom, st.timezone),
@@ -229,13 +250,138 @@ export const Radio: React.FC = () => {
     setEditingStationId(st.id);
   };
 
+  useEffect(() => {
+    if (!editingStationId || !token) return;
+
+    let cancelled = false;
+    const loadProgramEngagement = async () => {
+      setProgramsEngagementLoading(true);
+      try {
+        const res = await fetch(`${API_URL}/radio/${editingStationId}/programs`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        const items = data.items ?? [];
+        setEditPrograms((prev) =>
+          prev.map((prog, index) => {
+            const apiItem =
+              (prog.id ? items.find((item: { program_key: string }) => item.program_key === prog.id) : undefined) ||
+              items[index];
+            if (!apiItem) return prog;
+            return {
+              ...prog,
+              id: apiItem.program_key,
+              like_count: apiItem.like_count,
+              dislike_count: apiItem.dislike_count,
+              comment_count: apiItem.comment_count,
+            };
+          }),
+        );
+      } catch {
+        // Engagement is optional in the editor; ignore fetch failures.
+      } finally {
+        if (!cancelled) setProgramsEngagementLoading(false);
+      }
+    };
+
+    void loadProgramEngagement();
+    return () => {
+      cancelled = true;
+    };
+  }, [editingStationId, token]);
+
+  const programRowGridClass =
+    'grid grid-cols-1 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_5.75rem_5.75rem_auto] gap-3 md:gap-2 md:items-end';
+
+  const renderProgramActions = (prog: ProgramDetail, stationId: number, index: number, showDelete: boolean) => (
+    <div className="flex flex-col gap-3 md:flex-row md:items-end md:gap-0 md:shrink-0">
+      {showDelete && (
+        <div className="min-w-0">
+          <label className="md:hidden text-[8px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+            Delete
+          </label>
+          <button
+            type="button"
+            onClick={() => setEditPrograms(editPrograms.filter((_, i) => i !== index))}
+            className="w-full md:w-auto px-2.5 py-2 bg-slate-905 hover:bg-rose-950/40 border border-white/5 text-rose-500 hover:text-rose-400 text-[10px] rounded-lg transition font-sans font-bold uppercase cursor-pointer whitespace-nowrap"
+          >
+            Delete
+          </button>
+        </div>
+      )}
+
+      {showDelete && (
+        <div
+          className="hidden md:block w-px self-stretch min-h-[2.25rem] bg-white/15 mx-2.5 shrink-0"
+          aria-hidden
+        />
+      )}
+
+      {showDelete && (
+        <div className="md:hidden h-px w-full bg-white/10" aria-hidden />
+      )}
+
+      <div className="min-w-0">
+        <label className="md:hidden text-[8px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+          Engagement
+        </label>
+        {renderProgramEngagement(prog, stationId)}
+      </div>
+    </div>
+  );
+
+  const renderProgramEngagement = (prog: ProgramDetail, stationId: number) => {
+    if (!prog.id) {
+      return (
+        <p className="text-[9px] text-slate-500 italic leading-snug md:text-right">
+          Save to track engagement
+        </p>
+      );
+    }
+
+    return (
+      <button
+        type="button"
+        onClick={() =>
+          setProgramEngagementSelection({
+            stationId,
+            programKey: prog.id!,
+            title: prog.title,
+          })
+        }
+        className="inline-flex items-center gap-1.5 text-[10px] font-bold text-slate-400 hover:text-white transition whitespace-nowrap"
+        title="View engagement"
+      >
+        <span className="inline-flex items-center gap-0.5 text-emerald-400">
+          <ThumbsUp className="w-3 h-3" /> {prog.like_count ?? 0}
+        </span>
+        <span className="text-slate-600">·</span>
+        <span className="inline-flex items-center gap-0.5 text-rose-400">
+          <ThumbsDown className="w-3 h-3" /> {prog.dislike_count ?? 0}
+        </span>
+        <span className="text-slate-600">·</span>
+        <span className="inline-flex items-center gap-0.5 text-slate-300">
+          <MessageSquare className="w-3 h-3" /> {prog.comment_count ?? 0}
+        </span>
+      </button>
+    );
+  };
+
   const handleSaveMetadata = async (stationId: number) => {
+    const overlapError = getProgramScheduleOverlapError(editPrograms);
+    if (overlapError) {
+      showError('Schedule Overlap', overlapError);
+      return;
+    }
+
     setIsSavingMetadata(true);
     try {
       const station = stations.find(s => s.id === stationId);
       const stationTimezone = station?.timezone || 'UTC';
       const activeProg = getActiveProgram(editPrograms, stationTimezone);
       const utcPrograms = editPrograms.map(p => ({
+        ...(p.id ? { id: p.id } : {}),
         title: p.title, rj: p.rj,
         timeFrom: convertStationTimeToUtc(p.timeFrom, stationTimezone),
         timeTo: convertStationTimeToUtc(p.timeTo, stationTimezone)
@@ -254,7 +400,8 @@ export const Radio: React.FC = () => {
         setEditingStationId(null);
         fetchRadioStations();
       } else {
-        showError('Save Failed', 'Failed to save program details.');
+        const err = await res.json().catch(() => ({}));
+        showError('Save Failed', typeof err.detail === 'string' ? err.detail : 'Failed to save program details.');
       }
     } catch (e) {
       showError('Save Failed', 'Failed to save program details.');
@@ -688,9 +835,9 @@ export const Radio: React.FC = () => {
                             </button>
                             <button
                               type="button"
-                              disabled={isSavingMetadata}
+                              disabled={isSavingMetadata || !!programScheduleOverlapError}
                               onClick={() => handleSaveMetadata(st.id)}
-                              className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 rounded-xl text-[10px] font-bold uppercase tracking-wider transition text-white cursor-pointer"
+                              className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 disabled:text-slate-500 rounded-xl text-[10px] font-bold uppercase tracking-wider transition text-white cursor-pointer"
                             >
                               {isSavingMetadata ? 'Saving...' : 'Save Schedule'}
                             </button>
@@ -698,6 +845,11 @@ export const Radio: React.FC = () => {
                         )}
                       >
                             <div className="flex-1 flex flex-col min-h-0 mx-6 my-4 border border-white/5 bg-slate-950/40 p-4 rounded-2xl">
+                              {programScheduleOverlapError && (
+                                <div className="mb-3 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[11px] text-rose-300 leading-relaxed">
+                                  {programScheduleOverlapError}
+                                </div>
+                              )}
                               <div className="flex justify-between items-center pb-3 border-b border-white/5 mb-3 flex-shrink-0">
                                 <h4 className="text-[10px] font-extrabold text-rose-455 uppercase tracking-widest font-sans">Program Details List</h4>
                                 <button type="button"
@@ -707,6 +859,32 @@ export const Radio: React.FC = () => {
                                 </button>
                               </div>
                               <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+                                {programsEngagementLoading && (
+                                  <p className="text-[10px] text-slate-500 italic px-1">Loading engagement...</p>
+                                )}
+
+                                <div className={`hidden md:grid ${programRowGridClass} px-3 pb-1 flex-shrink-0`}>
+                                  <span className="text-[8px] font-bold text-slate-500 uppercase tracking-wider">Program Title</span>
+                                  <span className="text-[8px] font-bold text-slate-500 uppercase tracking-wider">RJ Name</span>
+                                  <span className="text-[8px] font-bold text-slate-500 uppercase tracking-wider">Time From</span>
+                                  <span className="text-[8px] font-bold text-slate-500 uppercase tracking-wider">Time To</span>
+                                  {editPrograms.length > 1 ? (
+                                    <div className="flex items-end gap-0 shrink-0">
+                                      <span className="text-[8px] font-bold text-slate-500 uppercase tracking-wider whitespace-nowrap">
+                                        Delete
+                                      </span>
+                                      <span className="w-px h-3 bg-white/15 mx-2.5 shrink-0" aria-hidden />
+                                      <span className="text-[8px] font-bold text-slate-500 uppercase tracking-wider whitespace-nowrap">
+                                        Engagement
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <span className="text-[8px] font-bold text-slate-500 uppercase tracking-wider whitespace-nowrap">
+                                      Engagement
+                                    </span>
+                                  )}
+                                </div>
+
                                 {(() => {
                                   const activeProg = getActiveProgram(editPrograms, timezone);
                                   return editPrograms.map((prog, index) => {
@@ -716,22 +894,52 @@ export const Radio: React.FC = () => {
                                       prog.timeFrom === activeProg.timeFrom &&
                                       prog.timeTo === activeProg.timeTo;
                                     return (
-                                      <div key={index}
-                                        className={`flex flex-col md:flex-row gap-3 p-3 rounded-xl border relative items-end transition-all duration-300 ${isActive ? 'bg-rose-950/20 border-rose-500/35 shadow-lg shadow-rose-950/40' : 'bg-slate-950 border-white/5'}`}>
-                                        <div className="flex-1 w-full space-y-1">
-                                          <label className="text-[8px] font-bold text-slate-500 uppercase tracking-wider block">Program Title</label>
-                                          <input type="text" placeholder="Morning Beats..." value={prog.title}
-                                            onChange={(e) => { const u = [...editPrograms]; u[index].title = e.target.value; setEditPrograms(u); }}
-                                            className="w-full bg-slate-900 border border-white/5 text-xs p-2 rounded-lg outline-none focus:border-rose-500 text-slate-200 transition" />
+                                      <div
+                                        key={index}
+                                        className={`${programRowGridClass} p-3 rounded-xl border transition-all duration-300 ${
+                                          isActive
+                                            ? 'bg-rose-950/20 border-rose-500/35 shadow-lg shadow-rose-950/40'
+                                            : 'bg-slate-950 border-white/5'
+                                        }`}
+                                      >
+                                        <div className="space-y-1 min-w-0">
+                                          <label className="md:hidden text-[8px] font-bold text-slate-500 uppercase tracking-wider block">
+                                            Program Title
+                                          </label>
+                                          <input
+                                            type="text"
+                                            placeholder="Morning Beats..."
+                                            value={prog.title}
+                                            onChange={(e) => {
+                                              const u = [...editPrograms];
+                                              u[index].title = e.target.value;
+                                              setEditPrograms(u);
+                                            }}
+                                            className="w-full bg-slate-900 border border-white/5 text-xs p-2 rounded-lg outline-none focus:border-rose-500 text-slate-200 transition"
+                                          />
                                         </div>
-                                        <div className="flex-1 w-full space-y-1">
-                                          <label className="text-[8px] font-bold text-slate-500 uppercase tracking-wider block">RJ Name</label>
-                                          <input type="text" placeholder="RJ Alex..." value={prog.rj}
-                                            onChange={(e) => { const u = [...editPrograms]; u[index].rj = e.target.value; setEditPrograms(u); }}
-                                            className="w-full bg-slate-900 border border-white/5 text-xs p-2 rounded-lg outline-none focus:border-rose-500 text-slate-200 transition" />
+
+                                        <div className="space-y-1 min-w-0">
+                                          <label className="md:hidden text-[8px] font-bold text-slate-500 uppercase tracking-wider block">
+                                            RJ Name
+                                          </label>
+                                          <input
+                                            type="text"
+                                            placeholder="RJ Alex..."
+                                            value={prog.rj}
+                                            onChange={(e) => {
+                                              const u = [...editPrograms];
+                                              u[index].rj = e.target.value;
+                                              setEditPrograms(u);
+                                            }}
+                                            className="w-full bg-slate-900 border border-white/5 text-xs p-2 rounded-lg outline-none focus:border-rose-500 text-slate-200 transition"
+                                          />
                                         </div>
-                                        <div className="w-full md:w-28 space-y-1">
-                                          <label className="text-[8px] font-bold text-slate-500 uppercase tracking-wider block">Time From</label>
+
+                                        <div className="space-y-1">
+                                          <label className="md:hidden text-[8px] font-bold text-slate-500 uppercase tracking-wider block">
+                                            Time From
+                                          </label>
                                           <TimePicker
                                             value={prog.timeFrom}
                                             onChange={(timeFrom) => {
@@ -740,11 +948,14 @@ export const Radio: React.FC = () => {
                                               setEditPrograms(u);
                                             }}
                                             size="xs"
-                                            buttonClassName="bg-slate-900 border-white/5 rounded-lg outline-none focus:border-rose-500"
+                                            buttonClassName="w-full bg-slate-900 border-white/5 rounded-lg outline-none focus:border-rose-500"
                                           />
                                         </div>
-                                        <div className="w-full md:w-28 space-y-1">
-                                          <label className="text-[8px] font-bold text-slate-500 uppercase tracking-wider block">Time To</label>
+
+                                        <div className="space-y-1">
+                                          <label className="md:hidden text-[8px] font-bold text-slate-500 uppercase tracking-wider block">
+                                            Time To
+                                          </label>
                                           <TimePicker
                                             value={prog.timeTo}
                                             onChange={(timeTo) => {
@@ -754,16 +965,11 @@ export const Radio: React.FC = () => {
                                             }}
                                             size="xs"
                                             min={prog.timeFrom || undefined}
-                                            buttonClassName="bg-slate-900 border-white/5 rounded-lg outline-none focus:border-rose-500"
+                                            buttonClassName="w-full bg-slate-900 border-white/5 rounded-lg outline-none focus:border-rose-500"
                                           />
                                         </div>
-                                        {editPrograms.length > 1 && (
-                                          <button type="button"
-                                            onClick={() => setEditPrograms(editPrograms.filter((_, i) => i !== index))}
-                                            className="px-2.5 py-2 bg-slate-905 hover:bg-rose-950/40 border border-white/5 text-rose-500 hover:text-rose-400 text-[10px] rounded-lg transition font-sans font-bold uppercase cursor-pointer">
-                                            Delete
-                                          </button>
-                                        )}
+
+                                        {renderProgramActions(prog, st.id, index, editPrograms.length > 1)}
                                       </div>
                                     );
                                   });
@@ -837,6 +1043,14 @@ export const Radio: React.FC = () => {
           </>
         )
       )}
+
+      <ProgramEngagementModal
+        stationId={programEngagementSelection?.stationId ?? null}
+        programKey={programEngagementSelection?.programKey ?? null}
+        programTitle={programEngagementSelection?.title}
+        open={!!programEngagementSelection}
+        onClose={() => setProgramEngagementSelection(null)}
+      />
 
     </div>
   );

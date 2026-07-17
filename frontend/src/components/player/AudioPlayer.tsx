@@ -7,6 +7,8 @@ import {
 import { useAudio } from '../../context/AudioContext';
 import { Equalizer } from './Equalizer';
 import { TrackInfoPanel } from './TrackInfoPanel';
+import { RadioProgramInfoPanel } from './RadioProgramInfoPanel';
+import { getActiveRadioProgram, radioProgramReactionKey } from '../../utils/radioPrograms';
 import { useAuth } from '../../context/AuthContext';
 import { AddToPlaylistButton } from '../shared/AddToPlaylistButton';
 import {
@@ -35,8 +37,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const { 
     currentTrack, activeRadioStation, isPlaying, duration, getCurrentTime, subscribeTime,
     volume, isMuted, isRadioSync, playbackSpeed, repeatMode, isShuffle, 
-    favorites, trackReactions, togglePlay, seek, adjustVolume, toggleMute, setPlaybackSpeed, 
-    setRepeatMode, toggleShuffle, toggleFavorite, setTrackReaction, playNext, playPrevious
+    favorites, trackReactions, radioProgramReactions, togglePlay, seek, adjustVolume, toggleMute, setPlaybackSpeed, 
+    setRepeatMode, toggleShuffle, toggleFavorite, setTrackReaction, setRadioProgramReaction, playNext, playPrevious
   } = useAudio();
 
   const { userMode, currentUser, token } = useAuth();
@@ -44,7 +46,9 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const [isMobileExpanded, setIsMobileExpanded] = React.useState(false);
   const [mobileLyricsOpen, setMobileLyricsOpen] = React.useState(false);
   const [mobileInfoOpen, setMobileInfoOpen] = React.useState(false);
+  const [mobileRadioInfoOpen, setMobileRadioInfoOpen] = React.useState(false);
   const [desktopInfoOpen, setDesktopInfoOpen] = React.useState(false);
+  const [desktopRadioInfoOpen, setDesktopRadioInfoOpen] = React.useState(false);
   const [mobileActiveLineIndex, setMobileActiveLineIndex] = React.useState(-1);
   const mobilePlayerHistoryRef = React.useRef(false);
   const mobileLyricsScrollRef = React.useRef<HTMLDivElement | null>(null);
@@ -305,12 +309,30 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   if (!currentTrack && !activeRadioStation) return null;
 
   const isFav = currentTrack ? favorites.includes(currentTrack.id) : false;
-  const currentReaction = currentTrack ? trackReactions[currentTrack.id] ?? null : null;
-  const canReact = !!(currentTrack && token && !isRadioAdminInAdminMode && !activeRadioStation);
+  const activeProgram = activeRadioStation ? getActiveRadioProgram(activeRadioStation) : null;
+  const canReactTrack = !!(currentTrack && token && !isRadioAdminInAdminMode && !activeRadioStation);
+  const canReactRadio = !!(activeRadioStation && activeProgram && token && !isRadioAdminInAdminMode);
+  const canReact = canReactTrack || canReactRadio;
+  const currentTrackReaction = currentTrack ? trackReactions[currentTrack.id] ?? null : null;
+  const radioReactionKey =
+    activeRadioStation && activeProgram
+      ? radioProgramReactionKey(activeRadioStation.id, activeProgram.id)
+      : null;
+  const currentRadioReaction = radioReactionKey ? radioProgramReactions[radioReactionKey] ?? null : null;
+  const currentReaction = canReactTrack ? currentTrackReaction : currentRadioReaction;
 
   const handleReactionClick = (reaction: 'like' | 'dislike') => {
-    if (!currentTrack || !canReact) return;
-    setTrackReaction(currentTrack.id, currentReaction === reaction ? null : reaction);
+    if (canReactTrack && currentTrack) {
+      setTrackReaction(currentTrack.id, currentTrackReaction === reaction ? null : reaction);
+      return;
+    }
+    if (canReactRadio && activeRadioStation && activeProgram) {
+      setRadioProgramReaction(
+        activeRadioStation.id,
+        activeProgram.id,
+        currentRadioReaction === reaction ? null : reaction,
+      );
+    }
   };
 
   const reactionRoundClass = (active: boolean, activeTone: 'like' | 'dislike') =>
@@ -394,6 +416,20 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                   className={`flex-shrink-0 transition ${desktopInfoOpen ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'}`}
                   title="Track info"
                   aria-label="Track info and comments"
+                >
+                  <Info className="w-4 h-4" />
+                </button>
+              )}
+              {activeRadioStation && activeProgram && !isRadioAdminInAdminMode && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDesktopRadioInfoOpen(true);
+                  }}
+                  className={`flex-shrink-0 transition ${desktopRadioInfoOpen ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'}`}
+                  title="Program info"
+                  aria-label="Program info and comments"
                 >
                   <Info className="w-4 h-4" />
                 </button>
@@ -501,7 +537,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               className="grid w-full items-center gap-x-4 gap-y-2"
               style={{ gridTemplateColumns: '1.25rem 1fr 1.25rem' }}
             >
-              {currentTrack && !isRadioAdminInAdminMode ? (
+              {(currentTrack && !activeRadioStation) || (activeRadioStation && activeProgram) ? (
+                !isRadioAdminInAdminMode ? (
                 <>
                   <div className="col-start-1 row-start-1 flex justify-center">
                     {canReact ? (
@@ -534,24 +571,29 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                     )}
                   </div>
                   <div className="col-start-1 row-start-2 flex justify-center">
-                    <button
-                      type="button"
-                      onClick={() => toggleFavorite(currentTrack.id)}
-                      className={desktopPlayerControlClass(isFav)}
-                      title={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
-                      aria-label={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
-                    >
-                      <Heart className={`w-4 h-4 ${isFav ? 'fill-current' : ''}`} />
-                    </button>
+                    {currentTrack && !activeRadioStation ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleFavorite(currentTrack.id)}
+                        className={desktopPlayerControlClass(isFav)}
+                        title={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
+                        aria-label={isFav ? 'Remove from Favorites' : 'Add to Favorites'}
+                      >
+                        <Heart className={`w-4 h-4 ${isFav ? 'fill-current' : ''}`} />
+                      </button>
+                    ) : (
+                      <span className="w-4" aria-hidden />
+                    )}
                   </div>
                   <div className="col-start-3 row-start-2 flex justify-center">
-                    {!activeRadioStation ? (
+                    {currentTrack && !activeRadioStation ? (
                       <AddToPlaylistButton track={currentTrack} variant="player" />
                     ) : (
                       <span className="w-4" aria-hidden />
                     )}
                   </div>
                 </>
+                ) : null
               ) : null}
 
               <div className="col-start-2 row-start-1 flex items-center justify-center gap-6">
@@ -857,6 +899,17 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                   <Info className="w-4.5 h-4.5" />
                 </button>
               )}
+              {activeRadioStation && activeProgram && !isRadioAdminInAdminMode && (
+                <button
+                  type="button"
+                  onClick={() => setMobileRadioInfoOpen(true)}
+                  className="w-10 h-10 rounded-full bg-white/5 border border-white/5 flex items-center justify-center text-slate-300 active:scale-95 transition flex-shrink-0"
+                  aria-label="Program info and comments"
+                  title="Program info"
+                >
+                  <Info className="w-4.5 h-4.5" />
+                </button>
+              )}
             </div>
 
             {/* Speed + actions + seek bar */}
@@ -1024,6 +1077,27 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           onClose={() => setDesktopInfoOpen(false)}
           presentation="modal"
         />
+      )}
+
+      {activeRadioStation && activeProgram && (
+        <>
+          <RadioProgramInfoPanel
+            stationName={activeRadioStation.name}
+            program={activeProgram}
+            stationId={activeRadioStation.id}
+            open={mobileRadioInfoOpen}
+            onClose={() => setMobileRadioInfoOpen(false)}
+            presentation="overlay"
+          />
+          <RadioProgramInfoPanel
+            stationName={activeRadioStation.name}
+            program={activeProgram}
+            stationId={activeRadioStation.id}
+            open={desktopRadioInfoOpen}
+            onClose={() => setDesktopRadioInfoOpen(false)}
+            presentation="modal"
+          />
+        </>
       )}
     </>
   );

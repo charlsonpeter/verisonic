@@ -1,13 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header, Request, Response, File, UploadFile, Query
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_
+from sqlalchemy import or_, literal, union_all
 from jose import jwt, JWTError
 from typing import List, Optional
 
 from app.db.session import get_db
-from app.models import User, Artist, Track
-from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, UserSettingsUpdate, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, StudioProfileUpdate, RequestReactivationSchema, SwitchModeRequest, PaginatedUserListResponse, PaginatedArtistListResponse, PaginatedTrackListResponse
+from app.models import User, Artist, Track, RadioStation
+from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, UserSettingsUpdate, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, StudioProfileUpdate, RequestReactivationSchema, SwitchModeRequest, PaginatedUserListResponse, PaginatedArtistListResponse, PaginatedTrackListResponse, EngagementAccountResponse, PaginatedEngagementAccountListResponse, RadioProgramEngagementResponse, RadioProgramListResponse
+from app.services.radio_programs import station_has_programs, ensure_station_program_ids
+from app.services.radio_engagement import engagement_counts_for_programs, build_program_engagement_items
 from app.core.security import (
     verify_password, get_password_hash, create_access_token, create_refresh_token,
     validate_refresh_token, revoke_refresh_token, ALGORITHM, REFRESH_COOKIE_NAME,
@@ -875,6 +877,114 @@ def _apply_studio_search_filter(query, search: Optional[str]):
     )
 
 
+def _engagement_studio_search_filter(query, search: Optional[str]):
+    if not search or not search.strip():
+        return query
+    pattern = f"%{search.strip()}%"
+    return query.filter(
+        or_(
+            Artist.stage_name.ilike(pattern),
+            Artist.city.ilike(pattern),
+            Artist.country.ilike(pattern),
+            User.full_name.ilike(pattern),
+            User.email.ilike(pattern),
+        )
+    )
+
+
+def _engagement_radio_search_filter(query, search: Optional[str]):
+    if not search or not search.strip():
+        return query
+    pattern = f"%{search.strip()}%"
+    return query.filter(
+        or_(
+            RadioStation.name.ilike(pattern),
+            RadioStation.city.ilike(pattern),
+            RadioStation.country.ilike(pattern),
+            User.full_name.ilike(pattern),
+            User.email.ilike(pattern),
+        )
+    )
+
+
+@router.get("/admin/engagements/accounts", response_model=PaginatedEngagementAccountListResponse)
+def get_engagement_accounts_admin(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Super admin: paginated studios and radio stations for the Engagements page.
+    Excludes platform admin accounts; only studio_admin artists and radio_admin stations.
+    """
+    studio_q = (
+        db.query(
+            literal("studio").label("kind"),
+            Artist.id.label("account_id"),
+            Artist.stage_name.label("name"),
+            Artist.city.label("city"),
+            Artist.country.label("country"),
+            Artist.is_active.label("is_active"),
+            User.full_name.label("owner_name"),
+        )
+        .join(User, Artist.user_id == User.id)
+        .filter(Artist.user_id.isnot(None), User.role == "studio_admin")
+    )
+    studio_q = _engagement_studio_search_filter(studio_q, search)
+
+    radio_q = (
+        db.query(
+            literal("radio").label("kind"),
+            RadioStation.id.label("account_id"),
+            RadioStation.name.label("name"),
+            RadioStation.city.label("city"),
+            RadioStation.country.label("country"),
+            RadioStation.is_active.label("is_active"),
+            User.full_name.label("owner_name"),
+        )
+        .join(User, RadioStation.owner_id == User.id)
+        .filter(User.role == "radio_admin")
+    )
+    radio_q = _engagement_radio_search_filter(radio_q, search)
+
+    combined = union_all(studio_q, radio_q).subquery()
+    total = db.query(combined).count()
+    rows = (
+        db.query(combined)
+        .order_by(combined.c.name.asc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    radio_ids = [row.account_id for row in rows if row.kind == "radio"]
+    radio_program_flags: dict[int, bool] = {}
+    if radio_ids:
+        radio_stations = db.query(RadioStation).filter(RadioStation.id.in_(radio_ids)).all()
+        radio_program_flags = {st.id: station_has_programs(st) for st in radio_stations}
+
+    items = [
+        EngagementAccountResponse(
+            kind=row.kind,
+            id=row.account_id,
+            name=row.name,
+            city=row.city,
+            country=row.country,
+            is_active=row.is_active,
+            owner_name=row.owner_name,
+            has_programs=row.kind == "studio" or radio_program_flags.get(row.account_id, False),
+        )
+        for row in rows
+    ]
+    return PaginatedEngagementAccountListResponse(
+        items=items,
+        total=total,
+        has_more=offset + len(rows) < total,
+    )
+
+
 @router.get("/admin/studios", response_model=PaginatedArtistListResponse)
 def get_studios_admin(
     limit: int = Query(20, ge=1, le=100),
@@ -916,8 +1026,13 @@ def get_studio_tracks_admin(
     """
     Super admin: paginated tracks for a studio with engagement counts.
     """
-    artist = db.query(Artist).filter(Artist.id == artist_id).first()
-    if not artist:
+    artist = (
+        db.query(Artist)
+        .options(joinedload(Artist.user))
+        .filter(Artist.id == artist_id)
+        .first()
+    )
+    if not artist or not artist.user or artist.user.role != "studio_admin":
         raise HTTPException(status_code=404, detail="Studio/Artist not found")
 
     from app.services.track_management import apply_manage_track_search
@@ -945,6 +1060,76 @@ def get_studio_tracks_admin(
         total=total,
         has_more=offset + len(tracks) < total,
     )
+
+
+def _get_engagement_radio_station(db: Session, station_id: int) -> RadioStation:
+    station = (
+        db.query(RadioStation)
+        .options(joinedload(RadioStation.owner))
+        .filter(RadioStation.id == station_id)
+        .first()
+    )
+    if not station or not station.owner or station.owner.role != "radio_admin":
+        raise HTTPException(status_code=404, detail="Radio station not found")
+    return station
+
+
+def _find_program_by_key(station: RadioStation, db: Session, program_key: str) -> dict:
+    programs = ensure_station_program_ids(station, db)
+    for program in programs:
+        if program.get("id") == program_key:
+            return program
+    raise HTTPException(status_code=404, detail="Program not found")
+
+
+@router.get("/admin/radio/{station_id}/programs", response_model=RadioProgramListResponse)
+def get_radio_programs_admin(
+    station_id: int,
+    search: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    station = _get_engagement_radio_station(db, station_id)
+    programs = ensure_station_program_ids(station, db)
+    if search and search.strip():
+        pattern = search.strip().lower()
+        programs = [
+            p for p in programs
+            if pattern in str(p.get("title", "")).lower()
+            or pattern in str(p.get("rj", "")).lower()
+        ]
+    items = [
+        RadioProgramEngagementResponse(**item)
+        for item in build_program_engagement_items(station_id, programs, db)
+    ]
+    return RadioProgramListResponse(items=items, total=len(items))
+
+
+@router.get(
+    "/admin/radio/{station_id}/programs/{program_key}/engagement",
+    response_model=RadioProgramEngagementResponse,
+)
+def get_radio_program_engagement_admin(
+    station_id: int,
+    program_key: str,
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    station = _get_engagement_radio_station(db, station_id)
+    program = _find_program_by_key(station, db, program_key)
+    counts = engagement_counts_for_programs(db, station_id, [program_key]).get(program_key, {})
+    return RadioProgramEngagementResponse(
+        station_id=station_id,
+        program_key=program_key,
+        title=str(program.get("title") or "Untitled Program"),
+        rj_name=program.get("rj"),
+        time_from=program.get("timeFrom"),
+        time_to=program.get("timeTo"),
+        like_count=counts.get("like_count", 0),
+        dislike_count=counts.get("dislike_count", 0),
+        comment_count=counts.get("comment_count", 0),
+    )
+
 
 @router.put("/admin/studios/{artist_id}", response_model=ArtistResponse)
 def update_studio_admin(

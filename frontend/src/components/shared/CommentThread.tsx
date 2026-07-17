@@ -22,7 +22,8 @@ export interface CommentItem {
 }
 
 interface CommentThreadProps {
-  trackId: number;
+  trackId?: number;
+  radioProgram?: { stationId: number; programKey: string };
   compact?: boolean;
 }
 
@@ -80,9 +81,20 @@ function updateCommentTree(
 
 export const CommentThread: React.FC<CommentThreadProps> = ({
   trackId,
+  radioProgram,
   compact = false,
 }) => {
   const { token } = useAuth();
+  const isRadioProgram = !!radioProgram;
+  const threadKey = isRadioProgram
+    ? `${radioProgram.stationId}:${radioProgram.programKey}`
+    : String(trackId ?? '');
+
+  const commentsBaseUrl = isRadioProgram
+    ? `/api/radio/${radioProgram.stationId}/programs/${encodeURIComponent(radioProgram.programKey)}/comments`
+    : `/api/music/${trackId}/comments`;
+
+  const reactionBaseUrl = isRadioProgram ? '/api/reactions/radio-program-comments' : '/api/reactions/comments';
   const [newComment, setNewComment] = useState('');
   const [isPostingComment, setIsPostingComment] = useState(false);
   const [replyingToId, setReplyingToId] = useState<number | null>(null);
@@ -100,15 +112,15 @@ export const CommentThread: React.FC<CommentThreadProps> = ({
         limit: String(limit),
         offset: String(offset),
       });
-      const res = await fetch(`/api/music/${trackId}/comments?${params}`, {
+      const res = await fetch(`${commentsBaseUrl}?${params}`, {
         headers: authHeaders,
       });
       if (!res.ok) return { items: [], hasMore: false };
       const data = await res.json();
       return { items: data.items, hasMore: data.has_more };
-    }, [trackId, token]),
-    resetKey: trackId,
-    enabled: !!trackId,
+    }, [commentsBaseUrl, token]),
+    resetKey: threadKey,
+    enabled: !!(trackId || radioProgram),
     pageSize: COMMENT_PAGE_SIZE,
   });
 
@@ -119,7 +131,7 @@ export const CommentThread: React.FC<CommentThreadProps> = ({
     setReplyStates({});
     setReplyingToId(null);
     setReplyText('');
-  }, [trackId]);
+  }, [threadKey]);
 
   const fetchReplies = async (commentId: number, offset: number, append: boolean) => {
     setReplyStates((prev) => ({
@@ -138,7 +150,7 @@ export const CommentThread: React.FC<CommentThreadProps> = ({
         offset: String(offset),
         parent_id: String(commentId),
       });
-      const res = await fetch(`/api/music/${trackId}/comments?${params}`, {
+      const res = await fetch(`${commentsBaseUrl}?${params}`, {
         headers: authHeaders,
       });
       if (!res.ok) {
@@ -223,7 +235,7 @@ export const CommentThread: React.FC<CommentThreadProps> = ({
     setReactingCommentId(commentId);
     try {
       const next = current === reaction ? null : reaction;
-      const res = await fetch(`/api/reactions/comments/${commentId}`, {
+      const res = await fetch(`${reactionBaseUrl}/${commentId}`, {
         method: next ? 'PUT' : 'DELETE',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -256,7 +268,7 @@ export const CommentThread: React.FC<CommentThreadProps> = ({
   };
 
   const postComment = async (body: string, parentId?: number | null) => {
-    const res = await fetch(`/api/music/${trackId}/comments`, {
+    const res = await fetch(commentsBaseUrl, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,

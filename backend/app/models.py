@@ -42,6 +42,11 @@ class User(Base):
     favorites = relationship("Favorite", back_populates="user")
     track_reactions = relationship("TrackReaction", back_populates="user", cascade="all, delete-orphan")
     comment_reactions = relationship("CommentReaction", back_populates="user", cascade="all, delete-orphan")
+    radio_program_reactions = relationship("RadioProgramReaction", back_populates="user", cascade="all, delete-orphan")
+    radio_program_comments = relationship("RadioProgramComment", back_populates="user", cascade="all, delete-orphan")
+    radio_program_comment_reactions = relationship(
+        "RadioProgramCommentReaction", back_populates="user", cascade="all, delete-orphan"
+    )
     listening_history = relationship("ListeningHistory", back_populates="user")
     track_comments = relationship("TrackComment", back_populates="user", cascade="all, delete-orphan")
     subscription_payments = relationship("SubscriptionPayment", back_populates="user")
@@ -241,8 +246,11 @@ class RadioStation(Base):
     social_instagram = Column(String, nullable=True)
     programs_list = Column(String, nullable=True)
     timezone = Column(String, nullable=True, default="UTC")
-    
+
+    owner = relationship("User", foreign_keys=[owner_id])
     schedules = relationship("RadioSchedule", back_populates="station", cascade="all, delete-orphan")
+    program_reactions = relationship("RadioProgramReaction", back_populates="station", cascade="all, delete-orphan")
+    program_comments = relationship("RadioProgramComment", back_populates="station", cascade="all, delete-orphan")
 
 class RadioSchedule(Base):
     __tablename__ = "radio_schedules"
@@ -321,6 +329,57 @@ class TrackReaction(Base):
 
     user = relationship("User", back_populates="track_reactions")
     track = relationship("Track", back_populates="reactions")
+
+
+class RadioProgramReaction(Base):
+    __tablename__ = "radio_program_reactions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "station_id", "program_key", name="uq_radio_program_reactions_user_program"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    station_id = Column(Integer, ForeignKey("radio_stations.id", ondelete="CASCADE"), nullable=False, index=True)
+    program_key = Column(String, nullable=False, index=True)
+    reaction = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="radio_program_reactions")
+    station = relationship("RadioStation", back_populates="program_reactions")
+
+
+class RadioProgramComment(Base):
+    __tablename__ = "radio_program_comments"
+    id = Column(Integer, primary_key=True, index=True)
+    station_id = Column(Integer, ForeignKey("radio_stations.id", ondelete="CASCADE"), nullable=False, index=True)
+    program_key = Column(String, nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    parent_id = Column(Integer, ForeignKey("radio_program_comments.id", ondelete="CASCADE"), nullable=True, index=True)
+    body = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    station = relationship("RadioStation", back_populates="program_comments")
+    user = relationship("User", back_populates="radio_program_comments")
+    parent = relationship("RadioProgramComment", remote_side=[id], back_populates="replies")
+    replies = relationship("RadioProgramComment", back_populates="parent", cascade="all, delete-orphan")
+    reactions = relationship("RadioProgramCommentReaction", back_populates="comment", cascade="all, delete-orphan")
+
+
+class RadioProgramCommentReaction(Base):
+    __tablename__ = "radio_program_comment_reactions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "comment_id", name="uq_radio_program_comment_reactions_user_comment"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    comment_id = Column(Integer, ForeignKey("radio_program_comments.id", ondelete="CASCADE"), nullable=False, index=True)
+    reaction = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="radio_program_comment_reactions")
+    comment = relationship("RadioProgramComment", back_populates="reactions")
+
 
 class AudioAnalysisReport(Base):
     __tablename__ = "audio_analysis_reports"
