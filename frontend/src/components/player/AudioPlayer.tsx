@@ -27,6 +27,36 @@ interface AudioPlayerProps {
 
 const SPEED_STEPS = [0.75, 1, 1.25, 1.5, 2] as const;
 
+/** Isolated blur stack — only re-renders when cover art changes, not on seek/lyrics ticks. */
+const MobilePlayerAmbient = React.memo(function MobilePlayerAmbient({
+  coverUrl,
+}: {
+  coverUrl: string | null;
+}) {
+  return (
+    <>
+      <div className="mobile-player-ambient" aria-hidden>
+        {coverUrl ? (
+          <img
+            src={coverUrl}
+            alt=""
+            aria-hidden
+            decoding="async"
+            draggable={false}
+            className="mobile-player-ambient__blur"
+          />
+        ) : (
+          <div className="mobile-player-ambient__blur mobile-player-ambient__blur--fallback" />
+        )}
+      </div>
+      <div className="mobile-player-ambient__scrim" aria-hidden />
+      <div className="mobile-player-ambient__tint" aria-hidden />
+    </>
+  );
+});
+
+const MOBILE_LYRICS_ACTIVE_CLASS = 'mobile-lyrics-line--active';
+
 export const AudioPlayer: React.FC<AudioPlayerProps> = ({ 
   onToggleQueue, 
   isQueueOpen, 
@@ -49,10 +79,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const [mobileRadioInfoOpen, setMobileRadioInfoOpen] = React.useState(false);
   const [desktopInfoOpen, setDesktopInfoOpen] = React.useState(false);
   const [desktopRadioInfoOpen, setDesktopRadioInfoOpen] = React.useState(false);
-  const [mobileActiveLineIndex, setMobileActiveLineIndex] = React.useState(-1);
   const mobilePlayerHistoryRef = React.useRef(false);
   const mobileLyricsScrollRef = React.useRef<HTMLDivElement | null>(null);
-  const mobileActiveLineRef = React.useRef<HTMLParagraphElement | null>(null);
+  const mobileLyricsLineRefs = React.useRef<(HTMLParagraphElement | null)[]>([]);
+  const mobileActiveLineIdxRef = React.useRef(-1);
 
   const openMobileExpanded = React.useCallback(() => {
     setIsMobileExpanded(true);
@@ -130,26 +160,43 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     [mobileParsedLyrics],
   );
 
+  const clearMobileLyricsActiveLine = React.useCallback(() => {
+    const prev = mobileActiveLineIdxRef.current;
+    if (prev >= 0) {
+      mobileLyricsLineRefs.current[prev]?.classList.remove(MOBILE_LYRICS_ACTIVE_CLASS);
+    }
+    mobileActiveLineIdxRef.current = -1;
+  }, []);
+
+  React.useEffect(() => {
+    mobileLyricsLineRefs.current = [];
+    clearMobileLyricsActiveLine();
+  }, [currentTrack?.id, mobileParsedLyrics, clearMobileLyricsActiveLine]);
+
   React.useEffect(() => {
     if (!mobileLyricsOpen || !mobileLyricsSynced) {
-      setMobileActiveLineIndex(-1);
+      clearMobileLyricsActiveLine();
       return;
     }
 
     return subscribeTime((time) => {
       const next = lineIndexForTime(mobileParsedLyrics, time);
-      setMobileActiveLineIndex((prev) => (prev === next ? prev : next));
-    });
-  }, [mobileLyricsOpen, mobileLyricsSynced, mobileParsedLyrics, subscribeTime]);
+      if (next === mobileActiveLineIdxRef.current) return;
 
-  React.useEffect(() => {
-    if (mobileLyricsSynced && mobileActiveLineRef.current) {
-      mobileActiveLineRef.current.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center',
-      });
-    }
-  }, [mobileActiveLineIndex, mobileLyricsSynced]);
+      const prev = mobileActiveLineIdxRef.current;
+      if (prev >= 0) {
+        mobileLyricsLineRefs.current[prev]?.classList.remove(MOBILE_LYRICS_ACTIVE_CLASS);
+      }
+      if (next >= 0) {
+        const lineEl = mobileLyricsLineRefs.current[next];
+        if (lineEl) {
+          lineEl.classList.add(MOBILE_LYRICS_ACTIVE_CLASS);
+          lineEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }
+      mobileActiveLineIdxRef.current = next;
+    });
+  }, [mobileLyricsOpen, mobileLyricsSynced, mobileParsedLyrics, subscribeTime, clearMobileLyricsActiveLine]);
 
   const isRadioAdminInAdminMode = !!(
     userMode === 'admin' &&
@@ -195,7 +242,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const seekMaxRef = React.useRef(seekMax);
   seekMaxRef.current = seekMax;
 
-  const mobileMiniSliderRef = React.useRef<HTMLInputElement | null>(null);
+  const mobileMiniProgressRef = React.useRef<HTMLDivElement | null>(null);
+  const mobileMiniSeekTrackRef = React.useRef<HTMLDivElement | null>(null);
   const desktopSliderRef = React.useRef<HTMLInputElement | null>(null);
   const expandedSliderRef = React.useRef<HTMLInputElement | null>(null);
   const desktopElapsedRef = React.useRef<HTMLSpanElement | null>(null);
@@ -210,10 +258,16 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     if (desktopElapsedRef.current) desktopElapsedRef.current.textContent = label;
     if (expandedElapsedRef.current) expandedElapsedRef.current.textContent = label;
 
+    if (mobileMiniProgressRef.current) {
+      const max = seekMaxRef.current;
+      mobileMiniProgressRef.current.style.width =
+        max > 0 ? `${Math.min(100, (time / max) * 100)}%` : '0%';
+    }
+
     if (opts?.forceSliders || !isSeekingRef.current) {
       const max = String(seekMaxRef.current);
       const value = String(time);
-      for (const el of [mobileMiniSliderRef.current, desktopSliderRef.current, expandedSliderRef.current]) {
+      for (const el of [desktopSliderRef.current, expandedSliderRef.current]) {
         if (!el) continue;
         el.max = max;
         el.value = value;
@@ -249,7 +303,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   React.useEffect(() => {
     seekMaxRef.current = seekMax;
     const max = String(seekMax);
-    for (const el of [mobileMiniSliderRef.current, desktopSliderRef.current, expandedSliderRef.current]) {
+    for (const el of [desktopSliderRef.current, expandedSliderRef.current]) {
       if (el) el.max = max;
     }
   }, [seekMax]);
@@ -284,6 +338,27 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       isSeekingRef.current = true;
       setIsSeeking(true);
     }
+  };
+
+  const seekFromClientX = (clientX: number) => {
+    const track = mobileMiniSeekTrackRef.current;
+    if (!track || isRadioSyncRef.current) return;
+    const rect = track.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    handleSeekChange(ratio * seekMaxRef.current);
+  };
+
+  const handleMobileMiniSeekPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (isRadioSyncRef.current) return;
+    handleSeekPointerDown();
+    seekFromClientX(e.clientX);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handleMobileMiniSeekPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isSeekingRef.current || isRadioSyncRef.current) return;
+    seekFromClientX(e.clientX);
   };
 
   React.useLayoutEffect(() => {
@@ -475,21 +550,28 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                 {activeRadioStation ? getRadioDisplayInfo()?.subtitle : currentTrack?.artist_name}
               </p>
             </button>
-            <input
-              ref={mobileMiniSliderRef}
-              type="range"
-              min="0"
-              max={seekMax}
-              defaultValue={0}
-              onPointerDown={handleSeekPointerDown}
-              onChange={(e) => handleSeekChange(parseFloat(e.target.value))}
-              onKeyDown={handleSeekKeyDown}
-              onKeyUp={finishSeek}
-              disabled={isRadioSync}
-              onClick={(e) => e.stopPropagation()}
-              className="w-full h-1 accent-rose-500 bg-white/10 rounded-full outline-none cursor-pointer audio-knob"
+            <div
+              ref={mobileMiniSeekTrackRef}
+              role="slider"
               aria-label="Seek"
-            />
+              aria-valuemin={0}
+              aria-valuemax={seekMax}
+              aria-valuenow={getCurrentTime()}
+              aria-disabled={isRadioSync}
+              tabIndex={isRadioSync ? -1 : 0}
+              onClick={(e) => e.stopPropagation()}
+              onPointerDown={handleMobileMiniSeekPointerDown}
+              onPointerMove={handleMobileMiniSeekPointerMove}
+              className={`relative w-full h-4 flex items-center touch-none ${isRadioSync ? 'opacity-40 pointer-events-none' : 'cursor-pointer'}`}
+            >
+              <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden pointer-events-none">
+                <div
+                  ref={mobileMiniProgressRef}
+                  className="h-full bg-rose-500 rounded-full pointer-events-none"
+                  style={{ width: '0%' }}
+                />
+              </div>
+            </div>
           </div>
 
           {/* Col 3 — playback controls */}
@@ -746,19 +828,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             mobileLyricsOpen ? 'mobile-player-expanded--lyrics' : ''
           }`}
         >
-          {/* Ambient blur: filter on cover art only — never backdrop-blur over scrolling page */}
-          <div className="mobile-player-ambient" aria-hidden>
-            {expandedCoverUrl ? (
-              <div
-                className="mobile-player-ambient__blur"
-                style={{ backgroundImage: `url(${expandedCoverUrl})` }}
-              />
-            ) : (
-              <div className="mobile-player-ambient__blur mobile-player-ambient__blur--fallback" />
-            )}
-          </div>
-          <div className="mobile-player-ambient__scrim" aria-hidden />
-          <div className="mobile-player-ambient__tint" aria-hidden />
+          <MobilePlayerAmbient coverUrl={expandedCoverUrl} />
 
           <div className="mobile-player-expanded__content relative">
           {/* Header */}
@@ -849,25 +919,21 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                 >
                   <div className={`text-center ${mobileLyricsSynced ? 'space-y-6 py-[30vh]' : 'space-y-3 py-4'}`}>
                     {mobileParsedLyrics.length > 0 ? (
-                      mobileParsedLyrics.map((line, idx) => {
-                        const isActive = mobileLyricsSynced && idx === mobileActiveLineIndex;
-
-                        return (
-                          <p
-                            key={idx}
-                            ref={isActive ? mobileActiveLineRef : null}
-                            className={`text-sm leading-relaxed transition-all duration-300 [text-shadow:0_2px_12px_rgba(0,0,0,0.85)] ${
-                              isActive
-                                ? 'text-rose-400 font-extrabold opacity-100'
-                                : mobileLyricsSynced
-                                  ? 'text-white/80 font-semibold opacity-90'
-                                  : 'text-slate-100 font-semibold'
-                            }`}
-                          >
-                            {line.text}
-                          </p>
-                        );
-                      })
+                      mobileParsedLyrics.map((line, idx) => (
+                        <p
+                          key={idx}
+                          ref={(el) => {
+                            mobileLyricsLineRefs.current[idx] = el;
+                          }}
+                          className={`mobile-lyrics-line text-sm leading-relaxed transition-all duration-300 [text-shadow:0_2px_12px_rgba(0,0,0,0.85)] ${
+                            mobileLyricsSynced
+                              ? 'mobile-lyrics-line--synced text-white/80 font-semibold opacity-90'
+                              : 'text-slate-100 font-semibold'
+                          }`}
+                        >
+                          {line.text}
+                        </p>
+                      ))
                     ) : (
                       <p className="text-sm text-slate-400">No lyrics available.</p>
                     )}
