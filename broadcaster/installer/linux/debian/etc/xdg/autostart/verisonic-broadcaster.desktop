@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=VeriSonic Broadcaster
+Comment=Start VeriSonic Broadcaster in the background at login
+Exec=/usr/bin/verisonic-broadcaster
+Icon=verisonic-broadcaster
+Terminal=false
+X-GNOME-Autostart-enabled=true
+Hidden=false

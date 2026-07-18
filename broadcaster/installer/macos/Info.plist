@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>VeriSonic Broadcaster</string>
+    <key>CFBundleDisplayName</key>
+    <string>VeriSonic Broadcaster</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.verisonic.broadcaster</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>VeriSonic Broadcaster records live audio from your selected input source (microphone, line-in, USB interface, or loopback device such as BlackHole) and streams it to your radio station.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>VeriSonic Broadcaster may need screen and system audio capture permission when you stream desktop or application audio through a loopback input device.</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>

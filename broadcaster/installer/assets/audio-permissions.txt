@@ -1,0 +1,38 @@
+VeriSonic Broadcaster — Audio Input Permissions
+===============================================
+
+This application captures and streams live audio from the input source you select
+in the app. You may need to grant OS permissions before recording works.
+
+Supported input sources
+-----------------------
+- Microphones (built-in and external)
+- Line-in / aux inputs
+- USB audio interfaces
+- Loopback devices for system audio (Stereo Mix, VB-Audio Cable, etc.)
+
+Windows
+-------
+1. Settings → Privacy & security → Microphone
+   - Turn on "Microphone access"
+   - Turn on "Let desktop apps access your microphone"
+   - Allow "VeriSonic Broadcaster"
+2. Settings → System → Sound → Input
+   - Select and test your capture device
+3. For system audio loopback, enable Stereo Mix or install a virtual cable driver,
+   then choose that device inside the broadcaster app.
+
+macOS
+-----
+1. System Settings → Privacy & Security → Microphone → enable VeriSonic Broadcaster
+2. For desktop/system audio via loopback, also check Screen & System Audio Recording
+   if prompted, and install/configure BlackHole or a multi-output device
+3. System Settings → Sound → Input → confirm the selected device is active
+
+Linux
+-----
+1. Ensure your user is in the audio group:
+     sudo usermod -aG audio $USER
+   Then log out and back in.
+2. On PipeWire/PulseAudio desktops, allow microphone/input capture when prompted.
+3. Select the correct PortAudio input device in the broadcaster app.

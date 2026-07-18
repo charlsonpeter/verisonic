@@ -17,13 +17,13 @@ jobs:
         include:
           - os: windows-latest
             platform: windows
-            artifact_name: verisonic-broadcaster-windows
+            artifact_name: verisonic-broadcaster-windows-installer
           - os: ubuntu-20.04
             platform: linux
-            artifact_name: verisonic-broadcaster-linux
+            artifact_name: verisonic-broadcaster-linux-installer
           - os: macos-13
             platform: macos
-            artifact_name: verisonic-broadcaster-macos
+            artifact_name: verisonic-broadcaster-macos-installer
 
     steps:
       - name: Checkout Repository
@@ -35,7 +35,6 @@ jobs:
           python-version: '3.10'
           cache: 'pip'
 
-      # Linux-specific build dependencies for sounddevice & headless PyQt5
       - name: Install System Dependencies (Linux)
         if: matrix.platform == 'linux'
         run: |
@@ -52,44 +51,59 @@ jobs:
         run: |
           python broadcaster/generate_icons.py
 
-      # Windows Compilation
       - name: Build Executable (Windows)
         if: matrix.platform == 'windows'
         run: |
           pyinstaller --noconsole --onefile --windowed --icon="broadcaster/assets/icon.ico" --name="VeriSonic Broadcaster" broadcaster/verisonic_broadcaster.py
 
-      # Linux Compilation
       - name: Build Executable (Linux)
         if: matrix.platform == 'linux'
         run: |
           pyinstaller --noconsole --onefile --icon="broadcaster/assets/icon.png" --name="verisonic-broadcaster" broadcaster/verisonic_broadcaster.py
 
-      # macOS Compilation & Zipping
       - name: Build Executable (macOS)
         if: matrix.platform == 'macos'
         run: |
-          pyinstaller --noconsole --onefile --windowed --icon="broadcaster/assets/icon.icns" --name="VeriSonic Broadcaster" broadcaster/verisonic_broadcaster.py
-          cd dist
-          zip -r ../VeriSonic_Broadcaster_macOS.zip "VeriSonic Broadcaster.app"
+          pyinstaller --noconsole --onefile --windowed --icon="broadcaster/assets/icon.icns" --osx-info-plist="broadcaster/installer/macos/Info.plist" --osx-entitlements-file="broadcaster/installer/macos/entitlements.plist" --name="VeriSonic Broadcaster" broadcaster/verisonic_broadcaster.py
 
-      # Upload Artifacts
-      - name: Upload Windows Artifact
+      - name: Install Inno Setup (Windows)
+        if: matrix.platform == 'windows'
+        run: choco install innosetup -y --no-progress
+
+      - name: Build Windows Installer
+        if: matrix.platform == 'windows'
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" broadcaster/installer/windows/setup.iss
+
+      - name: Build macOS Installer
+        if: matrix.platform == 'macos'
+        run: |
+          chmod +x broadcaster/installer/macos/build_pkg.sh
+          broadcaster/installer/macos/build_pkg.sh
+
+      - name: Build Linux Installer
+        if: matrix.platform == 'linux'
+        run: |
+          chmod +x broadcaster/installer/linux/build_deb.sh
+          broadcaster/installer/linux/build_deb.sh
+
+      - name: Upload Windows Installer
         if: matrix.platform == 'windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: dist/VeriSonic Broadcaster.exe
+          path: dist/VeriSonic_Broadcaster_Setup.exe
 
-      - name: Upload Linux Artifact
-        if: matrix.platform == 'linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: dist/verisonic-broadcaster
-
-      - name: Upload macOS Artifact
+      - name: Upload macOS Installer
         if: matrix.platform == 'macos'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: VeriSonic_Broadcaster_macOS.zip
+          path: dist/VeriSonic_Broadcaster.pkg
+
+      - name: Upload Linux Installer
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/verisonic-broadcaster_1.0.0_amd64.deb

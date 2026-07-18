@@ -1,0 +1,30 @@
+#!/bin/bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+BINARY="$ROOT_DIR/dist/verisonic-broadcaster"
+STAGING="$ROOT_DIR/build/deb-staging"
+OUTPUT="$ROOT_DIR/dist/verisonic-broadcaster_1.0.0_amd64.deb"
+TEMPLATE="$SCRIPT_DIR/debian"
+
+if [ ! -f "$BINARY" ]; then
+  echo "Missing PyInstaller binary: $BINARY" >&2
+  exit 1
+fi
+
+rm -rf "$STAGING"
+mkdir -p "$STAGING"
+cp -R "$TEMPLATE/." "$STAGING/"
+
+mkdir -p "$STAGING/usr/bin" "$STAGING/usr/share/doc/verisonic-broadcaster"
+cp "$BINARY" "$STAGING/usr/bin/verisonic-broadcaster"
+chmod 755 "$STAGING/usr/bin/verisonic-broadcaster"
+cp "$SCRIPT_DIR/../assets/audio-permissions.txt" "$STAGING/usr/share/doc/verisonic-broadcaster/audio-permissions.txt"
+
+chmod 755 "$STAGING/DEBIAN/postinst" "$STAGING/DEBIAN/prerm"
+find "$STAGING/etc" "$STAGING/usr" -type f -exec chmod 644 {} \;
+chmod 755 "$STAGING/etc/xdg/autostart"
+
+dpkg-deb --build --root-owner-group "$STAGING" "$OUTPUT"
+echo "Created installer: $OUTPUT"

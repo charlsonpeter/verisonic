@@ -1,0 +1,64 @@
+#!/bin/bash
+set -e
+
+APP_BIN="/Applications/VeriSonic Broadcaster.app/Contents/MacOS/VeriSonic Broadcaster"
+TASK_LABEL="com.verisonic.broadcaster"
+PERMISSIONS_DOC="/Library/Application Support/VeriSonic/audio-permissions.txt"
+
+CONSOLE_USER="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
+if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ] || [ "$CONSOLE_USER" = "loginwindow" ]; then
+  exit 0
+fi
+
+USER_HOME="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+if [ -z "$USER_HOME" ]; then
+  USER_HOME="$(eval echo "~$CONSOLE_USER")"
+fi
+
+# Install shared audio-permissions documentation for all users.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+mkdir -p "$(dirname "$PERMISSIONS_DOC")"
+if [ -f "$SCRIPT_DIR/../../assets/audio-permissions.txt" ]; then
+  cp "$SCRIPT_DIR/../../assets/audio-permissions.txt" "$PERMISSIONS_DOC"
+  chmod 644 "$PERMISSIONS_DOC"
+fi
+
+AGENT_DIR="$USER_HOME/Library/LaunchAgents"
+PLIST_PATH="$AGENT_DIR/$TASK_LABEL.plist"
+mkdir -p "$AGENT_DIR"
+
+cat > "$PLIST_PATH" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$TASK_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$APP_BIN</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+</dict>
+</plist>
+EOF
+
+chown "$CONSOLE_USER" "$PLIST_PATH"
+
+USER_ID="$(id -u "$CONSOLE_USER")"
+GUI_DOMAIN="gui/$USER_ID"
+
+sudo -u "$CONSOLE_USER" launchctl bootout "$GUI_DOMAIN/$TASK_LABEL" 2>/dev/null || true
+sudo -u "$CONSOLE_USER" launchctl bootstrap "$GUI_DOMAIN" "$PLIST_PATH" 2>/dev/null || \
+  sudo -u "$CONSOLE_USER" launchctl load "$PLIST_PATH" 2>/dev/null || true
+
+# Open Privacy settings so the user can grant microphone/input and screen-audio capture.
+sudo -u "$CONSOLE_USER" open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone" 2>/dev/null || \
+  sudo -u "$CONSOLE_USER" open "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone" 2>/dev/null || true
+sudo -u "$CONSOLE_USER" open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture" 2>/dev/null || \
+  sudo -u "$CONSOLE_USER" open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture" 2>/dev/null || true
+
+exit 0

@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+
+PERMISSIONS_DOC="/usr/share/doc/verisonic-broadcaster/audio-permissions.txt"
+
+case "$1" in
+  configure)
+    if command -v update-desktop-database >/dev/null 2>&1; then
+      update-desktop-database /usr/share/applications || true
+    fi
+
+    echo "VeriSonic Broadcaster installed."
+    echo "Grant audio input (capture/record) access for microphones, line-in, USB interfaces,"
+    echo "and loopback devices. See: $PERMISSIONS_DOC"
+    echo ""
+    echo "If input devices are unavailable, add your user to the audio group and re-login:"
+    echo "  sudo usermod -aG audio \$USER"
+    ;;
+esac
+
+exit 0

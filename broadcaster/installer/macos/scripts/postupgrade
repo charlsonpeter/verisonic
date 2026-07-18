@@ -1,0 +1,3 @@
+#!/bin/bash
+# Re-run postinstall logic after upgrades.
+"$(dirname "$0")/postinstall"
