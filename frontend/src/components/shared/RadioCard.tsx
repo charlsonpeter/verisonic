@@ -185,10 +185,10 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
                 <Radio className="w-2.5 h-2.5 animate-pulse" />
                 On Air Now:
               </div>
-              <div className="text-xs font-bold text-slate-200 truncate">
+              <div className="text-xs font-bold text-slate-200 truncate" data-radio-now-title={station.id}>
                 {station.current_track_title || 'Live Program'}
               </div>
-              <div className="text-[10px] text-slate-400 truncate">
+              <div className="text-[10px] text-slate-400 truncate" data-radio-now-artist={station.id}>
                 By {station.current_track_artist || 'Broadcaster'}
               </div>
             </div>

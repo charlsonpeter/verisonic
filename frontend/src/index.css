@@ -324,6 +324,7 @@
 .mobile-player-expanded {
   isolation: isolate;
   overflow: hidden;
+  background: rgb(2 6 23);
 }
 
 .mobile-player-ambient {
@@ -366,12 +367,12 @@
   z-index: 1;
   pointer-events: none;
   background: rgb(2 6 23);
-  opacity: 0.48;
+  opacity: 0.72;
   transition: opacity 0.45s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .mobile-player-expanded--lyrics .mobile-player-ambient__scrim {
-  opacity: 0.8;
+  opacity: 0.88;
 }
 
 .mobile-player-ambient__tint {

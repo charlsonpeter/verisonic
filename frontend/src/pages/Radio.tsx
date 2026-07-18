@@ -10,6 +10,7 @@ import { showError } from '../utils/swal';
 import { getProgramScheduleOverlapError } from '../utils/programSchedule';
 import { fetchBroadcastKey, getAccessToken } from '../utils/authTokens';
 import { RadioPageSkeleton } from '../components/shared/skeleton';
+import { patchRadioNowPlayingDom, stationsNeedRerender } from '../utils/radioDomPatch';
 
 const API_URL = '/api';
 
@@ -22,6 +23,7 @@ export const Radio: React.FC = () => {
 
   // Radio states
   const [stations, setStations] = useState<RadioStation[]>([]);
+  const stationsRef = React.useRef<RadioStation[]>([]);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
 
   // Creation state
@@ -414,29 +416,45 @@ export const Radio: React.FC = () => {
   const hasStation = stations.some(s => s.owner_id === currentUser?.id);
   const filteredStations = stations;
 
-  const fetchRadioStations = async () => {
-    setIsLoading(true);
+  const fetchRadioStations = async (background = false) => {
+    if (!background) setIsLoading(true);
     try {
       const authToken = token;
       const headers: HeadersInit = authToken ? { Authorization: `Bearer ${authToken}` } : {};
       const res = await fetch(`${API_URL}/radio`, { headers });
       if (res.ok) {
-        const data = await res.json();
-        setStations(data);
-      } else { throw new Error(); }
+        const data: RadioStation[] = await res.json();
+        patchRadioNowPlayingDom(data);
+        if (background) {
+          if (stationsNeedRerender(stationsRef.current, data)) {
+            stationsRef.current = data;
+            setStations(data);
+          } else {
+            stationsRef.current = data;
+          }
+        } else {
+          stationsRef.current = data;
+          setStations(data);
+        }
+      } else {
+        throw new Error();
+      }
     } catch (e) {
       console.error('Failed to fetch radio stations:', e);
-      setStations([]);
+      if (!background) {
+        stationsRef.current = [];
+        setStations([]);
+      }
     } finally {
-      setIsLoading(false);
+      if (!background) setIsLoading(false);
       setIsInitialLoad(false);
     }
   };
 
   useEffect(() => {
     if (isAuthLoading) return;
-    fetchRadioStations();
-    const interval = setInterval(fetchRadioStations, 5000);
+    fetchRadioStations(false);
+    const interval = setInterval(() => { fetchRadioStations(true); }, 5000);
     return () => clearInterval(interval);
   }, [token, isAuthLoading]);
 
@@ -721,10 +739,10 @@ export const Radio: React.FC = () => {
                       {isLive && (
                         <div className="mx-5 mb-4 bg-slate-950/60 border border-white/5 rounded-2xl px-4 py-3 space-y-0.5">
                           <p className="text-[9px] text-rose-455 font-extrabold uppercase tracking-widest">Now On Air</p>
-                          <p className="text-sm font-extrabold text-white truncate leading-snug animate-color-shift">
+                          <p className="text-sm font-extrabold text-white truncate leading-snug animate-color-shift" data-radio-program-title={st.id}>
                             {st.current_program_title || activeProg?.title || 'N/A (Default Broadcast)'}
                           </p>
-                          <p className="text-[10px] text-rose-400 font-semibold">
+                          <p className="text-[10px] text-rose-400 font-semibold" data-radio-rj-name={st.id}>
                             {st.rj_name ? `RJ ${st.rj_name}` : activeProg?.rj ? `RJ ${activeProg.rj}` : 'No RJ Scheduled'}
                           </p>
                         </div>

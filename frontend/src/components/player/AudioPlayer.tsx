@@ -16,6 +16,8 @@ import {
   lineIndexForTime,
   parseLyricsFromText,
 } from '../../utils/lrc';
+import { patchPlayerRadioDom } from '../../utils/radioDomPatch';
+import type { RadioStation } from '../../context/AudioContext';
 
 interface AudioPlayerProps {
   onToggleQueue: () => void;
@@ -218,6 +220,44 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       subtitle: activeRadioStation.current_program_title || ""
     };
   };
+
+  React.useEffect(() => {
+    if (!activeRadioStation || !token) return;
+    const stationId = activeRadioStation.id;
+
+    const refreshRadioLabels = async () => {
+      try {
+        const res = await fetch('/api/radio', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const list = (await res.json()) as RadioStation[];
+        const st = list.find((s) => s.id === stationId);
+        if (!st) return;
+        patchPlayerRadioDom(stationId, {
+          title: st.name,
+          subtitle:
+            st.current_program_title ||
+            st.current_track_title ||
+            st.current_track_artist ||
+            '',
+        });
+      } catch {
+        /* ignore transient poll errors */
+      }
+    };
+
+    refreshRadioLabels();
+    const interval = window.setInterval(refreshRadioLabels, 5000);
+    return () => window.clearInterval(interval);
+  }, [activeRadioStation?.id, token]);
+
+  const radioTitleDomProps = activeRadioStation
+    ? { 'data-player-radio-title': activeRadioStation.id }
+    : {};
+  const radioSubtitleDomProps = activeRadioStation
+    ? { 'data-player-radio-subtitle': activeRadioStation.id }
+    : {};
 
   const format24hTime = (totalSeconds: number) => {
     const hours = Math.floor(totalSeconds / 3600);
@@ -478,7 +518,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
-              <h4 className="font-bold text-white text-sm truncate max-w-[150px]">
+              <h4 className="font-bold text-white text-sm truncate max-w-[150px]" {...radioTitleDomProps}>
                 {activeRadioStation ? getRadioDisplayInfo()?.title : currentTrack?.title}
               </h4>
               {currentTrack && !activeRadioStation && !isRadioAdminInAdminMode && (
@@ -510,7 +550,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                 </button>
               )}
             </div>
-            <p className="text-xs text-slate-400 truncate max-w-[180px]">
+            <p className="text-xs text-slate-400 truncate max-w-[180px]" {...radioSubtitleDomProps}>
               {activeRadioStation ? getRadioDisplayInfo()?.subtitle : currentTrack?.artist_name}
             </p>
             {badge && (
@@ -543,10 +583,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               onClick={openMobileExpanded}
               className="min-w-0 text-left active:opacity-80 transition"
             >
-              <h4 className="font-bold text-white text-sm truncate leading-snug">
+              <h4 className="font-bold text-white text-sm truncate leading-snug" {...radioTitleDomProps}>
                 {activeRadioStation ? getRadioDisplayInfo()?.title : currentTrack?.title}
               </h4>
-              <p className="text-xs text-slate-400 truncate leading-snug mt-0.5">
+              <p className="text-xs text-slate-400 truncate leading-snug mt-0.5" {...radioSubtitleDomProps}>
                 {activeRadioStation ? getRadioDisplayInfo()?.subtitle : currentTrack?.artist_name}
               </p>
             </button>
@@ -947,10 +987,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           <div className="space-y-6">
             <div className="flex items-start justify-between gap-3 w-full">
               <div className="min-w-0 flex-1">
-                <h2 className="text-base font-black text-white truncate">
+                <h2 className="text-base font-black text-white truncate" {...radioTitleDomProps}>
                   {activeRadioStation ? getRadioDisplayInfo()?.title : currentTrack?.title}
                 </h2>
-                <p className="text-xs text-slate-400 font-semibold truncate mt-1">
+                <p className="text-xs text-slate-400 font-semibold truncate mt-1" {...radioSubtitleDomProps}>
                   {activeRadioStation ? getRadioDisplayInfo()?.subtitle : currentTrack?.artist_name}
                 </p>
               </div>
