@@ -11,6 +11,7 @@ import { getProgramScheduleOverlapError } from '../utils/programSchedule';
 import { fetchBroadcastKey, getAccessToken } from '../utils/authTokens';
 import { RadioPageSkeleton } from '../components/shared/skeleton';
 import { patchRadioNowPlayingDom, stationsNeedRerender } from '../utils/radioDomPatch';
+import { subscribeRadioMetadataPoll } from '../utils/radioMetadataPoll';
 
 const API_URL = '/api';
 
@@ -416,8 +417,8 @@ export const Radio: React.FC = () => {
   const hasStation = stations.some(s => s.owner_id === currentUser?.id);
   const filteredStations = stations;
 
-  const fetchRadioStations = async (background = false) => {
-    if (!background) setIsLoading(true);
+  const fetchRadioStations = async () => {
+    setIsLoading(true);
     try {
       const authToken = token;
       const headers: HeadersInit = authToken ? { Authorization: `Bearer ${authToken}` } : {};
@@ -425,38 +426,37 @@ export const Radio: React.FC = () => {
       if (res.ok) {
         const data: RadioStation[] = await res.json();
         patchRadioNowPlayingDom(data);
-        if (background) {
-          if (stationsNeedRerender(stationsRef.current, data)) {
-            stationsRef.current = data;
-            setStations(data);
-          } else {
-            stationsRef.current = data;
-          }
-        } else {
-          stationsRef.current = data;
-          setStations(data);
-        }
+        stationsRef.current = data;
+        setStations(data);
       } else {
         throw new Error();
       }
     } catch (e) {
       console.error('Failed to fetch radio stations:', e);
-      if (!background) {
-        stationsRef.current = [];
-        setStations([]);
-      }
+      stationsRef.current = [];
+      setStations([]);
     } finally {
-      if (!background) setIsLoading(false);
+      setIsLoading(false);
       setIsInitialLoad(false);
     }
   };
 
   useEffect(() => {
     if (isAuthLoading) return;
-    fetchRadioStations(false);
-    const interval = setInterval(() => { fetchRadioStations(true); }, 5000);
-    return () => clearInterval(interval);
+    fetchRadioStations();
   }, [token, isAuthLoading]);
+
+  useEffect(() => {
+    if (!token) return;
+    return subscribeRadioMetadataPoll(token, (data) => {
+      if (stationsNeedRerender(stationsRef.current, data)) {
+        stationsRef.current = data;
+        setStations(data);
+      } else {
+        stationsRef.current = data;
+      }
+    });
+  }, [token]);
 
   useEffect(() => {
     if (editingStationId !== null) {

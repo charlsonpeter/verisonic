@@ -367,12 +367,12 @@
   z-index: 1;
   pointer-events: none;
   background: rgb(2 6 23);
-  opacity: 0.72;
+  opacity: 0.82;
   transition: opacity 0.45s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .mobile-player-expanded--lyrics .mobile-player-ambient__scrim {
-  opacity: 0.88;
+  opacity: 0.92;
 }
 
 .mobile-player-ambient__tint {

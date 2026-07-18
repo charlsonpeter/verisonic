@@ -9,23 +9,11 @@ import { formatLocalDate } from '../utils/dateTime';
 import { useLazyList, DEFAULT_LAZY_PAGE_SIZE } from '../hooks/useLazyList';
 import { LazyListSentinel } from '../components/shared/LazyListSentinel';
 import { TrackEngagementModal } from '../components/shared/TrackEngagementModal';
-
-function getStatusDetails(t: {
-  quality_score: number | null;
-  approved: boolean;
-  hls_playlist_path: string | null;
-}) {
-  if (t.quality_score === null) {
-    return { label: 'Analyzing', style: 'bg-amber-500/10 border-amber-500/20 text-amber-400', desc: 'Running spectral checks...' };
-  }
-  if (t.approved && !t.hls_playlist_path) {
-    return { label: 'Transcoding', style: 'bg-cyan-500/10 border-cyan-500/20 text-cyan-400', desc: 'Generating adaptive streaming files...' };
-  }
-  if (t.approved && t.hls_playlist_path) {
-    return { label: 'Ready', style: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400', desc: 'Live on platform' };
-  }
-  return { label: 'Rejected', style: 'bg-rose-500/10 border-rose-500/20 text-rose-455', desc: 'Failed spectral cutoff checks' };
-}
+import {
+  applyTrackStatusWsUpdates,
+  getTrackStatusDetails,
+  type TrackStatusWsUpdate,
+} from '../utils/trackStatusWs';
 
 export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> = ({ onViewReport }) => {
   const { token, isStaffInAdminMode, isSwitchingMode } = useAuth();
@@ -98,44 +86,14 @@ export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> 
         const data = JSON.parse(event.data);
         if (data.type !== 'status_updates') return;
 
-        const updates = data.tracks as Array<{
-          track_id: number;
-          status: string;
-          quality_score: number | null;
-          quality_level: string | null;
-          approved: boolean;
-          has_hls?: boolean;
-        }>;
+        const updates = data.tracks as TrackStatusWsUpdate[];
         tracksList.setItems((prev) => {
-          const hasNew = updates.some((u) =>
-            !prev.some((t) => t.id === u.track_id)
-          );
-          if (hasNew) {
-            setTimeout(() => tracksList.reload(), 0);
-          }
-          return prev.map((track) => {
-            const update = updates.find((u) => u.track_id === track.id);
-            if (!update) return track;
-            const next = {
-              ...track,
-              quality_score: update.quality_score,
-              quality_level: update.quality_level,
-              approved: update.approved,
-              hls_playlist_path: track.hls_playlist_path,
-            };
-            if (update.status === 'completed' || update.has_hls) {
-              next.hls_playlist_path = track.hls_playlist_path || 'ready';
-            }
-            return next;
+          const { next, changed } = applyTrackStatusWsUpdates(prev, updates, {
+            onNewTracks: () => { setTimeout(() => tracksList.reload(), 0); },
+            onReload: () => { void tracksList.reload(); },
           });
+          return changed ? next : prev;
         });
-
-        const hasTerminal = updates.some((u) =>
-          u.status === 'completed' || u.status === 'rejected' || u.status === 'failed'
-        );
-        if (hasTerminal) {
-          void tracksList.reload();
-        }
       } catch {
         /* ignore malformed messages */
       }
@@ -208,7 +166,7 @@ export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> 
             </thead>
             <tbody className="divide-y divide-white/5">
               {tracks.map((t) => {
-                const status = getStatusDetails(t);
+                const status = getTrackStatusDetails(t);
                 return (
                   <tr key={t.id} className="hover:bg-slate-900/20 transition">
                     <td className="p-5">
@@ -240,6 +198,7 @@ export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> 
                         <button
                           type="button"
                           onClick={() => onViewReport?.(t)}
+                          data-track-quality-score={t.id}
                           className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition hover:underline cursor-pointer ${
                             t.quality_score >= 86
                               ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
@@ -257,10 +216,18 @@ export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> 
                     </td>
                     <td className="p-5">
                       <div className="space-y-1">
-                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}>
+                        <span
+                          data-track-status-label={t.id}
+                          className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}
+                        >
                           {status.label}
                         </span>
-                        <div className="text-[9px] text-slate-500 leading-normal">{status.desc}</div>
+                        <div
+                          data-track-status-desc={t.id}
+                          className="text-[9px] text-slate-500 leading-normal"
+                        >
+                          {status.desc}
+                        </div>
                       </div>
                     </td>
                     <td className="p-5 text-slate-450 text-[10px] font-medium">
@@ -301,7 +268,7 @@ export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> 
           </div>
         ) : (
           tracks.map((t) => {
-            const status = getStatusDetails(t);
+            const status = getTrackStatusDetails(t);
             return (
               <div
                 key={t.id}
@@ -346,6 +313,7 @@ export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> 
                     <button
                       type="button"
                       onClick={() => onViewReport?.(t)}
+                      data-track-quality-score={t.id}
                       className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition hover:underline cursor-pointer ${
                         t.quality_score >= 86
                           ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
@@ -360,7 +328,10 @@ export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> 
                   ) : (
                     <span className="text-[10px] text-slate-600">Score: —</span>
                   )}
-                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}>
+                  <span
+                    data-track-status-label={t.id}
+                    className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}
+                  >
                     {status.label}
                   </span>
                   <span className="text-[10px] text-slate-500">
@@ -368,7 +339,7 @@ export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> 
                   </span>
                 </div>
 
-                <p className="text-[9px] text-slate-500 leading-normal">{status.desc}</p>
+                <p data-track-status-desc={t.id} className="text-[9px] text-slate-500 leading-normal">{status.desc}</p>
                 <div>{renderEngagement(t)}</div>
               </div>
             );

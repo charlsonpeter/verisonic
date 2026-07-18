@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from './AuthContext';
 import Hls from 'hls.js';
 import {
@@ -2528,8 +2528,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     prevPremiumRef.current = isPremium;
   }, [isPremium, token]);
 
-  return (
-    <AudioContext.Provider value={{
+  const contextValue = useMemo(
+    () => ({
       currentTrack,
       activeRadioStation,
       isPlaying,
@@ -2581,7 +2581,63 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       refreshOutputDevices,
       setOutputDevice,
       promptSelectOutputDevice,
-    }}>
+    }),
+    [
+      currentTrack,
+      activeRadioStation,
+      isPlaying,
+      duration,
+      getCurrentTime,
+      subscribeTime,
+      volume,
+      isMuted,
+      isRadioSync,
+      playbackSpeed,
+      repeatMode,
+      isShuffle,
+      favorites,
+      trackReactions,
+      radioProgramReactions,
+      playQueue,
+      currentQueueIndex,
+      showPremiumModal,
+      qualityLevelSetting,
+      activeStreamLabel,
+      analyser,
+      outputDevices,
+      selectedOutputDeviceId,
+      outputDeviceSupported,
+      outputDevicesLoading,
+      playTrack,
+      playRadioStation,
+      togglePlay,
+      seek,
+      adjustVolume,
+      toggleMute,
+      setSpeed,
+      setRepeatMode,
+      toggleShuffle,
+      toggleFavorite,
+      setTrackReaction,
+      setRadioProgramReaction,
+      addToQueue,
+      playQueueTracks,
+      removeFromQueue,
+      clearQueue,
+      reorderQueue,
+      playNext,
+      playPrevious,
+      setShowPremiumModal,
+      setQualityLevelSetting,
+      updateTrackMetadata,
+      refreshOutputDevices,
+      setOutputDevice,
+      promptSelectOutputDevice,
+    ],
+  );
+
+  return (
+    <AudioContext.Provider value={contextValue}>
       {children}
     </AudioContext.Provider>
   );

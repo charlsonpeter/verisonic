@@ -217,7 +217,7 @@ export const Wallet: React.FC = () => {
           ) : (
             <div className="overflow-y-auto flex-1 min-h-0 -mx-1 px-1">
               <table className="w-full text-xs">
-                <thead className="sticky top-0 bg-slate-900/95 backdrop-blur-sm">
+                <thead className="sticky top-0 bg-slate-900/95 max-md:bg-slate-900 max-md:backdrop-blur-none md:backdrop-blur-sm">
                   <tr className="text-left text-[10px] uppercase tracking-wider text-slate-500 border-b border-white/5">
                     <th className="pb-2 font-bold">Date</th>
                     <th className="pb-2 font-bold text-right">Amount</th>

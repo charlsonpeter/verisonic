@@ -11,6 +11,15 @@ import { TableSkeleton, TrackCardSkeleton } from '../components/shared/skeleton'
 import { useLazyList, DEFAULT_LAZY_PAGE_SIZE } from '../hooks/useLazyList';
 import { LazyListSentinel } from '../components/shared/LazyListSentinel';
 import { ListSearchInput } from '../components/shared/ListSearchInput';
+import {
+  applyTrackStatusWsUpdates,
+  getTrackStatusDetails,
+  mergeTrackStatusUpdate,
+  trackStatusUpdateNeedsRerender,
+  type TrackStatusWsUpdate,
+} from '../utils/trackStatusWs';
+
+const TRACK_READY_DESC = 'lossless FLAC master ready';
 
 interface UploadQueueItem {
   id: string;
@@ -597,60 +606,26 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'status_updates') {
-          const updates = data.tracks as Array<{
-            track_id: number;
-            status: string;
-            quality_score: number | null;
-            quality_level: string | null;
-            approved: boolean;
-            has_hls?: boolean;
-          }>;
-
-          const applyUpdate = <T extends {
-            id: number;
-            quality_score?: number | null;
-            quality_level?: string | null;
-            approved?: boolean;
-            hls_playlist_path?: string | null;
-          }>(track: T, update: (typeof updates)[number]): T => {
-            const next: T = {
-              ...track,
-              quality_score: update.quality_score,
-              quality_level: update.quality_level,
-              approved: update.approved,
-            };
-            if (update.status === 'completed' || update.has_hls) {
-              next.hls_playlist_path = track.hls_playlist_path || 'ready';
-            }
-            return next;
-          };
+          const updates = data.tracks as TrackStatusWsUpdate[];
 
           tracksList.setItems((prevTracks) => {
-            const hasNewTracks = updates.some((u) =>
-              !prevTracks.some((t: any) => t.id === u.track_id)
-            );
-            if (hasNewTracks) {
-              setTimeout(() => tracksList.reload(), 0);
-            }
-            return prevTracks.map((track) => {
-              const update = updates.find((u) => u.track_id === track.id);
-              return update ? applyUpdate(track, update) : track;
+            const { next, changed } = applyTrackStatusWsUpdates(prevTracks, updates, {
+              readyDesc: TRACK_READY_DESC,
+              onNewTracks: () => { setTimeout(() => tracksList.reload(), 0); },
+              onReload: () => {
+                tracksList.reload();
+                fetchSuggestions();
+              },
             });
+            return changed ? next : prevTracks;
           });
 
           setEditingTrack((prev: any | null) => {
             if (!prev) return prev;
             const update = updates.find((u) => u.track_id === prev.id);
-            return update ? applyUpdate(prev, update) : prev;
+            if (!update || !trackStatusUpdateNeedsRerender(update, prev)) return prev;
+            return mergeTrackStatusUpdate(prev, update);
           });
-
-          const hasTerminalUpdate = updates.some((u) =>
-            u.status === 'completed' || u.status === 'rejected' || u.status === 'failed'
-          );
-          if (hasTerminalUpdate) {
-            tracksList.reload();
-            fetchSuggestions();
-          }
         }
       } catch (err) {
         console.error("Failed to parse status update:", err);
@@ -768,18 +743,11 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     }
   };
 
-  const getStatusDetails = (t: any) => {
-    if (t.quality_score === null) {
-      return { label: 'Analyzing', style: 'bg-amber-500/10 border-amber-500/20 text-amber-400', desc: 'Running spectral checks...' };
-    }
-    if (t.approved && !t.hls_playlist_path) {
-      return { label: 'Transcoding', style: 'bg-cyan-500/10 border-cyan-500/20 text-cyan-400', desc: 'Generating adaptive streaming files...' };
-    }
-    if (t.approved && t.hls_playlist_path) {
-      return { label: 'Ready', style: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400', desc: 'lossless FLAC master ready' };
-    }
-    return { label: 'Rejected', style: 'bg-rose-500/10 border-rose-500/20 text-rose-455', desc: 'Failed spectral cutoff checks' };
-  };
+  const getStatusDetails = (t: {
+    quality_score: number | null;
+    approved: boolean;
+    hls_playlist_path?: string | null;
+  }) => getTrackStatusDetails(t, TRACK_READY_DESC);
 
   // Edit Track State
   const [editingTrack, setEditingTrack] = useState<any | null>(null);
@@ -1594,6 +1562,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                       {t.quality_score !== null ? (
                         <button
                           onClick={() => onViewReport?.(t)}
+                          data-track-quality-score={t.id}
                           className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition hover:underline cursor-pointer ${
                             t.quality_score >= 86 
                               ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20' 
@@ -1611,10 +1580,18 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                     </td>
                     <td className="p-5">
                       <div className="space-y-1">
-                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}>
+                        <span
+                          data-track-status-label={t.id}
+                          className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}
+                        >
                           {status.label}
                         </span>
-                        <div className="text-[9px] text-slate-500 leading-normal">{status.desc}</div>
+                        <div
+                          data-track-status-desc={t.id}
+                          className="text-[9px] text-slate-500 leading-normal"
+                        >
+                          {status.desc}
+                        </div>
                       </div>
                     </td>
                     <td className="p-5 text-center">
@@ -1758,6 +1735,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                     <button
                       type="button"
                       onClick={() => onViewReport?.(t)}
+                      data-track-quality-score={t.id}
                       className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition ${
                         t.quality_score >= 86
                           ? 'bg-emerald-500/10 text-emerald-400'
@@ -1772,12 +1750,15 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                   ) : (
                     <span className="text-[10px] text-slate-600">Score: —</span>
                   )}
-                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}>
+                  <span
+                    data-track-status-label={t.id}
+                    className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}
+                  >
                     {status.label}
                   </span>
                 </div>
 
-                <p className="text-[9px] text-slate-500 leading-normal">{status.desc}</p>
+                <p data-track-status-desc={t.id} className="text-[9px] text-slate-500 leading-normal">{status.desc}</p>
 
                 <div className="flex items-center justify-end gap-2 pt-1 border-t border-white/5">
                   <button
@@ -1842,7 +1823,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       </div>
         </div>
 
-        <aside className="w-full xl:w-[400px] xl:sticky xl:top-4 shrink-0 rounded-3xl border border-white/5 bg-slate-900/40 backdrop-blur-md overflow-hidden max-h-[calc(100vh-6rem)] flex flex-col">
+        <aside className="w-full xl:w-[400px] xl:sticky xl:top-4 shrink-0 rounded-3xl border border-white/5 bg-slate-900/40 max-md:bg-slate-950 max-md:backdrop-blur-none md:backdrop-blur-md overflow-hidden max-h-[calc(100vh-6rem)] flex flex-col">
           <form onSubmit={handleEditSubmit} className="flex-1 flex flex-col min-h-0">
             {!hasEditorTarget ? (
               <div className="flex-1 flex items-center justify-center p-8 text-center">

@@ -17,7 +17,7 @@ import {
   parseLyricsFromText,
 } from '../../utils/lrc';
 import { patchPlayerRadioDom } from '../../utils/radioDomPatch';
-import type { RadioStation } from '../../context/AudioContext';
+import { subscribeRadioMetadataPoll } from '../../utils/radioMetadataPoll';
 
 interface AudioPlayerProps {
   onToggleQueue: () => void;
@@ -225,31 +225,18 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     if (!activeRadioStation || !token) return;
     const stationId = activeRadioStation.id;
 
-    const refreshRadioLabels = async () => {
-      try {
-        const res = await fetch('/api/radio', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!res.ok) return;
-        const list = (await res.json()) as RadioStation[];
-        const st = list.find((s) => s.id === stationId);
-        if (!st) return;
-        patchPlayerRadioDom(stationId, {
-          title: st.name,
-          subtitle:
-            st.current_program_title ||
-            st.current_track_title ||
-            st.current_track_artist ||
-            '',
-        });
-      } catch {
-        /* ignore transient poll errors */
-      }
-    };
-
-    refreshRadioLabels();
-    const interval = window.setInterval(refreshRadioLabels, 5000);
-    return () => window.clearInterval(interval);
+    return subscribeRadioMetadataPoll(token, (stations) => {
+      const st = stations.find((s) => s.id === stationId);
+      if (!st) return;
+      patchPlayerRadioDom(stationId, {
+        title: st.name,
+        subtitle:
+          st.current_program_title ||
+          st.current_track_title ||
+          st.current_track_artist ||
+          '',
+      });
+    });
   }, [activeRadioStation?.id, token]);
 
   const radioTitleDomProps = activeRadioStation
