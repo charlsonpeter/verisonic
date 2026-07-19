@@ -469,7 +469,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
   const badge = getQualityBadge();
 
-  const expandedCoverUrl =
+  const playerCoverUrl =
     currentTrack?.cover_art_url || activeRadioStation?.cover_art_url || null;
 
   return (
@@ -484,10 +484,10 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
         `}
       >
         {/* Background artwork blur effect */}
-        {currentTrack?.cover_art_url && (
+        {playerCoverUrl && (
           <div 
             className="absolute inset-0 bg-cover bg-center opacity-5 filter blur-3xl pointer-events-none -z-10 max-md:hidden md:rounded-3xl" 
-            style={{ backgroundImage: `url(${currentTrack.cover_art_url})` }}
+            style={{ backgroundImage: `url(${playerCoverUrl})` }}
           />
         )}
 
@@ -497,8 +497,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           className="hidden md:flex items-center gap-4 w-80 min-w-0 cursor-default flex-shrink-0"
         >
           <div className="w-12 h-12 md:w-14 md:h-14 bg-gradient-to-tr from-slate-900 to-rose-900 rounded-xl overflow-hidden flex items-center justify-center border border-white/5 shadow-md flex-shrink-0">
-            {currentTrack?.cover_art_url ? (
-              <img src={currentTrack.cover_art_url} alt="Cover" className="w-full h-full object-cover" />
+            {playerCoverUrl ? (
+              <img src={playerCoverUrl} alt="Cover" className="w-full h-full object-cover" />
             ) : (
               <Monitor className="w-5 h-5 md:w-6 md:h-6 text-slate-500" />
             )}
@@ -556,8 +556,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             onClick={openMobileExpanded}
             className="w-10 h-10 bg-gradient-to-tr from-slate-900 to-rose-900 rounded-xl overflow-hidden flex items-center justify-center border border-white/5 shadow-md flex-shrink-0 active:scale-95 transition"
           >
-            {currentTrack?.cover_art_url ? (
-              <img src={currentTrack.cover_art_url} alt="Cover" className="w-full h-full object-cover" />
+            {playerCoverUrl ? (
+              <img src={playerCoverUrl} alt="Cover" className="w-full h-full object-cover" />
             ) : (
               <Monitor className="w-5 h-5 text-slate-500" />
             )}
@@ -855,7 +855,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
             mobileLyricsOpen ? 'mobile-player-expanded--lyrics' : ''
           }`}
         >
-          <MobilePlayerAmbient coverUrl={expandedCoverUrl} />
+          <MobilePlayerAmbient coverUrl={playerCoverUrl} />
 
           <div className="mobile-player-expanded__content relative">
           {/* Header */}
@@ -908,8 +908,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                 tabIndex={mobileLyricsOpen ? -1 : 0}
               >
                 <div className="absolute inset-0 bg-gradient-to-tr from-slate-900 to-rose-950">
-                  {currentTrack?.cover_art_url ? (
-                    <img src={currentTrack.cover_art_url} alt="Cover" className="w-full h-full object-cover" />
+                  {playerCoverUrl ? (
+                    <img src={playerCoverUrl} alt="Cover" className="w-full h-full object-cover" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center">
                       <Monitor className="w-14 h-14 text-slate-700" />
