@@ -5,7 +5,7 @@
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "VeriSonic"
 #define MyAppExeName "VeriSonic Broadcaster.exe"
-#define MyAppSourceDir "..\..\..\dist"
+#define MyAppSourceDir "..\..\dist"
 #define MyAppId "{{A7B3C9D1-4E2F-5A6B-8C9D-0E1F2A3B4C5D}"
 
 [Setup]
@@ -117,7 +117,7 @@ begin
   if not FileExists(ExpandConstant('{#MyAppSourceDir}\{#MyAppExeName}')) then
   begin
     MsgBox('Build the application first (PyInstaller output missing).' + #13#10 +
-      'Expected: dist\{#MyAppExeName}', mbError, MB_OK);
+      'Expected: broadcaster\\dist\\{#MyAppExeName}', mbError, MB_OK);
     Result := False;
   end;
 end;

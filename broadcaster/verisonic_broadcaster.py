@@ -62,6 +62,20 @@ try:
 except ImportError:
     MISSING_DEPS.append("websocket-client")
 
+if sys.platform == "darwin":
+    try:
+        from macos_audio_permission import (
+            ensure_microphone_access,
+            get_microphone_authorization_status,
+            open_microphone_privacy_settings,
+            request_microphone_access,
+        )
+        HAS_MACOS_MIC_API = True
+    except ImportError:
+        HAS_MACOS_MIC_API = False
+else:
+    HAS_MACOS_MIC_API = False
+
 # Define fixed server stream URL (with env override)
 DEFAULT_SERVER_URL = os.environ.get("VERISONIC_SERVER_URL", "ws://54.66.243.141:3000/api/radio/stream/ws")
 
@@ -368,12 +382,15 @@ class PyQtBroadcasterApp(QMainWindow):
         self.current_frequency_levels = [0] * 20
         self.broadcast_error = None
         self.active_device_id = None
+        self._active_device_name = ""
         self.selected_station_id = None
         self.user_stations = []
         self.user_id = None
         
         # System Tray State
         self.quit_from_tray = False
+        self._mac_audio_probe_done = False
+        self._audio_silent_warned = False
         
         # Session parameters and settings
         self.load_config()
@@ -447,6 +464,109 @@ class PyQtBroadcasterApp(QMainWindow):
         # Verify saved session token
         if self.auth_token:
             QTimer.singleShot(100, self.verify_saved_token)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if sys.platform == 'darwin' and not self._mac_audio_probe_done:
+            self._mac_audio_probe_done = True
+            QTimer.singleShot(800, self.request_macos_audio_access)
+
+    def request_macos_audio_access(self):
+        """Request microphone access via AVFoundation, then verify capture works."""
+        if sys.platform != 'darwin':
+            return
+
+        def on_permission_result(granted):
+            if granted is True:
+                self.refresh_input_devices()
+                self._probe_audio_capture()
+                return
+            if granted is False:
+                self._show_mic_permission_dialog()
+                return
+            self._probe_audio_capture()
+
+        if HAS_MACOS_MIC_API:
+            request_microphone_access(
+                lambda granted: QTimer.singleShot(0, lambda g=granted: on_permission_result(g))
+            )
+        else:
+            self._probe_audio_capture()
+
+    def _probe_audio_capture(self):
+        """Open a brief input stream to verify capture after permission is granted."""
+        if sys.platform != 'darwin':
+            return
+
+        def _probe():
+            device_id = None
+            try:
+                default_in = sd.default.device[0]
+                if default_in is not None and int(default_in) >= 0:
+                    device_id = int(default_in)
+            except Exception:
+                pass
+
+            if device_id is None:
+                devices = self.get_input_devices()
+                if not devices:
+                    QTimer.singleShot(0, self._show_mic_permission_dialog)
+                    return
+                device_id = devices[0]["id"]
+
+            try:
+                with sd.InputStream(
+                    device=device_id,
+                    channels=1,
+                    samplerate=44100,
+                    blocksize=1024,
+                ):
+                    sd.sleep(250)
+            except Exception as exc:
+                print("Microphone permission probe failed:", exc)
+                QTimer.singleShot(0, self._show_mic_permission_dialog)
+
+        threading.Thread(target=_probe, daemon=True).start()
+
+    def _show_mic_permission_dialog(self):
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Warning)
+        msg.setWindowTitle("Microphone Access Required")
+        msg.setText(
+            "VeriSonic Broadcaster needs access to your selected audio input "
+            "(microphone, line-in, USB interface, or loopback).\n\n"
+            "Open System Settings → Privacy & Security → Microphone, "
+            "enable VeriSonic Broadcaster, then restart the app."
+        )
+        settings_btn = msg.addButton("Open System Settings", QMessageBox.ActionRole)
+        msg.addButton(QMessageBox.Ok)
+        msg.exec_()
+        if msg.clickedButton() == settings_btn and HAS_MACOS_MIC_API:
+            open_microphone_privacy_settings()
+
+    def refresh_input_devices(self):
+        """Reload PortAudio input devices into the connect-page dropdown."""
+        self.devices = self.get_input_devices()
+        if not hasattr(self, "device_combo"):
+            return
+
+        selected_id = None
+        idx = self.device_combo.currentIndex()
+        if 0 <= idx < len(self.devices):
+            selected_id = self.devices[idx]["id"]
+
+        self.device_combo.blockSignals(True)
+        self.device_combo.clear()
+        if self.devices:
+            self.device_combo.addItems([dev["name"] for dev in self.devices])
+            if selected_id is not None:
+                for i, dev in enumerate(self.devices):
+                    if dev["id"] == selected_id:
+                        self.device_combo.setCurrentIndex(i)
+                        break
+        else:
+            self.device_combo.addItems(["No Input Devices Found"])
+        self.device_combo.blockSignals(False)
 
     def load_config(self):
         self.config_path = os.path.expanduser("~/.verisonic_broadcaster.json")
@@ -981,16 +1101,52 @@ class PyQtBroadcasterApp(QMainWindow):
         if index < 0 or index >= len(self.devices):
             return
         device_id = self.devices[index]["id"]
-        # Hot-swaps the device ID inside the streaming loop
+        device_name = self.devices[index]["name"]
         self.active_device_id = device_id
-        print("Dynamic hot-swap request: Input device ID ->", device_id)
+        self._active_device_name = device_name
+        print("Dynamic hot-swap request: Input device ID ->", device_id, device_name)
+        if "blackhole" in device_name.lower():
+            self.connection_status = "Switching to BlackHole — reconnecting audio..."
 
     def handle_connect(self):
         selected_idx = self.device_combo.currentIndex()
         if selected_idx < 0 or not self.devices:
             QMessageBox.critical(self, "Error", "Please select a valid audio source.")
             return
-            
+
+        if sys.platform == "darwin" and HAS_MACOS_MIC_API:
+            status = get_microphone_authorization_status()
+            if status == "denied":
+                self._show_mic_permission_dialog()
+                return
+            if status in ("not_determined", "unavailable"):
+                request_microphone_access(
+                    lambda granted: QTimer.singleShot(
+                        0, lambda g=granted: self._continue_connect_after_mic(g, selected_idx)
+                    )
+                )
+                return
+
+        self._start_broadcast(selected_idx)
+
+    def _continue_connect_after_mic(self, granted, selected_idx):
+        if granted is False:
+            self._show_mic_permission_dialog()
+            return
+        if granted is None and HAS_MACOS_MIC_API:
+            status = get_microphone_authorization_status()
+            if status == "denied":
+                self._show_mic_permission_dialog()
+                return
+        self.refresh_input_devices()
+        if not self.devices:
+            self._show_mic_permission_dialog()
+            return
+        if selected_idx >= len(self.devices):
+            selected_idx = 0
+        self._start_broadcast(selected_idx)
+
+    def _start_broadcast(self, selected_idx):
         device_id = self.devices[selected_idx]["id"]
         server_url = DEFAULT_SERVER_URL
         stream_key = self.key_entry.text().strip()
@@ -1059,8 +1215,8 @@ class PyQtBroadcasterApp(QMainWindow):
         self.live_device_combo.addItems([dev["name"] for dev in self.devices])
         self.live_device_combo.setCurrentIndex(selected_idx)
         self.live_device_combo.blockSignals(False)
-        
-        # Save config with selected bitrate
+        self._active_device_name = self.devices[selected_idx]["name"]
+        self.active_device_id = device_id
         bitrate_index = self.bitrate_combo.currentIndex()
         bitrate_opts = [320, 256, 192, 128, 96]
         if bitrate_index >= 0 and bitrate_index < len(bitrate_opts):
@@ -1070,6 +1226,7 @@ class PyQtBroadcasterApp(QMainWindow):
         self.is_broadcasting = True
         self.connection_status = "Connecting..."
         self.is_connected = False
+        self._audio_silent_warned = False
         
         self.bytes_sent = 0
         self.start_time = time.time()
@@ -1204,14 +1361,12 @@ class PyQtBroadcasterApp(QMainWindow):
 
                 self.connection_status = "Connecting to server..."
 
-                # Query device channels
-                channels = 2
-                try:
-                    device_info = sd.query_devices(self.active_device_id, 'input')
-                    max_channels = device_info.get("max_input_channels", 2)
-                    channels = min(2, max_channels)
-                except Exception as ce:
-                    print("Failed to query device channels:", ce)
+                channels, samplerate = self.get_device_capture_params(self.active_device_id)
+                print(
+                    f"Opening audio input device {self.active_device_id} "
+                    f"({getattr(self, '_active_device_name', '')}): "
+                    f"{channels}ch @ {samplerate}Hz"
+                )
 
                 # Initialize audio input stream if not already done or device swapped
                 if audio_stream is None or self.active_device_id != current_stream_device_id:
@@ -1224,27 +1379,51 @@ class PyQtBroadcasterApp(QMainWindow):
 
                     self.audio_queue = queue.Queue(maxsize=100)
                     self.mp3_queue = queue.Queue(maxsize=200)
+                    self._audio_silent_warned = False
 
                     encoder = lameenc.Encoder()
                     encoder.set_bit_rate(bitrate)
-                    encoder.set_in_sample_rate(44100)
+                    encoder.set_in_sample_rate(samplerate)
                     encoder.set_channels(channels)
                     encoder.set_quality(0)
 
                     def audio_callback(indata, frames, time_info, status):
+                        if status:
+                            print("Audio input status:", status)
                         try:
                             self.audio_queue.put_nowait(indata.copy())
                         except queue.Full:
                             pass
 
-                    audio_stream = sd.InputStream(
-                        device=self.active_device_id,
-                        channels=channels,
-                        samplerate=44100,
-                        blocksize=2048,
-                        callback=audio_callback
-                    )
-                    audio_stream.start()
+                    try:
+                        audio_stream = sd.InputStream(
+                            device=self.active_device_id,
+                            channels=channels,
+                            samplerate=samplerate,
+                            blocksize=2048,
+                            callback=audio_callback
+                        )
+                        audio_stream.start()
+                    except Exception as ae:
+                        print("Failed to open audio input stream:", ae)
+                        device_hint = getattr(self, "_active_device_name", "the selected device")
+                        if "blackhole" in device_hint.lower():
+                            self.broadcast_error = (
+                                f"Could not open {device_hint}.\n\n"
+                                "For system audio via BlackHole:\n"
+                                "1. Audio MIDI Setup → Create Multi-Output Device\n"
+                                "2. Enable BlackHole 2ch + your speakers/headphones\n"
+                                "3. System Settings → Sound → Output → Multi-Output Device\n"
+                                "4. Play audio, then select BlackHole 2ch in this app"
+                            )
+                        else:
+                            self.broadcast_error = (
+                                "Could not open the selected audio input.\n\n"
+                                "On macOS, open System Settings → Privacy & Security → Microphone "
+                                "and enable VeriSonic Broadcaster, then try again."
+                            )
+                        self.is_broadcasting = False
+                        raise
                     current_stream_device_id = self.active_device_id
 
                     # Start the VU + encode loop immediately when mic starts
@@ -1274,6 +1453,10 @@ class PyQtBroadcasterApp(QMainWindow):
 
                     # Drain mp3_queue and send chunks over WebSocket
                     while self.is_broadcasting:
+                        if self.active_device_id != current_stream_device_id:
+                            print("Input device changed — reopening audio stream")
+                            break
+
                         try:
                             mp3_chunk = self.mp3_queue.get_nowait()
                         except queue.Empty:
@@ -1363,6 +1546,31 @@ class PyQtBroadcasterApp(QMainWindow):
                 time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
                 mb_sent = getattr(self, 'bytes_sent', 0) / (1024 * 1024)
                 self.stats_lbl.setText(f"Status: LIVE ({self.saved_bitrate} kbps)  |  Sent: {mb_sent:.2f} MB  |  Time: {time_str}")
+
+                if (
+                    not self._audio_silent_warned
+                    and elapsed_seconds >= 4
+                    and self.current_volume_db <= -55.0
+                    and all(level == 0 for level in self.current_frequency_levels)
+                ):
+                    self._audio_silent_warned = True
+                    device_name = getattr(self, "_active_device_name", "")
+                    if "blackhole" in device_name.lower():
+                        self.broadcast_error = (
+                            f"No audio detected on {device_name}.\n\n"
+                            "BlackHole only receives audio routed TO it:\n"
+                            "1. Open Audio MIDI Setup → Create Multi-Output Device\n"
+                            "2. Check BlackHole 2ch AND your speakers/headphones\n"
+                            "3. System Settings → Sound → Output → Multi-Output Device\n"
+                            "4. Play music/audio, then watch the VU meter here"
+                        )
+                    else:
+                        self.broadcast_error = (
+                            "No audio is being captured from the selected input.\n\n"
+                            "Check System Settings → Privacy & Security → Microphone, "
+                            "confirm the correct input device is selected, and test the "
+                            "level meter (speak into the mic or play audio into the device)."
+                        )
             else:
                 color = "#f59e0b" if (int(time.time() * 2) % 2 == 0) else "#78350f"
                 self.live_indicator.setStyleSheet(f"color: {color};")
@@ -1503,6 +1711,22 @@ class PyQtBroadcasterApp(QMainWindow):
         else:
             event.accept()
 
+    def get_device_capture_params(self, device_id):
+        """Return (channels, samplerate) suited for the given PortAudio input device."""
+        channels = 1
+        samplerate = 44100
+        try:
+            info = sd.query_devices(device_id, "input")
+            max_channels = info.get("max_input_channels", 1)
+            channels = min(2, max(1, int(max_channels)))
+            default_sr = info.get("default_samplerate") or info.get("default_sample_rate") or 44100
+            samplerate = int(default_sr)
+            if samplerate <= 0:
+                samplerate = 44100
+        except Exception as exc:
+            print("Failed to query device capture params:", exc)
+        return channels, samplerate
+
     def get_input_devices(self):
         devices = []
         try:
@@ -1557,6 +1781,23 @@ class PyQtBroadcasterApp(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+
+    if sys.platform == "darwin" and HAS_MACOS_MIC_API:
+        mic_granted = ensure_microphone_access(app)
+        if mic_granted is False:
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Warning)
+            msg.setWindowTitle("Microphone Access Required")
+            msg.setText(
+                "VeriSonic Broadcaster needs microphone access to capture audio.\n\n"
+                "Enable it under System Settings → Privacy & Security → Microphone."
+            )
+            settings_btn = msg.addButton("Open System Settings", QMessageBox.ActionRole)
+            msg.addButton("Continue Anyway", QMessageBox.RejectRole)
+            msg.exec_()
+            if msg.clickedButton() == settings_btn:
+                open_microphone_privacy_settings()
+
     window = PyQtBroadcasterApp()
     window.show()
     sys.exit(app.exec_())

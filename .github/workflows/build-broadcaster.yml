@@ -54,17 +54,18 @@ jobs:
       - name: Build Executable (Windows)
         if: matrix.platform == 'windows'
         run: |
-          pyinstaller --noconsole --onefile --windowed --icon="broadcaster/assets/icon.ico" --name="VeriSonic Broadcaster" broadcaster/verisonic_broadcaster.py
+          pyinstaller --noconsole --onefile --windowed --distpath broadcaster/dist --workpath broadcaster/build/pyinstaller --specpath broadcaster/build --icon="broadcaster/assets/icon.ico" --name="VeriSonic Broadcaster" broadcaster/verisonic_broadcaster.py
 
       - name: Build Executable (Linux)
         if: matrix.platform == 'linux'
         run: |
-          pyinstaller --noconsole --onefile --icon="broadcaster/assets/icon.png" --name="verisonic-broadcaster" broadcaster/verisonic_broadcaster.py
+          pyinstaller --noconsole --onefile --distpath broadcaster/dist --workpath broadcaster/build/pyinstaller --specpath broadcaster/build --icon="broadcaster/assets/icon.png" --name="verisonic-broadcaster" broadcaster/verisonic_broadcaster.py
 
-      - name: Build Executable (macOS)
+      - name: Build macOS Installer
         if: matrix.platform == 'macos'
         run: |
-          pyinstaller --noconsole --onefile --windowed --icon="broadcaster/assets/icon.icns" --osx-info-plist="broadcaster/installer/macos/Info.plist" --osx-entitlements-file="broadcaster/installer/macos/entitlements.plist" --name="VeriSonic Broadcaster" broadcaster/verisonic_broadcaster.py
+          chmod +x broadcaster/installer/macos/build_macos_pkg.sh
+          VERISONIC_PKG_VERSION=1.0.0 broadcaster/installer/macos/build_macos_pkg.sh
 
       - name: Install Inno Setup (Windows)
         if: matrix.platform == 'windows'
@@ -74,12 +75,6 @@ jobs:
         if: matrix.platform == 'windows'
         run: |
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" broadcaster/installer/windows/setup.iss
-
-      - name: Build macOS Installer
-        if: matrix.platform == 'macos'
-        run: |
-          chmod +x broadcaster/installer/macos/build_pkg.sh
-          broadcaster/installer/macos/build_pkg.sh
 
       - name: Build Linux Installer
         if: matrix.platform == 'linux'
@@ -92,18 +87,18 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: dist/VeriSonic_Broadcaster_Setup.exe
+          path: broadcaster/dist/VeriSonic_Broadcaster_Setup.exe
 
       - name: Upload macOS Installer
         if: matrix.platform == 'macos'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: dist/VeriSonic_Broadcaster.pkg
+          path: broadcaster/dist/VeriSonic Broadcaster.pkg
 
       - name: Upload Linux Installer
         if: matrix.platform == 'linux'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: dist/verisonic-broadcaster_1.0.0_amd64.deb
+          path: broadcaster/dist/verisonic-broadcaster_1.0.0_amd64.deb

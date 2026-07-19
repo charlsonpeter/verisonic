@@ -1,12 +1,28 @@
 #!/bin/bash
-set -e
-
-APP_BIN="/Applications/VeriSonic Broadcaster.app/Contents/MacOS/VeriSonic Broadcaster"
+# Post-install setup. Must always exit 0 — never fail the pkg if optional steps break.
+APP_PATH="/Applications/VeriSonic Broadcaster.app"
+APP_BIN="$APP_PATH/Contents/MacOS/VeriSonic Broadcaster"
 TASK_LABEL="com.verisonic.broadcaster"
 PERMISSIONS_DOC="/Library/Application Support/VeriSonic/audio-permissions.txt"
+LOG="/var/log/verisonic-broadcaster-install.log"
+
+log() {
+  echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG" 2>/dev/null || true
+}
+
+log "postinstall start"
+
+if [ ! -f "$APP_BIN" ]; then
+  log "WARNING: app binary missing at $APP_BIN"
+  exit 0
+fi
+
+chmod +x "$APP_BIN" 2>/dev/null || true
+xattr -cr "$APP_PATH" 2>/dev/null || true
 
 CONSOLE_USER="$(stat -f '%Su' /dev/console 2>/dev/null || true)"
 if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ] || [ "$CONSOLE_USER" = "loginwindow" ]; then
+  log "No console user; skipping LaunchAgent"
   exit 0
 fi
 
@@ -15,17 +31,16 @@ if [ -z "$USER_HOME" ]; then
   USER_HOME="$(eval echo "~$CONSOLE_USER")"
 fi
 
-# Install shared audio-permissions documentation for all users.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-mkdir -p "$(dirname "$PERMISSIONS_DOC")"
-if [ -f "$SCRIPT_DIR/../../assets/audio-permissions.txt" ]; then
-  cp "$SCRIPT_DIR/../../assets/audio-permissions.txt" "$PERMISSIONS_DOC"
-  chmod 644 "$PERMISSIONS_DOC"
+mkdir -p "$(dirname "$PERMISSIONS_DOC")" 2>/dev/null || true
+if [ -f "$SCRIPT_DIR/audio-permissions.txt" ]; then
+  cp "$SCRIPT_DIR/audio-permissions.txt" "$PERMISSIONS_DOC" 2>/dev/null || true
+  chmod 644 "$PERMISSIONS_DOC" 2>/dev/null || true
 fi
 
 AGENT_DIR="$USER_HOME/Library/LaunchAgents"
 PLIST_PATH="$AGENT_DIR/$TASK_LABEL.plist"
-mkdir -p "$AGENT_DIR"
+mkdir -p "$AGENT_DIR" 2>/dev/null || true
 
 cat > "$PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -46,19 +61,15 @@ cat > "$PLIST_PATH" <<EOF
 </plist>
 EOF
 
-chown "$CONSOLE_USER" "$PLIST_PATH"
+chown "$CONSOLE_USER" "$PLIST_PATH" 2>/dev/null || log "chown plist failed"
+USER_ID="$(id -u "$CONSOLE_USER" 2>/dev/null || true)"
+if [ -n "$USER_ID" ]; then
+  GUI_DOMAIN="gui/$USER_ID"
+  launchctl bootout "$GUI_DOMAIN/$TASK_LABEL" 2>/dev/null || true
+  launchctl asuser "$USER_ID" launchctl bootstrap "$GUI_DOMAIN" "$PLIST_PATH" 2>/dev/null || \
+    launchctl asuser "$USER_ID" launchctl load "$PLIST_PATH" 2>/dev/null || \
+    log "LaunchAgent load failed (non-fatal)"
+fi
 
-USER_ID="$(id -u "$CONSOLE_USER")"
-GUI_DOMAIN="gui/$USER_ID"
-
-sudo -u "$CONSOLE_USER" launchctl bootout "$GUI_DOMAIN/$TASK_LABEL" 2>/dev/null || true
-sudo -u "$CONSOLE_USER" launchctl bootstrap "$GUI_DOMAIN" "$PLIST_PATH" 2>/dev/null || \
-  sudo -u "$CONSOLE_USER" launchctl load "$PLIST_PATH" 2>/dev/null || true
-
-# Open Privacy settings so the user can grant microphone/input and screen-audio capture.
-sudo -u "$CONSOLE_USER" open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone" 2>/dev/null || \
-  sudo -u "$CONSOLE_USER" open "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone" 2>/dev/null || true
-sudo -u "$CONSOLE_USER" open "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_ScreenCapture" 2>/dev/null || \
-  sudo -u "$CONSOLE_USER" open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture" 2>/dev/null || true
-
+log "postinstall done"
 exit 0

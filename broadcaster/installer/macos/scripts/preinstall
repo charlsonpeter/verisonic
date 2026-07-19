@@ -1,0 +1,6 @@
+#!/bin/bash
+# Quit a running copy so /Applications can be updated during pkg install.
+pkill -f "/Applications/VeriSonic Broadcaster.app/Contents/MacOS/VeriSonic Broadcaster" 2>/dev/null || true
+pkill -f "VeriSonic Broadcaster.app/Contents/MacOS/VeriSonic Broadcaster" 2>/dev/null || true
+sleep 1
+exit 0

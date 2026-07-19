@@ -3,9 +3,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-BINARY="$ROOT_DIR/dist/verisonic-broadcaster"
-STAGING="$ROOT_DIR/build/deb-staging"
-OUTPUT="$ROOT_DIR/dist/verisonic-broadcaster_1.0.0_amd64.deb"
+BROADCASTER_DIR="$ROOT_DIR/broadcaster"
+DIST_DIR="$BROADCASTER_DIR/dist"
+BUILD_DIR="$BROADCASTER_DIR/build"
+BINARY="$DIST_DIR/verisonic-broadcaster"
+STAGING="$BUILD_DIR/deb-staging"
+OUTPUT="$DIST_DIR/verisonic-broadcaster_1.0.0_amd64.deb"
 TEMPLATE="$SCRIPT_DIR/debian"
 
 if [ ! -f "$BINARY" ]; then

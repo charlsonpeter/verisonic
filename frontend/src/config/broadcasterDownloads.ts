@@ -5,7 +5,7 @@ const downloadBase =
 
 export const BROADCASTER_INSTALLERS = {
   windows: `${downloadBase}/VeriSonic_Broadcaster_Setup.exe`,
-  macos: `${downloadBase}/VeriSonic_Broadcaster.pkg`,
+  macos: `${downloadBase}/VeriSonic%20Broadcaster.pkg`,
   linux: `${downloadBase}/verisonic-broadcaster_1.0.0_amd64.deb`,
 } as const;
 

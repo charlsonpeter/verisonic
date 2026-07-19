@@ -22,7 +22,7 @@ PyInstaller **does not support cross-compilation**. Build on each target OS, or 
 | Platform | Artifact name | File |
 |----------|---------------|------|
 | Windows | `verisonic-broadcaster-windows-installer` | `VeriSonic_Broadcaster_Setup.exe` |
-| macOS | `verisonic-broadcaster-macos-installer` | `VeriSonic_Broadcaster.pkg` |
+| macOS | `verisonic-broadcaster-macos-installer` | `VeriSonic Broadcaster.pkg` |
 | Linux | `verisonic-broadcaster-linux-installer` | `verisonic-broadcaster_1.0.0_amd64.deb` |
 
 Host these files at `/downloads/broadcaster/` on your web server (or set `VITE_BROADCASTER_DOWNLOAD_BASE` for the frontend download page).
@@ -62,6 +62,9 @@ python broadcaster/generate_icons.py
 
 ```cmd
 pyinstaller --noconsole --onefile --windowed ^
+  --distpath broadcaster/dist ^
+  --workpath broadcaster/build/pyinstaller ^
+  --specpath broadcaster/build ^
   --icon="broadcaster/assets/icon.ico" ^
   --name="VeriSonic Broadcaster" ^
   broadcaster/verisonic_broadcaster.py
@@ -73,7 +76,7 @@ pyinstaller --noconsole --onefile --windowed ^
 "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" broadcaster/installer/windows/setup.iss
 ```
 
-**Output:** `dist/VeriSonic_Broadcaster_Setup.exe`
+**Output:** `broadcaster/dist/VeriSonic_Broadcaster_Setup.exe`
 
 **Installer configures:**
 
@@ -91,25 +94,43 @@ pyinstaller --noconsole --onefile --windowed ^
 
 ### macOS
 
-**1. Build executable** (includes microphone usage string in `Info.plist`)
+**Build the `.pkg` installer** (builds the app internally, output is the pkg only):
 
 ```bash
-pyinstaller --noconsole --onefile --windowed \
-  --icon="broadcaster/assets/icon.icns" \
-  --osx-info-plist="broadcaster/installer/macos/Info.plist" \
-  --osx-entitlements-file="broadcaster/installer/macos/entitlements.plist" \
-  --name="VeriSonic Broadcaster" \
-  broadcaster/verisonic_broadcaster.py
+chmod +x broadcaster/installer/macos/build_macos_pkg.sh
+broadcaster/installer/macos/build_macos_pkg.sh
 ```
 
-**2. Build installer**
+Optional: set package version (recommended when reinstalling):
 
 ```bash
-chmod +x broadcaster/installer/macos/build_pkg.sh
-broadcaster/installer/macos/build_pkg.sh
+VERISONIC_PKG_VERSION=1.0.6 broadcaster/installer/macos/build_macos_pkg.sh
 ```
 
-**Output:** `dist/VeriSonic_Broadcaster.pkg`
+Keep the `.app` in `dist/` as well (default removes it after pkg is created):
+
+```bash
+KEEP_APP=1 broadcaster/installer/macos/build_macos_pkg.sh
+```
+
+**Output:** `broadcaster/dist/VeriSonic Broadcaster.pkg`
+
+**Install** (no manual copy to `/Applications`):
+
+```bash
+broadcaster/installer/macos/install_pkg.sh
+# or: open "broadcaster/dist/VeriSonic Broadcaster.pkg"
+```
+
+<details>
+<summary>Advanced: build .app and .pkg separately</summary>
+
+```bash
+broadcaster/installer/macos/build_app.sh
+VERISONIC_PKG_VERSION=1.0.6 broadcaster/installer/macos/build_pkg.sh
+```
+
+</details>
 
 **Installer configures:**
 
@@ -124,7 +145,7 @@ broadcaster/installer/macos/build_pkg.sh
 **Code signing (production):**
 
 ```bash
-codesign --deep --force --sign "Developer ID Application: Your Name (TeamID)" "dist/VeriSonic Broadcaster.app"
+codesign --deep --force --sign "Developer ID Application: Your Name (TeamID)" "broadcaster/dist/VeriSonic Broadcaster.app"
 ```
 
 ---
@@ -135,6 +156,9 @@ codesign --deep --force --sign "Developer ID Application: Your Name (TeamID)" "d
 
 ```bash
 pyinstaller --noconsole --onefile \
+  --distpath broadcaster/dist \
+  --workpath broadcaster/build/pyinstaller \
+  --specpath broadcaster/build \
   --icon="broadcaster/assets/icon.png" \
   --name="verisonic-broadcaster" \
   broadcaster/verisonic_broadcaster.py
@@ -147,7 +171,7 @@ chmod +x broadcaster/installer/linux/build_deb.sh
 broadcaster/installer/linux/build_deb.sh
 ```
 
-**Output:** `dist/verisonic-broadcaster_1.0.0_amd64.deb`
+**Output:** `broadcaster/dist/verisonic-broadcaster_1.0.0_amd64.deb`
 
 **Installer configures:**
 
@@ -163,7 +187,7 @@ broadcaster/installer/linux/build_deb.sh
 **Install:**
 
 ```bash
-sudo dpkg -i dist/verisonic-broadcaster_1.0.0_amd64.deb
+sudo dpkg -i broadcaster/dist/verisonic-broadcaster_1.0.0_amd64.deb
 sudo apt-get install -f
 ```
 
@@ -189,7 +213,7 @@ The app minimizes to the system tray on close (`setQuitOnLastWindowClosed(False)
 
 ```
 /downloads/broadcaster/VeriSonic_Broadcaster_Setup.exe
-/downloads/broadcaster/VeriSonic_Broadcaster.pkg
+/downloads/broadcaster/VeriSonic Broadcaster.pkg
 /downloads/broadcaster/verisonic-broadcaster_1.0.0_amd64.deb
 ```
 
