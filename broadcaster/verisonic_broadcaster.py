@@ -40,6 +40,7 @@ try:
     )
     from PyQt5.QtCore import QTimer, Qt
     from PyQt5.QtGui import QFont, QPalette, QColor, QPainter, QBrush, QPen
+    from PyQt5.QtNetwork import QLocalServer, QLocalSocket
     USE_PYQT = True
 except ImportError:
     MISSING_DEPS.append("PyQt5")
@@ -1778,9 +1779,35 @@ class PyQtBroadcasterApp(QMainWindow):
         msg.exec_()
 
 
+SINGLE_INSTANCE_KEY = "com.verisonic.broadcaster"
+
+
+def acquire_single_instance(app):
+    """Return a QLocalServer for the primary instance, or None if another copy is running."""
+    socket = QLocalSocket()
+    socket.connectToServer(SINGLE_INSTANCE_KEY)
+    if socket.waitForConnected(300):
+        socket.write(b"activate")
+        socket.flush()
+        socket.waitForBytesWritten(1000)
+        socket.disconnectFromServer()
+        return None
+
+    server = QLocalServer(app)
+    QLocalServer.removeServer(SINGLE_INSTANCE_KEY)
+    if not server.listen(SINGLE_INSTANCE_KEY):
+        QLocalServer.removeServer(SINGLE_INSTANCE_KEY)
+        server.listen(SINGLE_INSTANCE_KEY)
+    return server
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+
+    instance_server = acquire_single_instance(app)
+    if instance_server is None:
+        sys.exit(0)
 
     if sys.platform == "darwin" and HAS_MACOS_MIC_API:
         mic_granted = ensure_microphone_access(app)
@@ -1799,5 +1826,16 @@ if __name__ == "__main__":
                 open_microphone_privacy_settings()
 
     window = PyQtBroadcasterApp()
+
+    def _on_second_instance_launch():
+        conn = instance_server.nextPendingConnection()
+        if conn is not None:
+            conn.waitForReadyRead(200)
+            conn.readAll()
+            conn.disconnectFromServer()
+        window.show_and_activate()
+
+    instance_server.newConnection.connect(_on_second_instance_launch)
+
     window.show()
     sys.exit(app.exec_())

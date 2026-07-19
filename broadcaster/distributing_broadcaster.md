@@ -138,6 +138,16 @@ open "broadcaster/dist/VeriSonic Broadcaster.pkg"
 
 Install logs: `/var/log/verisonic-broadcaster-install.log`
 
+**Connect Live crashes when opened from Applications (but works from Terminal):** An older install may have auto-started a background copy at login while you also opened the app from Applications — two processes fighting for the microphone. Quit all copies, disable the old auto-start agent, then reopen once:
+
+```bash
+pkill -f "VeriSonic Broadcaster" 2>/dev/null || true
+launchctl bootout "gui/$(id -u)/com.verisonic.broadcaster" 2>/dev/null || true
+open "/Applications/VeriSonic Broadcaster.app"
+```
+
+Rebuild/reinstall with a current `.pkg` for the single-instance fix and updated LaunchAgent (no login auto-start).
+
 <details>
 <summary>Advanced: build .app and .pkg separately</summary>
 
@@ -151,7 +161,8 @@ VERISONIC_PKG_VERSION=1.0.6 broadcaster/installer/macos/build_pkg.sh
 **Installer configures:**
 
 - Admin install to `/Applications`
-- **LaunchAgent** (`com.verisonic.broadcaster`) for the installing user
+- **LaunchAgent** plist (`com.verisonic.broadcaster`) installed but **not** auto-started at login (avoids duplicate instances fighting for the microphone)
+- **Single-instance guard** — opening the app again focuses the existing copy instead of starting a second process
 - `NSMicrophoneUsageDescription` for all audio input devices (mic, line-in, USB, BlackHole loopback)
 - `NSScreenCaptureUsageDescription` when system/desktop audio capture is needed
 - `com.apple.security.device.audio-input` entitlement in the app bundle

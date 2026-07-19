@@ -124,6 +124,7 @@ mkdir -p "$DIST_DIR" "$BUILD_DIR"
   --hidden-import=AVFoundation \
   --hidden-import=CoreMedia \
   --hidden-import=macos_audio_permission \
+  --hidden-import=PyQt5.QtNetwork \
   --osx-bundle-identifier com.verisonic.broadcaster \
   --osx-entitlements-file="broadcaster/installer/macos/entitlements.plist" \
   --name="$APP_NAME" \

@@ -54,7 +54,7 @@ cat > "$PLIST_PATH" <<EOF
     <string>$APP_BIN</string>
   </array>
   <key>RunAtLoad</key>
-  <true/>
+  <false/>
   <key>KeepAlive</key>
   <false/>
 </dict>
