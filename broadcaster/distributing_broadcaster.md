@@ -122,6 +122,22 @@ broadcaster/installer/macos/install_pkg.sh
 # or: open "broadcaster/dist/VeriSonic Broadcaster.pkg"
 ```
 
+**Reinstalling:** If VeriSonic Broadcaster is already installed, run the new `.pkg` again — macOS replaces `/Applications/VeriSonic Broadcaster.app` in place. The pkg `preinstall` script quits any running copy automatically; no manual cleanup is needed for a normal upgrade.
+
+**Clean reinstall (failed or partial install only):** Use this when a previous install failed, the app is missing or broken, or the installer reports a receipt conflict. Bump `VERISONIC_PKG_VERSION` before rebuilding.
+
+```bash
+# 1. Quit any running copy
+pkill -f "VeriSonic Broadcaster" 2>/dev/null || true
+# 2. Remove failed/partial installs
+sudo rm -rf "/Applications/VeriSonic Broadcaster.app"
+sudo pkgutil --forget com.verisonic.broadcaster 2>/dev/null || true
+# 3. Install again
+open "broadcaster/dist/VeriSonic Broadcaster.pkg"
+```
+
+Install logs: `/var/log/verisonic-broadcaster-install.log`
+
 <details>
 <summary>Advanced: build .app and .pkg separately</summary>
 
