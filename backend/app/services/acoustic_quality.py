@@ -299,11 +299,16 @@ def classify_quality(
     within-tier confidence, not file-extension / codec tags).
     """
     brickwall = _is_lossy_brickwall(rolloff_85, rolloff_95, rolloff_99)
-    # Ignore sparse Nyquist spikes above a detected brickwall
-    effective_max = (
-        min(max_active_hz, rolloff_99 + 400.0) if brickwall else max_active_hz
-    )
-    ceiling = float(max(rolloff_99, effective_max if not brickwall else rolloff_99))
+    # Ignore sparse spikes far above roll-off (STFT sidelobes / ultra-low
+    # dynamic floors on tonal material can push max_active toward Nyquist).
+    # Match _stable_cutoff_hz: only trust max_active within ~1.5 kHz of rolloff_99.
+    sparse_above_rolloff = max_active_hz > rolloff_99 + 1500.0
+    if brickwall or sparse_above_rolloff:
+        effective_max = min(max_active_hz, rolloff_99 + 400.0) if max_active_hz > 0 else 0.0
+        ceiling = float(rolloff_99)
+    else:
+        effective_max = max_active_hz
+        ceiling = float(max(rolloff_99, effective_max))
     claims_hi = _claims_hi_container(sample_rate, bit_depth)
     low_hf_entropy = spectral_entropy_high_band < 0.35
     negligible_hf = hf_energy_ratio < 1e-5 or spectral_entropy_high_band < 0.15
