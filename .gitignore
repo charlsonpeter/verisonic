@@ -9,6 +9,8 @@ lib/
 share/
 pyvenv.cfg
 pip-selfcheck.json
+*tmp*
+celerybeat-schedule
 
 # Python Caches and Bytecode
 __pycache__/
@@ -35,8 +37,9 @@ MANIFEST
 
 # PyInstaller & Compilation Output
 *.spec
-dist/
-build/
+.build-venv-macos/
+broadcaster/dist-user/
+broadcaster/build/
 broadcaster/assets/icon.png
 broadcaster/assets/icon.ico
 broadcaster/assets/icon.icns
@@ -83,3 +86,4 @@ Thumbs.db
 .env.production.local
 *.pem
 *.key
+cert/*.json

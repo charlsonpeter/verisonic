@@ -171,12 +171,21 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
 
   return (
     <>
+      {/* Mobile: full-screen dimmed backdrop */}
       <div
-        className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-[1000] md:hidden"
+        className="fixed inset-0 bg-slate-950/80 z-[1000] md:hidden"
         onClick={onClose}
         aria-hidden
       />
-      <aside className="w-full sm:w-80 glass-card border-l border-white/5 flex flex-col z-[1001] shadow-2xl fixed max-md:inset-0 max-md:h-dvh max-md:rounded-none max-md:border-l-0 max-md:border-t-0 max-md:pt-[calc(1rem+env(safe-area-inset-top,0px))] max-md:pb-[calc(1rem+env(safe-area-inset-bottom,0px))] md:right-0 md:top-[73px] md:h-[calc(100vh-73px)] md:pt-4 md:pb-28">
+      {/* Desktop: click outside panel (keeps header/main clickable; excludes player + drawer) */}
+      <div
+        className="hidden md:block fixed top-0 left-0 right-80 bottom-36 z-[1000]"
+        onClick={onClose}
+        aria-hidden
+      />
+      <aside
+        className="w-full sm:w-80 max-md:bg-slate-950 md:glass-card border-l border-white/5 flex flex-col z-[1001] shadow-2xl fixed max-md:inset-0 max-md:h-dvh max-md:rounded-none max-md:border-l-0 max-md:border-t-0 max-md:pt-[calc(1rem+env(safe-area-inset-top,0px))] max-md:pb-[calc(1rem+env(safe-area-inset-bottom,0px))] md:right-0 md:top-[73px] md:h-[calc(100vh-73px)] md:pt-4 md:pb-28"
+      >
       {/* Header */}
       <div className="px-4 flex items-center justify-between border-b border-white/5 pb-4">
         <div className="flex items-center gap-2">

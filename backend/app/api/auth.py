@@ -1,12 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Header, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Header, Request, Response, File, UploadFile, Query
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm, HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import or_, literal, union_all
 from jose import jwt, JWTError
 from typing import List, Optional
 
 from app.db.session import get_db
-from app.models import User, Artist
-from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, UserSettingsUpdate, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, StudioProfileUpdate, RequestReactivationSchema
+from app.models import User, Artist, Track, RadioStation
+from app.schemas import UserCreate, UserLogin, UserUpdate, ChangePasswordRequest, ResetInitialPasswordRequest, Token, UserResponse, UserSettingsUpdate, TokenPayload, ArtistCreate, ArtistResponse, ArtistUpdate, StudioProfileUpdate, RequestReactivationSchema, SwitchModeRequest, PaginatedUserListResponse, PaginatedArtistListResponse, PaginatedTrackListResponse, EngagementAccountResponse, PaginatedEngagementAccountListResponse, RadioProgramEngagementResponse, RadioProgramListResponse
+from app.services.radio_programs import station_has_programs, ensure_station_program_ids
+from app.services.radio_engagement import engagement_counts_for_programs, build_program_engagement_items
 from app.core.security import (
     verify_password, get_password_hash, create_access_token, create_refresh_token,
     validate_refresh_token, revoke_refresh_token, ALGORITHM, REFRESH_COOKIE_NAME,
@@ -16,8 +19,10 @@ from app.core.config import settings
 from app.core.password_policy import validate_password
 from app.core.rate_limit import enforce_rate_limit, REFRESH_LIMIT, REFRESH_WINDOW_SEC
 from app.core.premium import paid_subscription_is_active
-from app.core.user_mode import apply_user_mode, set_user_mode
+from app.core.user_mode import apply_user_mode, set_user_mode, _resolve_db_role
 from app.services.subscription_service import apply_admin_subscription
+from app.services.licence_documents import licence_document_url, store_licence_document
+from app.services.cover_images import resolve_cover_art_url, store_profile_cover
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -51,6 +56,16 @@ def _apply_studio_profile_fields(artist: Artist, profile_in) -> None:
             if value is not None:
                 setattr(artist, field, _normalize_text(value))
     artist.profile_complete = _studio_profile_is_complete(artist)
+
+
+def _serialize_artist_response(artist: Artist, owner: Optional[User] = None) -> dict:
+    data = ArtistResponse.model_validate(artist).model_dump()
+    data["licence_document_url"] = licence_document_url(artist.licence_document_path)
+    data["cover_art_url"] = resolve_cover_art_url(artist.cover_image_path)
+    if owner:
+        data["owner_name"] = owner.full_name
+        data["owner_email"] = owner.email
+    return data
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login-form")
 security = HTTPBearer(auto_error=False)
@@ -110,7 +125,16 @@ def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
 
 
 def _clear_refresh_cookie(response: Response) -> None:
-    response.delete_cookie(key=REFRESH_COOKIE_NAME, path="/api/auth")
+    # Must match set_cookie attributes or browsers (Chrome) keep the cookie.
+    response.set_cookie(
+        key=REFRESH_COOKIE_NAME,
+        value="",
+        httponly=True,
+        secure=settings.is_production,
+        samesite="lax",
+        max_age=0,
+        path="/api/auth",
+    )
 
 
 def _issue_token_response(user: User, response: Response) -> dict:
@@ -145,6 +169,9 @@ def _resolve_authenticated_user(token: str, db: Session, *, enforce_password_res
     )
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        token_type = payload.get("type")
+        if token_type in ("refresh", "stream"):
+            raise credentials_exception
         user_id: str = payload.get("sub")
         if user_id is None:
             raise credentials_exception
@@ -170,6 +197,8 @@ def get_optional_current_user(
     token = credentials.credentials
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") in ("refresh", "stream"):
+            return None
         user_id: str = payload.get("sub")
         if user_id is None:
             return None
@@ -192,19 +221,31 @@ def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
 
 def get_current_studio_admin(current_user: User = Depends(get_current_user)) -> User:
     _ensure_password_reset_not_required(current_user)
-    if current_user.role not in ["studio_admin", "admin"]:
+    real_role = getattr(current_user, "_real_role", None) or current_user.role
+    if real_role not in ("studio_admin", "admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="The user must be a studio admin or admin to execute this action"
+            detail="The user must be a studio admin or admin to execute this action",
+        )
+    if real_role == "studio_admin" and current_user.role == "listener":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Switch to Admin mode to upload and manage tracks.",
         )
     return current_user
 
 def get_current_radio_admin(current_user: User = Depends(get_current_user)) -> User:
     _ensure_password_reset_not_required(current_user)
-    if current_user.role not in ["radio_admin", "admin"]:
+    real_role = getattr(current_user, "_real_role", None) or current_user.role
+    if real_role not in ("radio_admin", "admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="The user must be a radio admin or admin to execute this action"
+            detail="The user must be a radio admin or admin to execute this action",
+        )
+    if real_role == "radio_admin" and current_user.role == "listener":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Switch to Admin mode to manage your radio station.",
         )
     return current_user
 
@@ -267,37 +308,24 @@ def login(user_in: UserLogin, request: Request, response: Response, db: Session 
 
 @router.post("/google", response_model=Token)
 def login_google(body: dict, request: Request, response: Response, db: Session = Depends(get_db)):
-    """
-    Log in using Google Sign-In. Mocks backend OAuth verification for simple integration.
-    """
+    """Google Sign-In requires verified ID tokens — mock email login is disabled."""
     enforce_rate_limit(request, "google")
-    # Accept user info sent directly or decoded from mock id token
-    email = body.get("email")
-    name = body.get("name", "Google User")
-    
-    if not email:
-        raise HTTPException(status_code=400, detail="Google authentication payload must include email")
-        
-    user = db.query(User).filter(User.email == email).first()
-    if not user:
-        # Register new listener automatically
-        hashed_pwd = get_password_hash("GOOGLE_MOCK_LOGIN_SECRET_12345")
-        user = User(
-            email=email,
-            hashed_password=hashed_pwd,
-            full_name=name,
-            role="listener"
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-    elif not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Inactive user"
-        )
-        
-    return _issue_token_response(user, response)
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail="Google Sign-In is not configured. Use email and password.",
+    )
+
+def _user_response(user: User) -> UserResponse:
+    real_role = getattr(user, "_real_role", None) or user.role
+    response = UserResponse.model_validate(user)
+    updates: dict = {
+        "real_role": real_role,
+        "profile_image_url": resolve_cover_art_url(user.profile_image_path),
+    }
+    if user.artist_profile:
+        updates["artist_profile"] = _serialize_artist_response(user.artist_profile)
+    return response.model_copy(update=updates)
+
 
 @router.get("/me", response_model=UserResponse)
 def read_current_user(
@@ -306,9 +334,19 @@ def read_current_user(
 ):
     from app.services.subscription_service import apply_pending_subscription_if_due
 
-    apply_pending_subscription_if_due(current_user, db)
-    db.refresh(current_user)
-    return current_user
+    db_user = (
+        db.query(User)
+        .options(joinedload(User.artist_profile))
+        .filter(User.id == current_user.id)
+        .first()
+    )
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    apply_pending_subscription_if_due(db_user, db)
+    db.commit()
+    db.refresh(db_user)
+    apply_user_mode(db_user)
+    return _user_response(db_user)
 
 
 @router.put("/me/settings", response_model=UserResponse)
@@ -350,20 +388,25 @@ def logout(
 
 @router.post("/switch-mode", response_model=UserResponse)
 def switch_user_mode(
-    body: dict,
+    body: SwitchModeRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    mode = (body.get("mode") or "").strip().lower()
+    mode = body.mode.strip().lower()
     if mode not in ("admin", "listener"):
         raise HTTPException(status_code=400, detail="Mode must be 'admin' or 'listener'")
-    db_user = db.query(User).filter(User.id == current_user.id).first()
-    if not db_user or db_user.role not in ("radio_admin", "studio_admin"):
+    db_user = (
+        db.query(User)
+        .options(joinedload(User.artist_profile))
+        .filter(User.id == current_user.id)
+        .first()
+    )
+    real_role = _resolve_db_role(db_user) if db_user else None
+    if not db_user or real_role not in ("radio_admin", "studio_admin"):
         raise HTTPException(status_code=400, detail="Mode switching is not available for this account")
     set_user_mode(db_user.id, mode)
-    db.refresh(db_user)
     apply_user_mode(db_user)
-    return db_user
+    return _user_response(db_user)
 
 
 @router.post("/request-artist", response_model=UserResponse)
@@ -373,8 +416,14 @@ def request_artist(
     db: Session = Depends(get_db)
 ):
     """
-    Submit or update artist details for the currently logged-in user (listener).
+    Submit a studio-admin upgrade request (artist/studio profile pending approval).
+    Radio-admin upgrades must use /request-radio-admin.
     """
+    if (artist_in.bio or "").upper().find("[REQUESTING RADIO ADMIN") >= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Use the radio admin upgrade request for radio station promotions.",
+        )
     artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
     if artist:
         artist.stage_name = artist_in.stage_name.strip()
@@ -389,6 +438,50 @@ def request_artist(
     
     db.commit()
     db.refresh(artist)
+    db.refresh(current_user)
+    return current_user
+
+
+@router.post("/request-radio-admin", response_model=UserResponse)
+def request_radio_admin(
+    body: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Queue a radio-admin upgrade request without creating a studio Artist profile."""
+    from app.models import RadioStation
+
+    station_name = (body.get("station_name") or body.get("stage_name") or "").strip()
+    message = (body.get("message") or body.get("bio") or "").strip()
+    if not station_name:
+        raise HTTPException(status_code=400, detail="Station name is required.")
+    if not message:
+        raise HTTPException(status_code=400, detail="Message is required.")
+
+    note = f"[RADIO_ADMIN_ROLE_REQUEST] {message}"
+    existing = (
+        db.query(RadioStation)
+        .filter(RadioStation.owner_id == current_user.id)
+        .order_by(RadioStation.id.asc())
+        .first()
+    )
+    if existing:
+        existing.name = station_name
+        existing.description = note
+        existing.is_active = False
+        existing.disabled_reason = "Pending radio admin role approval"
+    else:
+        db.add(
+            RadioStation(
+                owner_id=current_user.id,
+                name=station_name,
+                description=note,
+                is_active=False,
+                disabled_reason="Pending radio admin role approval",
+            )
+        )
+
+    db.commit()
     db.refresh(current_user)
     return current_user
 
@@ -419,15 +512,95 @@ def update_studio_profile(
     return current_user
 
 
-@router.get("/admin/users", response_model=List[UserResponse])
+@router.post("/studio-profile/licence-document", response_model=UserResponse)
+async def upload_studio_licence_document(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_studio_admin),
+    db: Session = Depends(get_db),
+):
+    real_role = getattr(current_user, "_real_role", None) or current_user.role
+    if real_role == "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Platform admins can only view licence documents",
+        )
+
+    artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+    if not artist:
+        raise HTTPException(status_code=404, detail="Studio profile not found")
+
+    artist.licence_document_path = await store_licence_document(file, "studio", artist.id)
+    db.commit()
+    db.refresh(artist)
+    db_user = (
+        db.query(User)
+        .options(joinedload(User.artist_profile))
+        .filter(User.id == current_user.id)
+        .first()
+    )
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return _user_response(db_user)
+
+
+@router.post("/studio-profile/cover", response_model=UserResponse)
+async def upload_studio_cover(
+    cover_image: UploadFile = File(...),
+    current_user: User = Depends(get_current_studio_admin),
+    db: Session = Depends(get_db),
+):
+    real_role = getattr(current_user, "_real_role", None) or current_user.role
+    if real_role == "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Platform admins can only view studio profiles",
+        )
+
+    artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+    if not artist:
+        raise HTTPException(status_code=404, detail="Studio profile not found")
+
+    artist.cover_image_path = await store_profile_cover(cover_image, "studio", artist.id)
+    db.commit()
+    db.refresh(artist)
+    db_user = (
+        db.query(User)
+        .options(joinedload(User.artist_profile))
+        .filter(User.id == current_user.id)
+        .first()
+    )
+    if not db_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return _user_response(db_user)
+
+
+@router.get("/admin/users", response_model=PaginatedUserListResponse)
 def get_users_admin(
+    search: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     current_user: User = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
     """
-    Admin user management: list all users.
+    Admin user management: list users with pagination.
     """
-    return db.query(User).all()
+    query = db.query(User).order_by(User.id.desc())
+    if search and search.strip():
+        pattern = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                User.full_name.ilike(pattern),
+                User.email.ilike(pattern),
+            )
+        )
+    total = query.count()
+    users = query.offset(offset).limit(limit).all()
+    return PaginatedUserListResponse(
+        items=[_user_response(u) for u in users],
+        total=total,
+        has_more=offset + len(users) < total,
+    )
 
 
 @router.put("/admin/users/{user_id}/role", response_model=UserResponse)
@@ -449,6 +622,9 @@ def update_user_role_admin(
         raise HTTPException(status_code=404, detail="User not found")
         
     user.role = role
+
+    if role == "admin":
+        apply_admin_subscription(user, "unlimited", None, db)
     
     # Ensure Artist profile is initialized if role is updated to studio_admin
     if role == "studio_admin":
@@ -503,7 +679,7 @@ def update_user_subscription_admin(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
-    apply_admin_subscription(user, subscription, subscription_cycle)
+    apply_admin_subscription(user, subscription, subscription_cycle, db)
     db.commit()
     db.refresh(user)
     return user
@@ -576,7 +752,18 @@ def update_profile(
             
     db.commit()
     db.refresh(current_user)
-    return current_user
+    return _user_response(current_user)
+
+@router.post("/profile/avatar", response_model=UserResponse)
+async def upload_profile_avatar(
+    cover_image: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    current_user.profile_image_path = await store_profile_cover(cover_image, "users", current_user.id)
+    db.commit()
+    db.refresh(current_user)
+    return _user_response(current_user)
 
 @router.put("/change-password")
 def change_password(
@@ -664,15 +851,285 @@ def refresh_token(
     revoke_refresh_token(user.id)
     return _issue_token_response(user, response)
 
-@router.get("/admin/studios", response_model=List[ArtistResponse])
+def _apply_studio_status_filter(query, status: Optional[str]):
+    if status == "active":
+        return query.filter(Artist.is_active == True)
+    if status == "disabled":
+        return query.filter(Artist.is_active == False, Artist.reactivation_requested == False)
+    if status == "pending":
+        return query.filter(Artist.is_active == False, Artist.reactivation_requested == True)
+    return query
+
+
+def _apply_studio_search_filter(query, search: Optional[str]):
+    if not search or not search.strip():
+        return query
+    pattern = f"%{search.strip()}%"
+    return query.join(User, Artist.user_id == User.id).filter(
+        or_(
+            Artist.stage_name.ilike(pattern),
+            Artist.city.ilike(pattern),
+            Artist.country.ilike(pattern),
+            Artist.licence.ilike(pattern),
+            User.full_name.ilike(pattern),
+            User.email.ilike(pattern),
+        )
+    )
+
+
+def _engagement_studio_search_filter(query, search: Optional[str]):
+    if not search or not search.strip():
+        return query
+    pattern = f"%{search.strip()}%"
+    return query.filter(
+        or_(
+            Artist.stage_name.ilike(pattern),
+            Artist.city.ilike(pattern),
+            Artist.country.ilike(pattern),
+            User.full_name.ilike(pattern),
+            User.email.ilike(pattern),
+        )
+    )
+
+
+def _engagement_radio_search_filter(query, search: Optional[str]):
+    if not search or not search.strip():
+        return query
+    pattern = f"%{search.strip()}%"
+    return query.filter(
+        or_(
+            RadioStation.name.ilike(pattern),
+            RadioStation.city.ilike(pattern),
+            RadioStation.country.ilike(pattern),
+            User.full_name.ilike(pattern),
+            User.email.ilike(pattern),
+        )
+    )
+
+
+@router.get("/admin/engagements/accounts", response_model=PaginatedEngagementAccountListResponse)
+def get_engagement_accounts_admin(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Super admin: paginated studios and radio stations for the Engagements page.
+    Excludes platform admin accounts; only studio_admin artists and radio_admin stations.
+    """
+    studio_q = (
+        db.query(
+            literal("studio").label("kind"),
+            Artist.id.label("account_id"),
+            Artist.stage_name.label("name"),
+            Artist.city.label("city"),
+            Artist.country.label("country"),
+            Artist.is_active.label("is_active"),
+            User.full_name.label("owner_name"),
+        )
+        .join(User, Artist.user_id == User.id)
+        .filter(Artist.user_id.isnot(None), User.role == "studio_admin")
+    )
+    studio_q = _engagement_studio_search_filter(studio_q, search)
+
+    radio_q = (
+        db.query(
+            literal("radio").label("kind"),
+            RadioStation.id.label("account_id"),
+            RadioStation.name.label("name"),
+            RadioStation.city.label("city"),
+            RadioStation.country.label("country"),
+            RadioStation.is_active.label("is_active"),
+            User.full_name.label("owner_name"),
+        )
+        .join(User, RadioStation.owner_id == User.id)
+        .filter(User.role == "radio_admin")
+    )
+    radio_q = _engagement_radio_search_filter(radio_q, search)
+
+    combined = union_all(studio_q, radio_q).subquery()
+    total = db.query(combined).count()
+    rows = (
+        db.query(combined)
+        .order_by(combined.c.name.asc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+    radio_ids = [row.account_id for row in rows if row.kind == "radio"]
+    radio_program_flags: dict[int, bool] = {}
+    if radio_ids:
+        radio_stations = db.query(RadioStation).filter(RadioStation.id.in_(radio_ids)).all()
+        radio_program_flags = {st.id: station_has_programs(st) for st in radio_stations}
+
+    items = [
+        EngagementAccountResponse(
+            kind=row.kind,
+            id=row.account_id,
+            name=row.name,
+            city=row.city,
+            country=row.country,
+            is_active=row.is_active,
+            owner_name=row.owner_name,
+            has_programs=row.kind == "studio" or radio_program_flags.get(row.account_id, False),
+        )
+        for row in rows
+    ]
+    return PaginatedEngagementAccountListResponse(
+        items=items,
+        total=total,
+        has_more=offset + len(rows) < total,
+    )
+
+
+@router.get("/admin/studios", response_model=PaginatedArtistListResponse)
 def get_studios_admin(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
     current_user: User = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
     """
-    Admin studio (artist) management: list all studios.
+    Admin studio (artist) management: list studios with pagination and filters.
     """
-    return db.query(Artist).all()
+    query = (
+        db.query(Artist)
+        .options(joinedload(Artist.user))
+        .filter(Artist.user_id.isnot(None))
+    )
+    query = _apply_studio_search_filter(query, search)
+    query = _apply_studio_status_filter(query, status)
+    total = query.count()
+    artists = query.order_by(Artist.id.desc()).offset(offset).limit(limit).all()
+    items = [_serialize_artist_response(artist, artist.user) for artist in artists]
+    return PaginatedArtistListResponse(
+        items=items,
+        total=total,
+        has_more=offset + len(artists) < total,
+    )
+
+
+@router.get("/admin/studios/{artist_id}/tracks", response_model=PaginatedTrackListResponse)
+def get_studio_tracks_admin(
+    artist_id: int,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """
+    Super admin: paginated tracks for a studio with engagement counts.
+    """
+    artist = (
+        db.query(Artist)
+        .options(joinedload(Artist.user))
+        .filter(Artist.id == artist_id)
+        .first()
+    )
+    if not artist or not artist.user or artist.user.role != "studio_admin":
+        raise HTTPException(status_code=404, detail="Studio/Artist not found")
+
+    from app.services.track_management import apply_manage_track_search
+    from app.api.music import serialize_track
+
+    query = (
+        db.query(Track)
+        .options(
+            joinedload(Track.analysis_report),
+            joinedload(Track.artist).joinedload(Artist.user),
+            joinedload(Track.album),
+            joinedload(Track.genres),
+        )
+        .filter(Track.artist_id == artist_id, Track.approved == True)
+    )
+    query = apply_manage_track_search(query, search, include_owner=False)
+    total = query.count()
+    tracks = query.order_by(Track.created_at.desc()).offset(offset).limit(limit).all()
+    items = [
+        serialize_track(t, db, viewer=current_user, include_engagement=True)
+        for t in tracks
+    ]
+    return PaginatedTrackListResponse(
+        items=items,
+        total=total,
+        has_more=offset + len(tracks) < total,
+    )
+
+
+def _get_engagement_radio_station(db: Session, station_id: int) -> RadioStation:
+    station = (
+        db.query(RadioStation)
+        .options(joinedload(RadioStation.owner))
+        .filter(RadioStation.id == station_id)
+        .first()
+    )
+    if not station or not station.owner or station.owner.role != "radio_admin":
+        raise HTTPException(status_code=404, detail="Radio station not found")
+    return station
+
+
+def _find_program_by_key(station: RadioStation, db: Session, program_key: str) -> dict:
+    programs = ensure_station_program_ids(station, db)
+    for program in programs:
+        if program.get("id") == program_key:
+            return program
+    raise HTTPException(status_code=404, detail="Program not found")
+
+
+@router.get("/admin/radio/{station_id}/programs", response_model=RadioProgramListResponse)
+def get_radio_programs_admin(
+    station_id: int,
+    search: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    station = _get_engagement_radio_station(db, station_id)
+    programs = ensure_station_program_ids(station, db)
+    if search and search.strip():
+        pattern = search.strip().lower()
+        programs = [
+            p for p in programs
+            if pattern in str(p.get("title", "")).lower()
+            or pattern in str(p.get("rj", "")).lower()
+        ]
+    items = [
+        RadioProgramEngagementResponse(**item)
+        for item in build_program_engagement_items(station_id, programs, db)
+    ]
+    return RadioProgramListResponse(items=items, total=len(items))
+
+
+@router.get(
+    "/admin/radio/{station_id}/programs/{program_key}/engagement",
+    response_model=RadioProgramEngagementResponse,
+)
+def get_radio_program_engagement_admin(
+    station_id: int,
+    program_key: str,
+    current_user: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    station = _get_engagement_radio_station(db, station_id)
+    program = _find_program_by_key(station, db, program_key)
+    counts = engagement_counts_for_programs(db, station_id, [program_key]).get(program_key, {})
+    return RadioProgramEngagementResponse(
+        station_id=station_id,
+        program_key=program_key,
+        title=str(program.get("title") or "Untitled Program"),
+        rj_name=program.get("rj"),
+        time_from=program.get("timeFrom"),
+        time_to=program.get("timeTo"),
+        like_count=counts.get("like_count", 0),
+        dislike_count=counts.get("dislike_count", 0),
+        comment_count=counts.get("comment_count", 0),
+    )
+
 
 @router.put("/admin/studios/{artist_id}", response_model=ArtistResponse)
 def update_studio_admin(
@@ -738,7 +1195,9 @@ def update_studio_admin(
         
     db.commit()
     db.refresh(artist)
-    return artist
+    owner = db.query(User).filter(User.id == artist.user_id).first()
+    return _serialize_artist_response(artist, owner)
+
 
 @router.post("/request-reactivation", response_model=ArtistResponse)
 def request_studio_reactivation(

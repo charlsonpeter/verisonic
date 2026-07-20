@@ -1,62 +1,42 @@
-import React, { useRef, useEffect, useMemo } from 'react';
+import React, { useRef, useEffect, useMemo, useState } from 'react';
 import { X, Music } from 'lucide-react';
 import { useAudio } from '../../context/AudioContext';
 import { AppModal } from './AppModal';
+import {
+  isSynchronizedLyrics,
+  lineIndexForTime,
+  parseLyricsFromText,
+} from '../../utils/lrc';
 
 interface LyricsModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-interface ParsedLine {
-  time: number;
-  text: string;
-  words: string[];
-}
-
 export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => {
-  const { currentTrack, currentTime, activeRadioStation, isPlaying } = useAudio();
+  const { currentTrack, subscribeTime, activeRadioStation, isPlaying } = useAudio();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const activeLineRef = useRef<HTMLDivElement | null>(null);
+  const [activeLineIndex, setActiveLineIndex] = useState(-1);
 
-  const parsedLines = useMemo((): ParsedLine[] => {
-    if (!currentTrack) return [];
-
-    const lyricsText = currentTrack.lyrics;
-    if (!lyricsText || lyricsText.trim() === '') return [];
-
-    const rawLines = lyricsText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-    const timestampRegex = /^\[(\d{2}):(\d{2})(?:\.(\d{2}))?\]\s*(.*)$/;
-    const hasTimestamps = rawLines.some(line => timestampRegex.test(line));
-
-    if (hasTimestamps) {
-      return parseLyricsLines(rawLines);
-    }
-
-    return rawLines.map(lineText => ({
-      time: -1,
-      text: lineText,
-      words: [],
-    }));
+  const parsedLines = useMemo(() => {
+    if (!currentTrack?.lyrics || currentTrack.lyrics.trim() === '') return [];
+    return parseLyricsFromText(currentTrack.lyrics);
   }, [currentTrack]);
 
-  const isSynchronized = useMemo(() => {
-    return parsedLines.length > 0 && parsedLines.every(l => l.time >= 0);
-  }, [parsedLines]);
+  const isSynchronized = useMemo(() => isSynchronizedLyrics(parsedLines), [parsedLines]);
 
-  const activeLineIndex = useMemo(() => {
-    if (!isSynchronized || parsedLines.length === 0) return -1;
-
-    let activeIdx = -1;
-    for (let i = 0; i < parsedLines.length; i++) {
-      if (currentTime >= parsedLines[i].time) {
-        activeIdx = i;
-      } else {
-        break;
-      }
+  useEffect(() => {
+    if (!isOpen || !isSynchronized) {
+      setActiveLineIndex(-1);
+      return;
     }
-    return activeIdx;
-  }, [parsedLines, currentTime, isSynchronized]);
+
+    return subscribeTime((time) => {
+      const next = lineIndexForTime(parsedLines, time);
+      setActiveLineIndex((prev) => (prev === next ? prev : next));
+    });
+  }, [isOpen, isSynchronized, parsedLines, subscribeTime]);
 
   useEffect(() => {
     if (isSynchronized && activeLineRef.current && containerRef.current) {
@@ -66,36 +46,6 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
       });
     }
   }, [activeLineIndex, isSynchronized]);
-
-  function parseLyricsLines(lines: string[]): ParsedLine[] {
-    const timestampRegex = /^\[(\d{2}):(\d{2})(?:\.(\d{2}))?\]\s*(.*)$/;
-    const parsed: ParsedLine[] = [];
-
-    lines.forEach((line) => {
-      const match = line.match(timestampRegex);
-      if (match) {
-        const mins = parseInt(match[1], 10);
-        const secs = parseInt(match[2], 10);
-        const centis = match[3] ? parseInt(match[3], 10) : 0;
-        const time = mins * 60 + secs + centis / 100;
-        const text = match[4].trim();
-        parsed.push({
-          time,
-          text,
-          words: text.split(/\s+/).filter(w => w.length > 0),
-        });
-      } else {
-        const prevTime = parsed.length > 0 ? parsed[parsed.length - 1].time + 3.5 : 0;
-        parsed.push({
-          time: prevTime,
-          text: line,
-          words: line.split(/\s+/).filter(w => w.length > 0),
-        });
-      }
-    });
-
-    return parsed.sort((a, b) => a.time - b.time);
-  }
 
   if (activeRadioStation) {
     return (

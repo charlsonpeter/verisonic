@@ -17,6 +17,8 @@ export function getPageTitle(activeTab: string, ctx: PageTitleContext = {}): str
       return 'Radio Stations';
     case 'search':
       return 'Search';
+    case 'artist':
+      return 'Artist Profile';
     case 'favorites':
       return 'My Favorites';
     case 'playlists':
@@ -33,14 +35,21 @@ export function getPageTitle(activeTab: string, ctx: PageTitleContext = {}): str
       return 'Settings';
     case 'users':
       return 'User Management';
+    case 'accounts':
+      return 'Accounts';
     case 'tracks':
       return 'Manage Tracks';
     case 'track-list':
       return 'Tracks List';
+    case 'engagements':
+    case 'studio-tracks-engagement':
+      return 'Engagements';
     case 'broadcaster-download':
       return 'Broadcaster App';
     case 'analytics':
       return 'System Metrics';
+    case 'wallet':
+      return 'My Wallet';
     case 'reports':
       return 'Acoustic Reports';
     case 'details':

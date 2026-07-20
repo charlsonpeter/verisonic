@@ -1,9 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { SubscriptionDates } from '../components/subscription/SubscriptionDates';
 import { AppModal } from '../components/shared/AppModal';
 import { Users, Trash2, Eye, Pencil, Mail, Shield, Crown, Sparkles, UserCircle2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { showConfirm } from '../utils/swal';
+import { TableSkeleton, UserCardSkeleton } from '../components/shared/skeleton';
+import { useLazyList, DEFAULT_LAZY_PAGE_SIZE } from '../hooks/useLazyList';
+import { LazyListSentinel } from '../components/shared/LazyListSentinel';
+import { ListSearchInput } from '../components/shared/ListSearchInput';
 
 const roleBadgeClass = (role: string) => {
   switch (role) {
@@ -48,9 +52,37 @@ const parseUpgradeRequest = (bio?: string | null) => {
 
 export const UsersManagement: React.FC = () => {
   const { token, currentUser } = useAuth();
-  const [users, setUsers] = useState<any[]>([]);
   const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const usersList = useLazyList<any>({
+    fetchPage: useCallback(async (offset, limit) => {
+      if (!token) return { items: [], hasMore: false };
+      const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      if (searchQuery.trim()) params.set('search', searchQuery.trim());
+      const res = await fetch(`/api/auth/admin/users?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (offset === 0) {
+          setListError(typeof data.detail === 'string' ? data.detail : 'Could not load users.');
+        }
+        return { items: [], hasMore: false };
+      }
+      if (offset === 0) setListError(null);
+      const data = await res.json();
+      return { items: data.items ?? [], hasMore: Boolean(data.has_more) };
+    }, [token, searchQuery]),
+    resetKey: token ? `users-${searchQuery}` : null,
+    enabled: !!token,
+    pageSize: DEFAULT_LAZY_PAGE_SIZE,
+  });
+
+  const users = usersList.items;
+  const isLoading = usersList.loading;
+  const [isSaving, setIsSaving] = useState(false);
 
   // Modal State
   const [selectedUser, setSelectedUser] = useState<any | null>(null);
@@ -68,26 +100,7 @@ export const UsersManagement: React.FC = () => {
     setIsEditMode(false);
   };
 
-  const fetchUsers = async () => {
-    setIsLoading(true);
-    try {
-      const res = await fetch('/api/auth/admin/users', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setUsers(data);
-      }
-    } catch (e) {
-      console.error("Failed to fetch users:", e);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchUsers();
-  }, []);
+  const fetchUsers = () => usersList.reload();
 
   const handleOpenModal = (user: any) => {
     setSelectedUser(user);
@@ -96,7 +109,7 @@ export const UsersManagement: React.FC = () => {
       fullName: user.full_name || '',
       email: user.email || '',
       role: user.role || 'listener',
-      subscription: user.subscription || 'free',
+      subscription: user.role === 'admin' ? 'unlimited' : (user.subscription || 'free'),
       subscriptionCycle: user.subscription_cycle || 'monthly'
     });
   };
@@ -104,7 +117,7 @@ export const UsersManagement: React.FC = () => {
   const handleSaveUser = async () => {
     if (!selectedUser) return;
     setMessage(null);
-    setIsLoading(true);
+    setIsSaving(true);
     try {
       // 1. Update basic details (email, full name) if changed
       if (editForm.fullName !== (selectedUser.full_name || '') || editForm.email !== selectedUser.email) {
@@ -122,7 +135,7 @@ export const UsersManagement: React.FC = () => {
         if (!detailsRes.ok) {
           const data = await detailsRes.json();
           setMessage({ type: 'error', text: data.detail || 'Failed to update user details.' });
-          setIsLoading(false);
+          setIsSaving(false);
           return;
         }
       }
@@ -136,7 +149,7 @@ export const UsersManagement: React.FC = () => {
         if (!roleRes.ok) {
           const data = await roleRes.json();
           setMessage({ type: 'error', text: data.detail || 'Failed to update user role.' });
-          setIsLoading(false);
+          setIsSaving(false);
           return;
         }
       }
@@ -157,7 +170,7 @@ export const UsersManagement: React.FC = () => {
         if (!subRes.ok) {
           const data = await subRes.json();
           setMessage({ type: 'error', text: data.detail || 'Failed to update subscription.' });
-          setIsLoading(false);
+          setIsSaving(false);
           return;
         }
       }
@@ -168,7 +181,7 @@ export const UsersManagement: React.FC = () => {
     } catch (e) {
       setMessage({ type: 'error', text: 'Connection failed.' });
     } finally {
-      setIsLoading(false);
+      setIsSaving(false);
     }
   };
 
@@ -212,9 +225,23 @@ export const UsersManagement: React.FC = () => {
         </div>
       )}
 
+      <div className="flex justify-end">
+        <ListSearchInput
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder="Search by name or email..."
+        />
+      </div>
+
+      {listError && (
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+          {listError}
+        </div>
+      )}
+
       <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
         {isLoading ? (
-          <p className="p-8 text-xs text-slate-500 text-center">Loading platform users...</p>
+          <TableSkeleton rows={6} variant="users" />
         ) : users.length === 0 ? (
           <p className="p-8 text-xs text-slate-500 text-center font-bold">No users found.</p>
         ) : (
@@ -293,12 +320,17 @@ export const UsersManagement: React.FC = () => {
             </tbody>
           </table>
         )}
+        <LazyListSentinel
+          hasMore={usersList.hasMore}
+          loading={usersList.loadingMore}
+          onLoadMore={usersList.loadMore}
+        />
       </div>
 
       {/* Mobile card list */}
       <div className="md:hidden space-y-3">
         {isLoading ? (
-          <p className="p-8 text-xs text-slate-500 text-center">Loading platform users...</p>
+          <UserCardSkeleton count={4} />
         ) : users.length === 0 ? (
           <p className="p-8 text-xs text-slate-500 text-center font-bold">No users found.</p>
         ) : (
@@ -355,6 +387,11 @@ export const UsersManagement: React.FC = () => {
             </div>
           ))
         )}
+        <LazyListSentinel
+          hasMore={usersList.hasMore}
+          loading={usersList.loadingMore}
+          onLoadMore={usersList.loadMore}
+        />
       </div>
 
       <AppModal
@@ -404,7 +441,7 @@ export const UsersManagement: React.FC = () => {
               <button
                 type="button"
                 onClick={handleSaveUser}
-                disabled={isLoading}
+                disabled={isSaving}
                 className="px-5 py-2.5 bg-gradient-to-r from-rose-500 to-rose-600 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 text-white text-xs font-bold rounded-xl shadow-lg shadow-rose-500/20 transition cursor-pointer"
               >
                 Save Changes
@@ -461,7 +498,16 @@ export const UsersManagement: React.FC = () => {
                   <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1.5">Role</label>
                   <select
                     value={editForm.role}
-                    onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
+                    onChange={(e) => {
+                      const role = e.target.value;
+                      setEditForm({
+                        ...editForm,
+                        role,
+                        ...(role === 'admin'
+                          ? { subscription: 'unlimited', subscriptionCycle: '' }
+                          : {}),
+                      });
+                    }}
                     disabled={selectedUser.id === currentUser?.id}
                     className="w-full bg-slate-950/60 border border-white/5 rounded-xl p-2.5 text-sm text-slate-200 outline-none focus:border-rose-500/50 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed font-semibold"
                   >
@@ -484,7 +530,8 @@ export const UsersManagement: React.FC = () => {
                         subscriptionCycle: subscription === 'premium' ? editForm.subscriptionCycle : '',
                       });
                     }}
-                    className="w-full bg-slate-950/60 border border-white/5 rounded-xl p-2.5 text-sm text-slate-200 outline-none focus:border-rose-500/50 cursor-pointer font-semibold"
+                    disabled={editForm.role === 'admin'}
+                    className="w-full bg-slate-950/60 border border-white/5 rounded-xl p-2.5 text-sm text-slate-200 outline-none focus:border-rose-500/50 cursor-pointer font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
                   >
                     <option value="free">Free</option>
                     <option value="premium">Premium</option>

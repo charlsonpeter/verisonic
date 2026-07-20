@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense, lazy } from 'react';
 import { 
   Play, Pause, Volume2, VolumeX, Search, 
   ShieldCheck, Radio, BarChart2, Music, CheckCircle, 
@@ -25,33 +25,45 @@ import { TrackRow } from './components/shared/TrackRow';
 import { LyricsModal } from './components/shared/LyricsModal';
 import { AcousticScoreBreakdown } from './components/shared/AcousticScoreBreakdown';
 
-// Page components
-import { LandingPage } from './pages/LandingPage';
-import { Home } from './pages/Home';
-import { Radio as RadioPage } from './pages/Radio';
-import { Search as SearchPage } from './pages/Search';
-import { Artist as ArtistPage } from './pages/Artist';
-import { Playlist as PlaylistPage } from './pages/Playlist';
-import { MusicDetails } from './pages/MusicDetails';
-import { UserProfile } from './pages/UserProfile';
-import { Favorites } from './pages/Favorites';
-import { StationProfile } from './pages/StationProfile';
-import { StudioProfile } from './pages/StudioProfile';
-import { Settings } from './pages/Settings';
-import { AuthPage } from './pages/AuthPage';
-import { ForceAdminPasswordReset } from './pages/ForceAdminPasswordReset';
-import { UsersManagement } from './pages/UsersManagement';
-import { TracksManagement } from './pages/TracksManagement';
-import { StudioTrackList } from './pages/StudioTrackList';
-import { Contact } from './pages/Contact';
-import { BroadcasterDownload } from './pages/BroadcasterDownload';
-import { AdminAnalytics } from './pages/AdminAnalytics';
+// Shared skeleton fallback for lazy-loaded pages
+import { PageSkeleton } from './components/shared/skeleton';
+
+// Page components (lazy-loaded)
+const LandingPage = lazy(() => import('./pages/LandingPage').then((m) => ({ default: m.LandingPage })));
+const Home = lazy(() => import('./pages/Home').then((m) => ({ default: m.Home })));
+const RadioPage = lazy(() => import('./pages/Radio').then((m) => ({ default: m.Radio })));
+const SearchPage = lazy(() => import('./pages/Search').then((m) => ({ default: m.Search })));
+const PlaylistPage = lazy(() => import('./pages/Playlist').then((m) => ({ default: m.Playlist })));
+const MusicDetails = lazy(() => import('./pages/MusicDetails').then((m) => ({ default: m.MusicDetails })));
+const UserProfile = lazy(() => import('./pages/UserProfile').then((m) => ({ default: m.UserProfile })));
+const Favorites = lazy(() => import('./pages/Favorites').then((m) => ({ default: m.Favorites })));
+const StationProfile = lazy(() => import('./pages/StationProfile').then((m) => ({ default: m.StationProfile })));
+const StudioProfile = lazy(() => import('./pages/StudioProfile').then((m) => ({ default: m.StudioProfile })));
+const RadioStationsManagement = lazy(() => import('./pages/RadioStationsManagement').then((m) => ({ default: m.RadioStationsManagement })));
+const StudiosManagement = lazy(() => import('./pages/StudiosManagement').then((m) => ({ default: m.StudiosManagement })));
+const Settings = lazy(() => import('./pages/Settings').then((m) => ({ default: m.Settings })));
+const AuthPage = lazy(() => import('./pages/AuthPage').then((m) => ({ default: m.AuthPage })));
+const ForceAdminPasswordReset = lazy(() =>
+  import('./pages/ForceAdminPasswordReset').then((m) => ({ default: m.ForceAdminPasswordReset }))
+);
+const UsersManagement = lazy(() => import('./pages/UsersManagement').then((m) => ({ default: m.UsersManagement })));
+const AccountsManagement = lazy(() => import('./pages/AccountsManagement').then((m) => ({ default: m.AccountsManagement })));
+const TracksManagement = lazy(() => import('./pages/TracksManagement').then((m) => ({ default: m.TracksManagement })));
+const StudioTrackList = lazy(() => import('./pages/StudioTrackList').then((m) => ({ default: m.StudioTrackList })));
+const StudioTracksEngagement = lazy(() =>
+  import('./pages/StudioTracksEngagement').then((m) => ({ default: m.StudioTracksEngagement }))
+);
+const Contact = lazy(() => import('./pages/Contact').then((m) => ({ default: m.Contact })));
+const BroadcasterDownload = lazy(() => import('./pages/BroadcasterDownload').then((m) => ({ default: m.BroadcasterDownload })));
+const AdminAnalytics = lazy(() => import('./pages/AdminAnalytics').then((m) => ({ default: m.AdminAnalytics })));
+const Wallet = lazy(() => import('./pages/Wallet').then((m) => ({ default: m.Wallet })));
+const ArtistPage = lazy(() => import('./pages/Artist').then((m) => ({ default: m.Artist })));
 
 const API_URL = '/api';
 
 // Headless UI Router Core
 function DashboardContent() {
-  const { currentUser, token, hasRadioStation, hasStudioProfileComplete, mustResetPassword, canAccessPlatformSettings, canAccessStationProfile, userMode } = useAuth();
+  const { currentUser, token, hasRadioStation, hasStudioProfileComplete, mustResetPassword, canAccessPlatformSettings, canAccessStationProfile, serverUserMode } = useAuth();
   const { playTrack, playQueue, addToQueue, favorites } = useAudio();
 
   // Route/Tab Switcher state
@@ -66,8 +78,30 @@ function DashboardContent() {
     return 'landing';
   });
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [selectedSearchArtist, setSelectedSearchArtist] = useState<string | null>(null);
+  const [selectedSearchAlbum, setSelectedSearchAlbum] = useState<string | null>(null);
+  const [selectedSearchPlaylistId, setSelectedSearchPlaylistId] = useState<number | null>(null);
+  const [selectedArtistName, setSelectedArtistName] = useState<string | null>(null);
   const [isQueueOpen, setIsQueueOpen] = useState<boolean>(false);
   const [isLyricsOpen, setIsLyricsOpen] = useState<boolean>(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 767px)');
+    const onChange = () => setIsMobileViewport(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
+  const replaceHash = (tab: string) => {
+    const next = `#${tab}`;
+    if (window.location.hash !== next) {
+      window.history.replaceState(null, '', next);
+    }
+  };
 
   // Sync activeTab with localStorage & URL Hash
   useEffect(() => {
@@ -95,9 +129,18 @@ function DashboardContent() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, [activeTab, mustResetPassword]);
 
+  // Logged-in users should not land on marketing/auth via browser Back
+  useEffect(() => {
+    if (token && !mustResetPassword && (activeTab === 'landing' || activeTab === 'auth')) {
+      replaceHash('home');
+      setActiveTab('home');
+    }
+  }, [token, activeTab, mustResetPassword]);
+
   // Handle logout redirect or invalid session redirect
   useEffect(() => {
-    if (!token && activeTab !== 'auth') {
+    if (!token && activeTab !== 'auth' && activeTab !== 'landing' && activeTab !== 'contact') {
+      replaceHash('landing');
       setActiveTab('landing');
       localStorage.removeItem('activeTab');
     }
@@ -123,34 +166,75 @@ function DashboardContent() {
     }
   }, [activeTab, canAccessStationProfile]);
 
+  useEffect(() => {
+    if (activeTab === 'history') {
+      setActiveTab('home');
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    const role = currentUser?.real_role || currentUser?.role;
+    if (
+      (activeTab === 'accounts' || activeTab === 'users' || activeTab === 'analytics')
+      && role !== 'admin'
+    ) {
+      setActiveTab('home');
+    }
+    if (activeTab === 'reports' && role !== 'admin' && role !== 'studio_admin') {
+      setActiveTab('home');
+    }
+  }, [activeTab, currentUser?.role, currentUser?.real_role]);
+
+  useEffect(() => {
+    if (
+      activeTab === 'contact' &&
+      currentUser?.role === 'admin'
+    ) {
+      setActiveTab('accounts');
+    }
+  }, [activeTab, currentUser?.role]);
+
+  useEffect(() => {
+    if (activeTab === 'studio-tracks-engagement') {
+      setActiveTab('engagements');
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'engagements' && currentUser?.role !== 'admin') {
+      setActiveTab('home');
+    }
+  }, [activeTab, currentUser?.role]);
+
   // Hide studio admin manage menus in listen mode
   useEffect(() => {
     const role = currentUser?.real_role || currentUser?.role;
-    if (currentUser && role === 'studio_admin' && userMode === 'listener') {
-      if (activeTab === 'tracks' || activeTab === 'studio-profile') {
+    if (currentUser && role === 'studio_admin' && serverUserMode === 'listener') {
+      if (activeTab === 'tracks' || activeTab === 'studio-profile' || activeTab === 'track-list') {
         setActiveTab('home');
       }
     }
-  }, [currentUser, activeTab, userMode]);
+  }, [currentUser, activeTab, serverUserMode]);
 
   // Route protection redirect for Radio Admins who do NOT have a station yet (admin mode only)
   useEffect(() => {
     const role = currentUser?.real_role || currentUser?.role;
-    if (currentUser && role === 'radio_admin' && !hasRadioStation && userMode === 'admin') {
-      if (activeTab !== 'radio' && activeTab !== 'contact' && activeTab !== 'settings' && activeTab !== 'profile' && activeTab !== 'station-profile' && activeTab !== 'studio-profile' && activeTab !== 'broadcaster-download') {
+    if (currentUser && role === 'radio_admin' && !hasRadioStation && serverUserMode === 'admin') {
+      if (activeTab !== 'radio' && activeTab !== 'contact' && activeTab !== 'settings' && activeTab !== 'profile' && activeTab !== 'artist' && activeTab !== 'station-profile' && activeTab !== 'studio-profile' && activeTab !== 'broadcaster-download' && activeTab !== 'wallet') {
         setActiveTab('radio');
       }
     }
-  }, [currentUser, activeTab, hasRadioStation, userMode]);
+  }, [currentUser, activeTab, hasRadioStation, serverUserMode]);
 
   // Restrict studio admin admin mode to tracks list, contact, and account-menu pages
   useEffect(() => {
     const role = currentUser?.real_role || currentUser?.role;
-    if (currentUser && role === 'studio_admin' && userMode === 'admin') {
+    if (currentUser && role === 'studio_admin' && serverUserMode === 'admin') {
       const onboardingAllowed = new Set([
         'studio-profile',
         'contact',
         'profile',
+        'artist',
         'settings',
         'admin-password-reset',
       ]);
@@ -159,9 +243,11 @@ function DashboardContent() {
             'track-list',
             'contact',
             'profile',
+            'artist',
             'studio-profile',
             'tracks',
             'reports',
+            'wallet',
             'admin-password-reset',
           ])
         : onboardingAllowed;
@@ -169,7 +255,7 @@ function DashboardContent() {
         setActiveTab(hasStudioProfileComplete ? 'track-list' : 'studio-profile');
       }
     }
-  }, [currentUser, activeTab, userMode, hasStudioProfileComplete]);
+  }, [currentUser, activeTab, serverUserMode, hasStudioProfileComplete]);
 
   useEffect(() => {
     if (activeTab === 'discover') {
@@ -252,16 +338,53 @@ function DashboardContent() {
         }
       }
     } catch (e) {
-      if (selectedReportTrack && selectedReportTrack.id === trackId) {
-        setSelectedReportTrack({ ...selectedReportTrack, approved: approve });
-      }
+      console.warn('Failed to toggle track approval:', e);
     }
+  };
+
+  const openArtistPage = (artistName: string) => {
+    setSelectedArtistName(artistName);
+    setSelectedSearchArtist(null);
+    setActiveTab('artist');
   };
 
   const handleDetailsView = (track: any) => {
     setSelectedDetailsTrack(track);
+    if (track?.id != null) {
+      sessionStorage.setItem('selectedDetailsTrackId', String(track.id));
+    }
     setActiveTab('details');
   };
+
+  // Restore track details after refresh / direct #details hash (track lives in React state only)
+  useEffect(() => {
+    if (activeTab !== 'details') return;
+    if (selectedDetailsTrack?.id) {
+      sessionStorage.setItem('selectedDetailsTrackId', String(selectedDetailsTrack.id));
+      return;
+    }
+
+    const savedId = sessionStorage.getItem('selectedDetailsTrackId');
+    if (!savedId) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/music/${savedId}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
+        if (!res.ok) throw new Error('Track not found');
+        const data = await res.json();
+        if (!cancelled) setSelectedDetailsTrack(data);
+      } catch {
+        if (!cancelled) sessionStorage.removeItem('selectedDetailsTrackId');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, selectedDetailsTrack?.id, token]);
 
   // Helper circle chart render
   const renderCircularProgress = (score: number) => {
@@ -297,7 +420,13 @@ function DashboardContent() {
       case 'landing':
         return <LandingPage onNavigate={setActiveTab} />;
       case 'home':
-        return <Home onNavigate={setActiveTab} onViewDetails={handleDetailsView} />;
+        return (
+          <Home
+            onNavigate={setActiveTab}
+            onViewDetails={handleDetailsView}
+            onArtistClick={openArtistPage}
+          />
+        );
       case 'radio':
         return <RadioPage />;
       case 'search':
@@ -306,6 +435,22 @@ function DashboardContent() {
             onViewDetails={handleDetailsView}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
+            selectedArtist={selectedSearchArtist}
+            setSelectedArtist={setSelectedSearchArtist}
+            selectedAlbum={selectedSearchAlbum}
+            setSelectedAlbum={setSelectedSearchAlbum}
+            selectedPlaylistId={selectedSearchPlaylistId}
+            setSelectedPlaylistId={setSelectedSearchPlaylistId}
+            onOpenArtistPage={openArtistPage}
+          />
+        );
+      case 'artist':
+        return (
+          <ArtistPage
+            artistName={selectedArtistName}
+            onViewDetails={handleDetailsView}
+            onArtistClick={openArtistPage}
+            onBack={() => setActiveTab('home')}
           />
         );
       case 'favorites':
@@ -313,30 +458,51 @@ function DashboardContent() {
       case 'playlists':
         return <PlaylistPage onViewDetails={handleDetailsView} />;
       case 'details':
-        return <MusicDetails track={selectedDetailsTrack} onNavigate={setActiveTab} />;
+        return <MusicDetails track={selectedDetailsTrack} onNavigate={setActiveTab} onArtistClick={openArtistPage} />;
       case 'profile':
         return <UserProfile />;
       case 'station-profile':
-        return <StationProfile onNavigate={setActiveTab} />;
+        return (currentUser?.real_role || currentUser?.role) === 'admin'
+          ? <RadioStationsManagement />
+          : <StationProfile onNavigate={setActiveTab} />;
       case 'studio-profile':
-        return <StudioProfile />;
+        return (currentUser?.real_role || currentUser?.role) === 'admin'
+          ? <StudiosManagement />
+          : <StudioProfile onNavigate={setActiveTab} />;
       case 'settings':
         return <Settings />;
       case 'users':
         return <UsersManagement />;
+      case 'accounts':
+        return <AccountsManagement />;
       case 'tracks':
         return <TracksManagement onViewReport={viewQualityReport} />;
       case 'track-list':
-        return <StudioTrackList />;
+        return <StudioTrackList onViewReport={viewQualityReport} />;
+      case 'engagements':
+      case 'studio-tracks-engagement':
+        return <StudioTracksEngagement />;
       case 'contact':
         return <Contact />;
       case 'broadcaster-download':
         return <BroadcasterDownload />;
       case 'auth':
-        return <AuthPage onSuccess={() => setActiveTab('home')} />;
+        return (
+          <AuthPage
+            onSuccess={() => {
+              replaceHash('home');
+              setActiveTab('home');
+            }}
+          />
+        );
       case 'admin-password-reset':
         return (
-          <ForceAdminPasswordReset onSuccess={() => setActiveTab('home')} />
+          <ForceAdminPasswordReset
+            onSuccess={() => {
+              replaceHash('home');
+              setActiveTab('home');
+            }}
+          />
         );
       
 
@@ -615,6 +781,8 @@ function DashboardContent() {
       // Admin Analytics Dashboard
       case 'analytics':
         return <AdminAnalytics analyticsData={analyticsData} onLoad={fetchAnalytics} />;
+      case 'wallet':
+        return <Wallet />;
 
       default:
         return <LandingPage onNavigate={setActiveTab} />;
@@ -622,38 +790,53 @@ function DashboardContent() {
   };
 
   const isPasswordResetGate = mustResetPassword || activeTab === 'admin-password-reset';
-  const hideAppChrome = activeTab === 'landing' || activeTab === 'auth' || isPasswordResetGate;
+  const hideAppChrome =
+    activeTab === 'landing' ||
+    activeTab === 'auth' ||
+    isPasswordResetGate ||
+    (activeTab === 'contact' && !token);
 
   return (
     <div className="flex flex-1 min-h-0 h-[100dvh] max-h-[100dvh] w-full box-border pt-[env(safe-area-inset-top,0px)] bg-slate-950 text-slate-100 overflow-hidden font-sans select-none relative">
       {/* Background Blobs */}
-      <div className="absolute top-10 left-10 w-96 h-96 bg-rose-600/5 rounded-full blur-[110px] pointer-events-none animate-blob-1" />
-      <div className="absolute top-1/3 right-1/4 w-[35rem] h-[35rem] bg-pink-600/5 rounded-full blur-[130px] pointer-events-none animate-blob-2" />
+      <div className="absolute top-10 left-10 w-96 h-96 bg-rose-600/5 rounded-full blur-[110px] pointer-events-none animate-blob-1 max-md:hidden" />
+      <div className="absolute top-1/3 right-1/4 w-[35rem] h-[35rem] bg-pink-600/5 rounded-full blur-[130px] pointer-events-none animate-blob-2 max-md:hidden" />
       
       {/* 2. Main content viewport */}
       <div className="flex-1 flex flex-col min-w-0 min-h-0 h-full overflow-hidden">
         {!hideAppChrome && (
           <Header 
             searchQuery={searchQuery} 
-            setSearchQuery={setSearchQuery} 
+            setSearchQuery={setSearchQuery}
+            selectedSearchArtist={selectedSearchArtist}
+            setSelectedSearchArtist={setSelectedSearchArtist}
+            setSelectedSearchAlbum={setSelectedSearchAlbum}
+            setSelectedSearchPlaylistId={setSelectedSearchPlaylistId}
             activeTab={activeTab} 
             setActiveTab={setActiveTab}
             pageTitleOverride={
-              activeTab === 'details' ? selectedDetailsTrack?.title ?? 'Track Details' : undefined
+              activeTab === 'details'
+                ? selectedDetailsTrack?.title ?? 'Track Details'
+                : activeTab === 'artist'
+                  ? selectedArtistName ?? 'Artist'
+                  : undefined
             }
+            onOpenArtistPage={openArtistPage}
           />
         )}
         
         <main
           ref={mainRef}
           className={`flex-1 min-h-0 overflow-y-auto overscroll-y-contain ${hideAppChrome ? '' : 'md:pb-36'} ${
-            activeTab === 'landing' || activeTab === 'auth'
+            activeTab === 'landing' || activeTab === 'auth' || (activeTab === 'contact' && !token)
               ? 'px-0 py-0'
               : 'px-6 md:px-8 max-md:py-3'
           }`}
         >
           <div key={activeTab} className="animate-page-entry w-full">
-            {renderTabContent()}
+            <Suspense fallback={<PageSkeleton />}>
+              {renderTabContent()}
+            </Suspense>
           </div>
         </main>
 
@@ -661,13 +844,15 @@ function DashboardContent() {
         <div className="md:hidden flex-shrink-0 pb-[env(safe-area-inset-bottom,0px)] bg-slate-950">
           {!hideAppChrome && (
             <>
-              <AudioPlayer 
-                onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
-                isQueueOpen={isQueueOpen} 
-                onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
-                isLyricsOpen={isLyricsOpen}
-                activeTab={activeTab} 
-              />
+              {isMobileViewport && (
+                <AudioPlayer 
+                  onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
+                  isQueueOpen={isQueueOpen} 
+                  onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
+                  isLyricsOpen={isLyricsOpen}
+                  activeTab={activeTab} 
+                />
+              )}
               <MobileNav activeTab={activeTab} setActiveTab={setActiveTab} />
             </>
           )}
@@ -680,18 +865,16 @@ function DashboardContent() {
       {/* 3.5. Center Lyrics Modal */}
       <LyricsModal isOpen={isLyricsOpen} onClose={() => setIsLyricsOpen(false)} />
 
-      {/* 4. Desktop audio player (fixed overlay) */}
-      <div className="hidden md:block">
-        {!hideAppChrome && (
-          <AudioPlayer 
-            onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
-            isQueueOpen={isQueueOpen} 
-            onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
-            isLyricsOpen={isLyricsOpen}
-            activeTab={activeTab} 
-          />
-        )}
-      </div>
+      {/* 4. Desktop audio player (fixed overlay) — only one player mounted at a time */}
+      {!hideAppChrome && !isMobileViewport && (
+        <AudioPlayer 
+          onToggleQueue={() => setIsQueueOpen(!isQueueOpen)} 
+          isQueueOpen={isQueueOpen} 
+          onToggleLyrics={() => setIsLyricsOpen(!isLyricsOpen)}
+          isLyricsOpen={isLyricsOpen}
+          activeTab={activeTab} 
+        />
+      )}
 
       {/* 5. Mobile nav moved into viewport column above */}
 

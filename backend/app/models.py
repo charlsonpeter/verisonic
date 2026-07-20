@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float, Table, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Float, Table, UniqueConstraint, JSON
 from sqlalchemy.orm import relationship
 from app.db.base_class import Base
 
@@ -17,6 +17,7 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
     full_name = Column(String, nullable=True)
+    profile_image_path = Column(String, nullable=True)
     role = Column(String, default="listener") # admin, artist, listener
     subscription = Column(String, default="free") # free, premium, unlimited
     subscription_cycle = Column(String, nullable=True) # monthly, yearly, null
@@ -39,8 +40,19 @@ class User(Base):
     artist_profile = relationship("Artist", back_populates="user", uselist=False)
     playlists = relationship("Playlist", back_populates="user")
     favorites = relationship("Favorite", back_populates="user")
+    track_reactions = relationship("TrackReaction", back_populates="user", cascade="all, delete-orphan")
+    comment_reactions = relationship("CommentReaction", back_populates="user", cascade="all, delete-orphan")
+    radio_program_reactions = relationship("RadioProgramReaction", back_populates="user", cascade="all, delete-orphan")
+    radio_program_comments = relationship("RadioProgramComment", back_populates="user", cascade="all, delete-orphan")
+    radio_program_comment_reactions = relationship(
+        "RadioProgramCommentReaction", back_populates="user", cascade="all, delete-orphan"
+    )
     listening_history = relationship("ListeningHistory", back_populates="user")
+    track_comments = relationship("TrackComment", back_populates="user", cascade="all, delete-orphan")
     subscription_payments = relationship("SubscriptionPayment", back_populates="user")
+    wallet = relationship("OwnerWallet", back_populates="user", uselist=False)
+    bank_account = relationship("OwnerBankAccount", back_populates="user", uselist=False)
+    withdrawal_requests = relationship("WithdrawalRequest", back_populates="user", foreign_keys="WithdrawalRequest.user_id")
 
 class SubscriptionPayment(Base):
     __tablename__ = "subscription_payments"
@@ -54,6 +66,9 @@ class SubscriptionPayment(Base):
     status = Column(String, default="created")  # created, paid, failed
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     paid_at = Column(DateTime, nullable=True)
+    # Inclusive calendar start / exclusive end of the billing period this payment covers (when known)
+    billing_period_start = Column(DateTime, nullable=True)
+    billing_period_end = Column(DateTime, nullable=True)
 
     user = relationship("User", back_populates="subscription_payments")
 
@@ -72,6 +87,8 @@ class Artist(Base):
     # Detailed profile metadata
     category = Column(String, nullable=True)
     licence = Column(String, nullable=True)
+    licence_document_path = Column(String, nullable=True)
+    cover_image_path = Column(String, nullable=True)
     street_address = Column(String, nullable=True)
     city = Column(String, nullable=True)
     state_province = Column(String, nullable=True)
@@ -114,7 +131,11 @@ class Track(Base):
     
     # Storage details
     original_file_path = Column(String, nullable=True) # path in S3
-    hls_playlist_path = Column(String, nullable=True) # .m3u8 path in S3
+    hls_playlist_path = Column(String, nullable=True) # legacy / high HLS .m3u8 path in S3
+    hls_normal_path = Column(String, nullable=True)   # AAC 128 HLS
+    hls_high_path = Column(String, nullable=True)     # AAC 256 HLS
+    hls_lossless_path = Column(String, nullable=True) # FLAC CD (16/44.1) HLS
+    hls_hires_path = Column(String, nullable=True)    # FLAC original resolution HLS
     mp3_320_path = Column(String, nullable=True)
     aac_256_path = Column(String, nullable=True)
     aac_128_path = Column(String, nullable=True)
@@ -134,9 +155,16 @@ class Track(Base):
     # Custom details
     cover_image_path = Column(String, nullable=True)
     lyrics = Column(String, nullable=True)
+    lyrics_timed = Column(JSON, nullable=True)  # [{start, end, text}, ...]
+    lyrics_language = Column(String, nullable=True)
+    lyrics_language_probability = Column(Float, nullable=True)
     composer = Column(String, nullable=True)
     lyricist = Column(String, nullable=True)
     year = Column(Integer, nullable=True)
+    track_number = Column(Integer, nullable=True)
+    album_artist = Column(String, nullable=True)
+    comment = Column(String, nullable=True)
+    copyright_text = Column(String, nullable=True)
     artist_name_override = Column(String, nullable=True)
     language = Column(String, nullable=True)
     
@@ -149,6 +177,8 @@ class Track(Base):
     playlist_tracks = relationship("PlaylistTrack", back_populates="track", cascade="all, delete-orphan")
     listening_history = relationship("ListeningHistory", back_populates="track", cascade="all, delete-orphan")
     favorites = relationship("Favorite", back_populates="track", cascade="all, delete-orphan")
+    reactions = relationship("TrackReaction", back_populates="track", cascade="all, delete-orphan")
+    comments = relationship("TrackComment", back_populates="track", cascade="all, delete-orphan")
 
 class Playlist(Base):
     __tablename__ = "playlists"
@@ -201,6 +231,7 @@ class RadioStation(Base):
     # Detailed profile metadata
     category = Column(String, nullable=True)
     licence = Column(String, nullable=True)
+    licence_document_path = Column(String, nullable=True)
     street_address = Column(String, nullable=True)
     city = Column(String, nullable=True)
     state_province = Column(String, nullable=True)
@@ -215,8 +246,11 @@ class RadioStation(Base):
     social_instagram = Column(String, nullable=True)
     programs_list = Column(String, nullable=True)
     timezone = Column(String, nullable=True, default="UTC")
-    
+
+    owner = relationship("User", foreign_keys=[owner_id])
     schedules = relationship("RadioSchedule", back_populates="station", cascade="all, delete-orphan")
+    program_reactions = relationship("RadioProgramReaction", back_populates="station", cascade="all, delete-orphan")
+    program_comments = relationship("RadioProgramComment", back_populates="station", cascade="all, delete-orphan")
 
 class RadioSchedule(Base):
     __tablename__ = "radio_schedules"
@@ -238,6 +272,36 @@ class ListeningHistory(Base):
     user = relationship("User", back_populates="listening_history")
     track = relationship("Track", back_populates="listening_history")
 
+class TrackComment(Base):
+    __tablename__ = "track_comments"
+    id = Column(Integer, primary_key=True, index=True)
+    track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    parent_id = Column(Integer, ForeignKey("track_comments.id", ondelete="CASCADE"), nullable=True, index=True)
+    body = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    track = relationship("Track", back_populates="comments")
+    user = relationship("User", back_populates="track_comments")
+    parent = relationship("TrackComment", remote_side=[id], back_populates="replies")
+    replies = relationship("TrackComment", back_populates="parent", cascade="all, delete-orphan")
+    reactions = relationship("CommentReaction", back_populates="comment", cascade="all, delete-orphan")
+
+class CommentReaction(Base):
+    __tablename__ = "comment_reactions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "comment_id", name="uq_comment_reactions_user_comment"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    comment_id = Column(Integer, ForeignKey("track_comments.id", ondelete="CASCADE"), nullable=False, index=True)
+    reaction = Column(String, nullable=False)  # like | dislike
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="comment_reactions")
+    comment = relationship("TrackComment", back_populates="reactions")
+
 class Favorite(Base):
     __tablename__ = "favorites"
     __table_args__ = (
@@ -251,6 +315,72 @@ class Favorite(Base):
     user = relationship("User", back_populates="favorites")
     track = relationship("Track", back_populates="favorites")
 
+class TrackReaction(Base):
+    __tablename__ = "track_reactions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "track_id", name="uq_track_reactions_user_track"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False, index=True)
+    reaction = Column(String, nullable=False)  # like | dislike
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="track_reactions")
+    track = relationship("Track", back_populates="reactions")
+
+
+class RadioProgramReaction(Base):
+    __tablename__ = "radio_program_reactions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "station_id", "program_key", name="uq_radio_program_reactions_user_program"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    station_id = Column(Integer, ForeignKey("radio_stations.id", ondelete="CASCADE"), nullable=False, index=True)
+    program_key = Column(String, nullable=False, index=True)
+    reaction = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="radio_program_reactions")
+    station = relationship("RadioStation", back_populates="program_reactions")
+
+
+class RadioProgramComment(Base):
+    __tablename__ = "radio_program_comments"
+    id = Column(Integer, primary_key=True, index=True)
+    station_id = Column(Integer, ForeignKey("radio_stations.id", ondelete="CASCADE"), nullable=False, index=True)
+    program_key = Column(String, nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    parent_id = Column(Integer, ForeignKey("radio_program_comments.id", ondelete="CASCADE"), nullable=True, index=True)
+    body = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    station = relationship("RadioStation", back_populates="program_comments")
+    user = relationship("User", back_populates="radio_program_comments")
+    parent = relationship("RadioProgramComment", remote_side=[id], back_populates="replies")
+    replies = relationship("RadioProgramComment", back_populates="parent", cascade="all, delete-orphan")
+    reactions = relationship("RadioProgramCommentReaction", back_populates="comment", cascade="all, delete-orphan")
+
+
+class RadioProgramCommentReaction(Base):
+    __tablename__ = "radio_program_comment_reactions"
+    __table_args__ = (
+        UniqueConstraint("user_id", "comment_id", name="uq_radio_program_comment_reactions_user_comment"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    comment_id = Column(Integer, ForeignKey("radio_program_comments.id", ondelete="CASCADE"), nullable=False, index=True)
+    reaction = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="radio_program_comment_reactions")
+    comment = relationship("RadioProgramComment", back_populates="reactions")
+
+
 class AudioAnalysisReport(Base):
     __tablename__ = "audio_analysis_reports"
     id = Column(Integer, primary_key=True, index=True)
@@ -259,6 +389,11 @@ class AudioAnalysisReport(Base):
     cutoff_frequency = Column(Float, nullable=True)
     high_frequency_energy = Column(Float, nullable=True)
     spectrogram_path = Column(String, nullable=True) # path in S3/MinIO
+    # Acoustic authenticity (optional; older rows remain NULL → legacy scoring path)
+    is_fake_upscaled = Column(Boolean, nullable=True)
+    spectral_entropy_high_band = Column(Float, nullable=True)
+    authenticity_score = Column(Float, nullable=True)
+    true_quality_tier = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     track = relationship("Track", back_populates="analysis_report")
@@ -270,3 +405,144 @@ class StreamingLog(Base):
     track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False)
     bytes_streamed = Column(Integer, default=0)
     played_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class PlatformRevenueSettings(Base):
+    __tablename__ = "platform_revenue_settings"
+    id = Column(Integer, primary_key=True, index=True)
+    premium_monthly_paise = Column(Integer, default=9900, nullable=False)
+    premium_yearly_paise = Column(Integer, default=99900, nullable=False)
+    company_share_bps = Column(Integer, default=3000, nullable=False)
+    owner_share_bps = Column(Integer, default=7000, nullable=False)
+    # Legacy estimate-pool fields (unused by daily settlement; kept for schema compatibility)
+    studio_pool_bps = Column(Integer, default=6000, nullable=False)
+    radio_pool_bps = Column(Integer, default=4000, nullable=False)
+    min_track_seconds = Column(Integer, default=30, nullable=False)
+    min_radio_heartbeat_sec = Column(Integer, default=30, nullable=False)
+    estimated_qualifying_plays_per_day = Column(Integer, default=10, nullable=False)
+    estimated_radio_minutes_per_day = Column(Integer, default=60, nullable=False)
+    min_withdrawal_paise = Column(Integer, default=10000, nullable=False)
+    daily_settlement_enabled = Column(Boolean, default=True, nullable=False)
+    min_valid_daily_listen_seconds = Column(Integer, default=1, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+class OwnerWallet(Base):
+    __tablename__ = "owner_wallets"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+    balance_paise = Column(Integer, default=0, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="wallet")
+    ledger_entries = relationship("WalletLedgerEntry", back_populates="wallet", cascade="all, delete-orphan")
+
+
+class WalletLedgerEntry(Base):
+    __tablename__ = "wallet_ledger_entries"
+    id = Column(Integer, primary_key=True, index=True)
+    wallet_id = Column(Integer, ForeignKey("owner_wallets.id", ondelete="CASCADE"), nullable=False, index=True)
+    amount_paise = Column(Integer, nullable=False)
+    entry_type = Column(String, nullable=False)  # track_play, radio_listen, withdrawal, adjustment
+    description = Column(String, nullable=True)
+    reference_id = Column(String, nullable=True)
+    listener_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    wallet = relationship("OwnerWallet", back_populates="ledger_entries")
+
+
+class OwnerBankAccount(Base):
+    __tablename__ = "owner_bank_accounts"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+    account_holder_name = Column(String, nullable=False)
+    bank_name = Column(String, nullable=True)
+    account_number = Column(String, nullable=False)
+    ifsc_code = Column(String, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="bank_account")
+
+
+class WithdrawalRequest(Base):
+    __tablename__ = "withdrawal_requests"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    amount_paise = Column(Integer, nullable=False)
+    status = Column(String, default="pending", nullable=False)  # pending, paid, rejected
+    admin_note = Column(String, nullable=True)
+    # Fernet-encrypted at rest (see wallet_service.encrypt_withdrawal_bank_snapshot)
+    account_holder_name = Column(String, nullable=True)
+    bank_name = Column(String, nullable=True)
+    account_number_masked = Column(String, nullable=True)  # masked only, never full number
+    ifsc_code = Column(String, nullable=True)
+    utr_reference = Column(String, nullable=True)
+    processed_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    processed_at = Column(DateTime, nullable=True)
+
+    user = relationship("User", back_populates="withdrawal_requests", foreign_keys=[user_id])
+
+
+class BillableTrackPlay(Base):
+    """Valid track listen for a listener/track/UTC day. Credits are applied by daily settlement."""
+    __tablename__ = "billable_track_plays"
+    __table_args__ = (
+        UniqueConstraint("listener_user_id", "track_id", "play_date", name="uq_billable_track_plays_listener_track_day"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    listener_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    track_id = Column(Integer, ForeignKey("tracks.id", ondelete="CASCADE"), nullable=False, index=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    listened_seconds = Column(Float, nullable=False)
+    credit_paise = Column(Integer, nullable=False, default=0)  # legacy realtime; new model keeps 0
+    play_date = Column(String, nullable=False, index=True)  # YYYY-MM-DD UTC
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class RadioListenSession(Base):
+    __tablename__ = "radio_listen_sessions"
+    id = Column(Integer, primary_key=True, index=True)
+    session_token = Column(String, unique=True, index=True, nullable=False)
+    listener_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    station_id = Column(Integer, ForeignKey("radio_stations.id", ondelete="CASCADE"), nullable=False, index=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    total_seconds = Column(Integer, default=0, nullable=False)
+    total_credit_paise = Column(Integer, default=0, nullable=False)  # legacy; settlement uses total_seconds
+    is_active = Column(Boolean, default=True, nullable=False)
+    started_at = Column(DateTime, default=datetime.datetime.utcnow)
+    ended_at = Column(DateTime, nullable=True)
+    last_heartbeat_at = Column(DateTime, nullable=True)
+
+
+class DailySettlementRun(Base):
+    """One idempotent settlement pass per UTC calendar date."""
+    __tablename__ = "daily_settlement_runs"
+    id = Column(Integer, primary_key=True, index=True)
+    settlement_date = Column(String, unique=True, nullable=False, index=True)  # YYYY-MM-DD UTC
+    status = Column(String, nullable=False, default="pending")  # pending, running, completed, failed, skipped
+    listeners_processed = Column(Integer, default=0, nullable=False)
+    owners_credited = Column(Integer, default=0, nullable=False)
+    total_credited_paise = Column(Integer, default=0, nullable=False)
+    error_message = Column(String, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    credits = relationship("DailySettlementCredit", back_populates="run", cascade="all, delete-orphan")
+
+
+class DailySettlementCredit(Base):
+    __tablename__ = "daily_settlement_credits"
+    __table_args__ = (
+        UniqueConstraint("settlement_date", "owner_user_id", name="uq_daily_settlement_credits_date_owner"),
+    )
+    id = Column(Integer, primary_key=True, index=True)
+    run_id = Column(Integer, ForeignKey("daily_settlement_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    settlement_date = Column(String, nullable=False, index=True)
+    owner_user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    amount_paise = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    run = relationship("DailySettlementRun", back_populates="credits")

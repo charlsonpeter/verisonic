@@ -2,6 +2,8 @@ name: Build Broadcaster
 
 on:
   push:
+    branches:
+      - master
     paths:
       - 'broadcaster/**'
       - '.github/workflows/build-broadcaster.yml'
@@ -17,13 +19,13 @@ jobs:
         include:
           - os: windows-latest
             platform: windows
-            artifact_name: verisonic-broadcaster-windows
-          - os: ubuntu-20.04
+            artifact_name: verisonic-broadcaster-windows-installer
+          - os: ubuntu-22.04
             platform: linux
-            artifact_name: verisonic-broadcaster-linux
-          - os: macos-13
+            artifact_name: verisonic-broadcaster-linux-installer
+          - os: macos-14
             platform: macos
-            artifact_name: verisonic-broadcaster-macos
+            artifact_name: verisonic-broadcaster-macos-installer
 
     steps:
       - name: Checkout Repository
@@ -35,7 +37,6 @@ jobs:
           python-version: '3.10'
           cache: 'pip'
 
-      # Linux-specific build dependencies for sounddevice & headless PyQt5
       - name: Install System Dependencies (Linux)
         if: matrix.platform == 'linux'
         run: |
@@ -52,44 +53,44 @@ jobs:
         run: |
           python broadcaster/generate_icons.py
 
-      # Windows Compilation
-      - name: Build Executable (Windows)
+      - name: Install Inno Setup (Windows)
         if: matrix.platform == 'windows'
-        run: |
-          pyinstaller --noconsole --onefile --windowed --icon="broadcaster/assets/icon.ico" --name="VeriSonic Broadcaster" broadcaster/verisonic_broadcaster.py
+        run: choco install innosetup -y --no-progress
 
-      # Linux Compilation
-      - name: Build Executable (Linux)
+      - name: Build Windows Installer
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: broadcaster/installer/windows/build_windows_setup.ps1
+
+      - name: Build Linux Installer
         if: matrix.platform == 'linux'
         run: |
-          pyinstaller --noconsole --onefile --icon="broadcaster/assets/icon.png" --name="verisonic-broadcaster" broadcaster/verisonic_broadcaster.py
+          chmod +x broadcaster/installer/linux/*.sh
+          VERISONIC_DEB_VERSION=1.0.0 broadcaster/installer/linux/build_linux_deb.sh
 
-      # macOS Compilation & Zipping
-      - name: Build Executable (macOS)
+      - name: Build macOS Installer
         if: matrix.platform == 'macos'
         run: |
-          pyinstaller --noconsole --onefile --windowed --icon="broadcaster/assets/icon.icns" --name="VeriSonic Broadcaster" broadcaster/verisonic_broadcaster.py
-          cd dist
-          zip -r ../VeriSonic_Broadcaster_macOS.zip "VeriSonic Broadcaster.app"
+          chmod +x broadcaster/installer/macos/*.sh broadcaster/installer/macos/scripts/*
+          VERISONIC_PKG_VERSION=1.0.0 broadcaster/installer/macos/build_macos_pkg.sh
 
-      # Upload Artifacts
-      - name: Upload Windows Artifact
+      - name: Upload Windows Installer
         if: matrix.platform == 'windows'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: dist/VeriSonic Broadcaster.exe
+          path: broadcaster/dist/VeriSonic Broadcaster Setup.exe
 
-      - name: Upload Linux Artifact
-        if: matrix.platform == 'linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact_name }}
-          path: dist/verisonic-broadcaster
-
-      - name: Upload macOS Artifact
+      - name: Upload macOS Installer
         if: matrix.platform == 'macos'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: VeriSonic_Broadcaster_macOS.zip
+          path: broadcaster/dist/VeriSonic Broadcaster.pkg
+
+      - name: Upload Linux Installer
+        if: matrix.platform == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: broadcaster/dist/verisonic-broadcaster_1.0.0_amd64.deb

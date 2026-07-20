@@ -78,6 +78,37 @@ def delete_prefix(prefix: str) -> None:
         logger.error(f"Error deleting prefix {prefix} from S3: {e}")
 
 
+def delete_prefix_except(prefix: str, keep_prefix: str) -> None:
+    """
+    Delete objects under prefix that do not belong to keep_prefix.
+    Used after publishing a new HLS generation so prior gens / legacy files are removed
+    without touching the newly published tree.
+    """
+    if not prefix.endswith("/"):
+        prefix = f"{prefix}/"
+    if not keep_prefix.endswith("/"):
+        keep_prefix = f"{keep_prefix}/"
+    try:
+        paginator = s3_client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=settings.S3_BUCKET_NAME, Prefix=prefix):
+            contents = page.get("Contents") or []
+            if not contents:
+                continue
+            keys = [
+                {"Key": obj["Key"]}
+                for obj in contents
+                if not obj["Key"].startswith(keep_prefix)
+            ]
+            if not keys:
+                continue
+            s3_client.delete_objects(
+                Bucket=settings.S3_BUCKET_NAME,
+                Delete={"Objects": keys},
+            )
+    except Exception as e:
+        logger.error(f"Error deleting under {prefix} except {keep_prefix}: {e}")
+
+
 def upload_file(file_bytes: bytes, key: str, content_type: str = None) -> str:
     """
     Uploads file bytes to S3/MinIO

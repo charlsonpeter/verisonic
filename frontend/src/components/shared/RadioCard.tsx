@@ -121,7 +121,7 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
   return (
     <div 
       onClick={() => handleStationPlay(station, isCurrent, playRadioStation, togglePlay)}
-      className={`glass-card rounded-3xl p-5 border transition duration-300 relative overflow-hidden group cursor-pointer ${
+      className={`md:glass-card max-md:bg-slate-900 rounded-3xl p-5 border transition duration-300 relative overflow-hidden group cursor-pointer ${
         station.is_online === false
           ? 'opacity-60 hover:opacity-85 border-white/5 bg-slate-900/5'
           : isCurrent 
@@ -129,9 +129,9 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
             : 'border-white/5 bg-slate-900/10 hover:border-slate-800 hover:bg-slate-900/30'
       }`}
     >
-      {/* Background ambient pulse */}
+      {/* Background ambient pulse — desktop only; blur animates poorly on mobile */}
       {isCurrentlyPlaying && (
-        <div className="absolute top-0 right-0 w-24 h-24 bg-rose-500/5 rounded-full blur-2xl animate-pulse" />
+        <div className="absolute top-0 right-0 w-24 h-24 bg-rose-500/5 rounded-full blur-2xl animate-pulse max-md:hidden" />
       )}
 
       <div className="flex items-start gap-5 relative z-10">
@@ -185,10 +185,10 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
                 <Radio className="w-2.5 h-2.5 animate-pulse" />
                 On Air Now:
               </div>
-              <div className="text-xs font-bold text-slate-200 truncate">
+              <div className="text-xs font-bold text-slate-200 truncate" data-radio-now-title={station.id}>
                 {station.current_track_title || 'Live Program'}
               </div>
-              <div className="text-[10px] text-slate-400 truncate">
+              <div className="text-[10px] text-slate-400 truncate" data-radio-now-artist={station.id}>
                 By {station.current_track_artist || 'Broadcaster'}
               </div>
             </div>
@@ -210,6 +210,61 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
           </span>
         )}
       </div>
+    </div>
+  );
+};
+
+export const RadioSearchRow: React.FC<RadioCardProps> = ({ station }) => {
+  const { playRadioStation, activeRadioStation, isPlaying, togglePlay } = useAudio();
+
+  const isCurrent = activeRadioStation?.id === station.id;
+  const isCurrentlyPlaying = isCurrent && isPlaying;
+  const location = formatStationLocation(station);
+  const subtitle = [station.broadcast_frequency, location].filter(Boolean).join(' · ') || 'Radio station';
+
+  const onPlay = () => {
+    handleStationPlay(station, isCurrent, playRadioStation, togglePlay);
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={onPlay}
+        className="flex-1 flex items-center gap-4 p-3 rounded-xl hover:bg-slate-900/40 transition text-left min-w-0"
+      >
+        {station.cover_art_url ? (
+          <img
+            src={station.cover_art_url}
+            alt=""
+            className="w-11 h-11 rounded-lg object-cover flex-shrink-0"
+          />
+        ) : (
+          <div className="w-11 h-11 rounded-lg bg-slate-800 flex items-center justify-center flex-shrink-0">
+            <Radio className="w-5 h-5 text-rose-400" />
+          </div>
+        )}
+        <div className="min-w-0 flex-1">
+          <h4 className="text-xs font-bold text-slate-200 truncate">{station.name}</h4>
+          <p className="text-[10px] text-slate-500 truncate mt-0.5">{subtitle}</p>
+        </div>
+      </button>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onPlay();
+        }}
+        title={isCurrentlyPlaying ? 'Pause' : 'Play station'}
+        aria-label={isCurrentlyPlaying ? 'Pause station' : 'Play station'}
+        className="p-2.5 rounded-xl bg-rose-600/20 hover:bg-rose-600/40 text-rose-400 transition flex-shrink-0"
+      >
+        {isCurrentlyPlaying ? (
+          <Pause className="w-4 h-4 fill-current" />
+        ) : (
+          <Play className="w-4 h-4 fill-current" />
+        )}
+      </button>
     </div>
   );
 };

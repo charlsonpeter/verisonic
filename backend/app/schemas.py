@@ -22,6 +22,9 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+class SwitchModeRequest(BaseModel):
+    mode: str
+
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     email: Optional[EmailStr] = None
@@ -78,6 +81,10 @@ class ArtistResponse(BaseModel):
     languages: Optional[str] = None
     social_twitter: Optional[str] = None
     social_instagram: Optional[str] = None
+    owner_name: Optional[str] = None
+    owner_email: Optional[str] = None
+    licence_document_url: Optional[str] = None
+    cover_art_url: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -95,8 +102,9 @@ class StudioProfileUpdate(ArtistProfileFields):
 
 class UserResponse(BaseModel):
     id: int
-    email: EmailStr
+    email: str
     full_name: Optional[str] = None
+    profile_image_url: Optional[str] = None
     role: str
     subscription: str
     subscription_cycle: Optional[str] = None
@@ -124,17 +132,29 @@ class AlbumCreate(BaseModel):
     title: str
     release_year: Optional[int] = None
 
+class AlbumUpdate(BaseModel):
+    title: Optional[str] = None
+    release_year: Optional[int] = None
+
 class AlbumResponse(BaseModel):
     id: int
     title: str
     cover_art_url: Optional[str] = None
     release_year: Optional[int] = None
     artist_id: int
+    artist_name: Optional[str] = None
+    track_count: Optional[int] = 0
 
     class Config:
         from_attributes = True
 
 # --- Genre Schemas ---
+class GenreCreate(BaseModel):
+    name: str
+
+class GenreUpdate(BaseModel):
+    name: str
+
 class GenreResponse(BaseModel):
     id: int
     name: str
@@ -166,20 +186,37 @@ class TrackResponse(BaseModel):
     approved: bool
     original_file_path: Optional[str] = None
     hls_playlist_path: Optional[str] = None
+    hls_normal_path: Optional[str] = None
+    hls_high_path: Optional[str] = None
+    hls_lossless_path: Optional[str] = None
+    hls_hires_path: Optional[str] = None
     mp3_320_path: Optional[str] = None
     aac_256_path: Optional[str] = None
     aac_128_path: Optional[str] = None
     cover_art_url: Optional[str] = None
     lyrics: Optional[str] = None
+    lyrics_timed: Optional[List[dict]] = None
+    lyrics_language: Optional[str] = None
+    lyrics_language_probability: Optional[float] = None
     composer: Optional[str] = None
     lyricist: Optional[str] = None
     year: Optional[int] = None
+    track_number: Optional[int] = None
+    album_artist: Optional[str] = None
+    comment: Optional[str] = None
+    copyright: Optional[str] = None
     language: Optional[str] = None
     genres: Optional[List[str]] = []
     created_at: datetime
+    owner_name: Optional[str] = None
+    owner_email: Optional[str] = None
+    like_count: Optional[int] = None
+    dislike_count: Optional[int] = None
+    comment_count: Optional[int] = None
 
     class Config:
         from_attributes = True
+
 
 class AudioAnalysisReportResponse(BaseModel):
     id: int
@@ -187,6 +224,10 @@ class AudioAnalysisReportResponse(BaseModel):
     max_frequency: Optional[float] = None
     cutoff_frequency: Optional[float] = None
     high_frequency_energy: Optional[float] = None
+    is_fake_upscaled: Optional[bool] = None
+    spectral_entropy_high_band: Optional[float] = None
+    authenticity_score: Optional[float] = None
+    true_quality_tier: Optional[str] = None
     spectrogram_path: Optional[str] = None
     created_at: datetime
 
@@ -332,6 +373,9 @@ class RadioStationResponse(BaseModel):
     disabled_reason: Optional[str] = None
     reactivation_reason: Optional[str] = None
     reactivation_requested: Optional[bool] = None
+    owner_name: Optional[str] = None
+    owner_email: Optional[str] = None
+    licence_document_url: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -378,3 +422,172 @@ class DashboardResponse(BaseModel):
     bandwidth_gb: float
     quality_distribution: QualityStats
     popular_tracks: List[PopularTrack]
+
+
+class TrackCommentCreate(BaseModel):
+    body: str
+    parent_id: Optional[int] = None
+
+class TrackCommentResponse(BaseModel):
+    id: int
+    track_id: int
+    user_id: int
+    parent_id: Optional[int] = None
+    author_name: Optional[str] = None
+    body: str
+    created_at: datetime
+    like_count: int = 0
+    dislike_count: int = 0
+    user_reaction: Optional[str] = None
+    is_staff_reply: bool = False
+    reply_count: int = 0
+    replies: List["TrackCommentResponse"] = []
+
+    class Config:
+        from_attributes = True
+
+
+TrackCommentResponse.model_rebuild()
+
+
+class PaginatedCommentListResponse(BaseModel):
+    items: List[TrackCommentResponse]
+    total: int
+    has_more: bool
+
+
+class TrackEngagementResponse(BaseModel):
+    track_id: int
+    title: str
+    artist_name: Optional[str] = None
+    like_count: int = 0
+    dislike_count: int = 0
+    comment_count: int = 0
+
+
+class ListeningHistoryEntryResponse(BaseModel):
+    id: int
+    played_at: datetime
+    track: TrackResponse
+
+
+class StudioBrowseResponse(BaseModel):
+    id: int
+    stage_name: str
+    bio: Optional[str] = None
+    category: Optional[str] = None
+    cover_art_url: Optional[str] = None
+    city: Optional[str] = None
+    country: Optional[str] = None
+    track_count: int = 0
+
+
+class ArtistAlbumSummary(BaseModel):
+    title: str
+    cover_art_url: Optional[str] = None
+    release_year: Optional[int] = None
+    track_count: int
+
+
+class ArtistRelatedSummary(BaseModel):
+    name: str
+    track_count: int
+    cover_art_url: Optional[str] = None
+
+
+class ArtistDetailResponse(BaseModel):
+    name: str
+    track_count: int
+    studio: Optional[StudioBrowseResponse] = None
+    tracks: List[TrackResponse]
+    albums: List[ArtistAlbumSummary]
+    related_artists: List[ArtistRelatedSummary]
+
+
+class PaginatedTrackListResponse(BaseModel):
+    items: List[TrackResponse]
+    total: int
+    has_more: bool
+
+
+class PaginatedUserListResponse(BaseModel):
+    items: List[UserResponse]
+    total: int
+    has_more: bool
+
+
+class PaginatedArtistListResponse(BaseModel):
+    items: List[ArtistResponse]
+    total: int
+    has_more: bool
+
+
+class PaginatedRadioStationListResponse(BaseModel):
+    items: List[RadioStationResponse]
+    total: int
+    has_more: bool
+
+
+class EngagementAccountResponse(BaseModel):
+    kind: str  # "studio" | "radio"
+    id: int
+    name: str
+    city: Optional[str] = None
+    country: Optional[str] = None
+    owner_name: Optional[str] = None
+    is_active: bool
+    has_programs: bool = False
+
+
+class PaginatedEngagementAccountListResponse(BaseModel):
+    items: List[EngagementAccountResponse]
+    total: int
+    has_more: bool
+
+
+class RadioProgramEngagementResponse(BaseModel):
+    station_id: int
+    program_key: str
+    title: str
+    rj_name: Optional[str] = None
+    time_from: Optional[str] = None
+    time_to: Optional[str] = None
+    like_count: int = 0
+    dislike_count: int = 0
+    comment_count: int = 0
+
+
+class RadioProgramListResponse(BaseModel):
+    items: List[RadioProgramEngagementResponse]
+    total: int
+
+
+class RadioProgramCommentCreate(BaseModel):
+    body: str
+    parent_id: Optional[int] = None
+
+
+class RadioProgramCommentResponse(BaseModel):
+    id: int
+    station_id: int
+    program_key: str
+    user_id: int
+    parent_id: Optional[int] = None
+    author_name: Optional[str] = None
+    body: str
+    created_at: datetime
+    like_count: int = 0
+    dislike_count: int = 0
+    user_reaction: Optional[str] = None
+    is_staff_reply: bool = False
+    reply_count: int = 0
+    replies: List["RadioProgramCommentResponse"] = []
+
+
+RadioProgramCommentResponse.model_rebuild()
+
+
+class PaginatedRadioProgramCommentListResponse(BaseModel):
+    items: List[RadioProgramCommentResponse]
+    total: int
+    has_more: bool

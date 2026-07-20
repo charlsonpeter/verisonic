@@ -27,7 +27,7 @@ def list_favorites(
     tracks = (
         db.query(Track)
         .join(Artist, Track.artist_id == Artist.id)
-        .filter(Track.id.in_(track_ids), Track.approved == True, Artist.is_active == True)
+        .filter(Track.id.in_(track_ids), Track.approved == True, Track.hls_playlist_path.isnot(None), Artist.is_active == True)
         .all()
     )
     by_id = {t.id: t for t in tracks}
@@ -40,7 +40,11 @@ def add_favorite(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    track = db.query(Track).filter(Track.id == track_id, Track.approved == True).first()
+    track = db.query(Track).filter(
+        Track.id == track_id,
+        Track.approved == True,
+        Track.hls_playlist_path.isnot(None),
+    ).first()
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
     existing = (

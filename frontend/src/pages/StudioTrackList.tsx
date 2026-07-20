@@ -1,52 +1,77 @@
-import React, { useState, useEffect } from 'react';
-import { Music, RefreshCw, Play } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Music, RefreshCw, Play, ThumbsUp, ThumbsDown, MessageSquare } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
 import { trackHasPlayableStream } from '../utils/streamQuality';
 import { createAuthenticatedWebSocket } from '../utils/authTokens';
+import { TableSkeleton, TrackCardSkeleton } from '../components/shared/skeleton';
+import { formatLocalDate } from '../utils/dateTime';
+import { useLazyList, DEFAULT_LAZY_PAGE_SIZE } from '../hooks/useLazyList';
+import { LazyListSentinel } from '../components/shared/LazyListSentinel';
+import { TrackEngagementModal } from '../components/shared/TrackEngagementModal';
+import {
+  applyTrackStatusWsUpdates,
+  getTrackStatusDetails,
+  type TrackStatusWsUpdate,
+} from '../utils/trackStatusWs';
 
-function getStatusDetails(t: {
-  quality_score: number | null;
-  approved: boolean;
-  hls_playlist_path: string | null;
-}) {
-  if (t.quality_score === null) {
-    return { label: 'Analyzing', style: 'bg-amber-500/10 border-amber-500/20 text-amber-400', desc: 'Running spectral checks...' };
-  }
-  if (t.approved && !t.hls_playlist_path) {
-    return { label: 'Transcoding', style: 'bg-cyan-500/10 border-cyan-500/20 text-cyan-400', desc: 'Generating adaptive streaming files...' };
-  }
-  if (t.approved && t.hls_playlist_path) {
-    return { label: 'Ready', style: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400', desc: 'Live on platform' };
-  }
-  return { label: 'Rejected', style: 'bg-rose-500/10 border-rose-500/20 text-rose-455', desc: 'Failed spectral cutoff checks' };
-}
-
-export const StudioTrackList: React.FC = () => {
-  const { token } = useAuth();
+export const StudioTrackList: React.FC<{ onViewReport?: (track: any) => void }> = ({ onViewReport }) => {
+  const { token, isStaffInAdminMode, isSwitchingMode } = useAuth();
   const { playTrack, currentTrack, isPlaying } = useAudio();
-  const [tracks, setTracks] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [engagementTrack, setEngagementTrack] = useState<any | null>(null);
 
-  const fetchTracks = async (silent = false) => {
-    if (!silent) setIsLoading(true);
-    try {
-      const res = await fetch('/api/music/manage?approved_only=true', {
+  const tracksList = useLazyList<any>({
+    fetchPage: useCallback(async (offset, limit) => {
+      if (!token) return { items: [], hasMore: false };
+      const params = new URLSearchParams({
+        approved_only: 'true',
+        limit: String(limit),
+        offset: String(offset),
+      });
+      const res = await fetch(`/api/music/manage?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (res.ok) {
-        setTracks(await res.json());
+      if (!res.ok) {
+        if (offset === 0) {
+          const data = await res.json().catch(() => ({}));
+          setFetchError(data.detail || 'Could not load tracks.');
+        }
+        return { items: [], hasMore: false };
       }
-    } catch (e) {
-      console.error('Failed to fetch tracks:', e);
-    } finally {
-      if (!silent) setIsLoading(false);
-    }
-  };
+      setFetchError(null);
+      const data = await res.json();
+      return { items: data.items, hasMore: data.has_more };
+    }, [token]),
+    resetKey: token && isStaffInAdminMode ? 'studio-tracks' : null,
+    enabled: !!(token && isStaffInAdminMode),
+    pageSize: DEFAULT_LAZY_PAGE_SIZE,
+  });
 
-  useEffect(() => {
-    fetchTracks();
-  }, []);
+  const tracks = tracksList.items;
+  const isLoading = tracksList.loading;
+  const fetchTracks = () => { void tracksList.reload(); };
+
+  const renderEngagement = (t: any) => (
+    <button
+      type="button"
+      onClick={() => setEngagementTrack(t)}
+      className="inline-flex items-center gap-2 text-[10px] font-bold text-slate-400 hover:text-white transition"
+      title="View engagement"
+    >
+      <span className="inline-flex items-center gap-0.5 text-emerald-400">
+        <ThumbsUp className="w-3 h-3" /> {t.like_count ?? 0}
+      </span>
+      <span className="text-slate-600">·</span>
+      <span className="inline-flex items-center gap-0.5 text-rose-400">
+        <ThumbsDown className="w-3 h-3" /> {t.dislike_count ?? 0}
+      </span>
+      <span className="text-slate-600">·</span>
+      <span className="inline-flex items-center gap-0.5 text-slate-300">
+        <MessageSquare className="w-3 h-3" /> {t.comment_count ?? 0}
+      </span>
+    </button>
+  );
 
   useEffect(() => {
     if (!token) return;
@@ -61,24 +86,13 @@ export const StudioTrackList: React.FC = () => {
         const data = JSON.parse(event.data);
         if (data.type !== 'status_updates') return;
 
-        const updates = data.tracks;
-        setTracks((prev) => {
-          const hasNew = updates.some((u: { track_id: number }) =>
-            !prev.some((t) => t.id === u.track_id)
-          );
-          if (hasNew) {
-            setTimeout(() => fetchTracks(true), 0);
-          }
-          return prev.map((track) => {
-            const update = updates.find((u: { track_id: number }) => u.track_id === track.id);
-            if (!update) return track;
-            return {
-              ...track,
-              quality_score: update.quality_score,
-              quality_level: update.quality_level,
-              approved: update.approved,
-            };
+        const updates = data.tracks as TrackStatusWsUpdate[];
+        tracksList.setItems((prev) => {
+          const { next, changed } = applyTrackStatusWsUpdates(prev, updates, {
+            onNewTracks: () => { setTimeout(() => tracksList.reload(), 0); },
+            onReload: () => { void tracksList.reload(); },
           });
+          return changed ? next : prev;
         });
       } catch {
         /* ignore malformed messages */
@@ -116,9 +130,21 @@ export const StudioTrackList: React.FC = () => {
         </button>
       </div>
 
+      {fetchError && (
+        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+          {fetchError}
+        </div>
+      )}
+
+      {isSwitchingMode && (
+        <div className="rounded-xl border border-white/10 bg-slate-900/40 px-4 py-3 text-sm text-slate-400">
+          Switching mode…
+        </div>
+      )}
+
       <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
         {isLoading && tracks.length === 0 ? (
-          <p className="p-8 text-xs text-slate-500 text-center">Loading your tracks...</p>
+          <TableSkeleton rows={6} variant="tracks-studio" />
         ) : tracks.length === 0 ? (
           <div className="p-16 text-center space-y-3">
             <Music className="w-10 h-10 text-slate-600 mx-auto" />
@@ -134,12 +160,13 @@ export const StudioTrackList: React.FC = () => {
                 <th className="p-5">Score</th>
                 <th className="p-5">Status</th>
                 <th className="p-5">Uploaded</th>
+                <th className="p-5">Engagement</th>
                 <th className="p-5 text-center">Play</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
               {tracks.map((t) => {
-                const status = getStatusDetails(t);
+                const status = getTrackStatusDetails(t);
                 return (
                   <tr key={t.id} className="hover:bg-slate-900/20 transition">
                     <td className="p-5">
@@ -168,38 +195,45 @@ export const StudioTrackList: React.FC = () => {
                     </td>
                     <td className="p-5">
                       {t.quality_score !== null ? (
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${
+                        <button
+                          type="button"
+                          onClick={() => onViewReport?.(t)}
+                          data-track-quality-score={t.id}
+                          className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition hover:underline cursor-pointer ${
                             t.quality_score >= 86
-                              ? 'bg-emerald-500/10 text-emerald-400'
+                              ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
                               : t.quality_score >= 71
-                                ? 'bg-cyan-500/10 text-cyan-400'
-                                : 'bg-rose-500/10 text-rose-400'
+                                ? 'bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20'
+                                : 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/20'
                           }`}
+                          title="View spectral analysis report"
                         >
                           {t.quality_score}%
-                        </span>
+                        </button>
                       ) : (
                         <span className="text-slate-600">—</span>
                       )}
                     </td>
                     <td className="p-5">
                       <div className="space-y-1">
-                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}>
+                        <span
+                          data-track-status-label={t.id}
+                          className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}
+                        >
                           {status.label}
                         </span>
-                        <div className="text-[9px] text-slate-500 leading-normal">{status.desc}</div>
+                        <div
+                          data-track-status-desc={t.id}
+                          className="text-[9px] text-slate-500 leading-normal"
+                        >
+                          {status.desc}
+                        </div>
                       </div>
                     </td>
                     <td className="p-5 text-slate-450 text-[10px] font-medium">
-                      {t.created_at
-                        ? new Date(t.created_at).toLocaleDateString(undefined, {
-                            year: 'numeric',
-                            month: 'short',
-                            day: 'numeric',
-                          })
-                        : '—'}
+                      {t.created_at ? formatLocalDate(t.created_at) : '—'}
                     </td>
+                    <td className="p-5">{renderEngagement(t)}</td>
                     <td className="p-5 text-center">
                       <button
                         onClick={() => playTrack(t)}
@@ -216,11 +250,16 @@ export const StudioTrackList: React.FC = () => {
             </tbody>
           </table>
         )}
+        <LazyListSentinel
+          hasMore={tracksList.hasMore}
+          loading={tracksList.loadingMore}
+          onLoadMore={tracksList.loadMore}
+        />
       </div>
 
       <div className="md:hidden space-y-3">
         {isLoading && tracks.length === 0 ? (
-          <p className="p-8 text-xs text-slate-500 text-center">Loading your tracks...</p>
+          <TrackCardSkeleton count={4} withCheckbox={false} />
         ) : tracks.length === 0 ? (
           <div className="p-12 text-center space-y-3 rounded-2xl border border-white/5 bg-slate-900/10">
             <Music className="w-10 h-10 text-slate-600 mx-auto" />
@@ -229,7 +268,7 @@ export const StudioTrackList: React.FC = () => {
           </div>
         ) : (
           tracks.map((t) => {
-            const status = getStatusDetails(t);
+            const status = getTrackStatusDetails(t);
             return (
               <div
                 key={t.id}
@@ -271,40 +310,54 @@ export const StudioTrackList: React.FC = () => {
 
                 <div className="flex flex-wrap items-center gap-2">
                   {t.quality_score !== null ? (
-                    <span
-                      className={`px-2 py-0.5 rounded text-[10px] font-extrabold ${
+                    <button
+                      type="button"
+                      onClick={() => onViewReport?.(t)}
+                      data-track-quality-score={t.id}
+                      className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition hover:underline cursor-pointer ${
                         t.quality_score >= 86
-                          ? 'bg-emerald-500/10 text-emerald-400'
+                          ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20'
                           : t.quality_score >= 71
-                            ? 'bg-cyan-500/10 text-cyan-400'
-                            : 'bg-rose-500/10 text-rose-400'
+                            ? 'bg-cyan-500/10 text-cyan-400 hover:bg-cyan-500/20'
+                            : 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/20'
                       }`}
+                      title="View spectral analysis report"
                     >
                       {t.quality_score}%
-                    </span>
+                    </button>
                   ) : (
                     <span className="text-[10px] text-slate-600">Score: —</span>
                   )}
-                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}>
+                  <span
+                    data-track-status-label={t.id}
+                    className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}
+                  >
                     {status.label}
                   </span>
                   <span className="text-[10px] text-slate-500">
-                    {t.created_at
-                      ? new Date(t.created_at).toLocaleDateString(undefined, {
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric',
-                        })
-                      : '—'}
+                    {t.created_at ? formatLocalDate(t.created_at) : '—'}
                   </span>
                 </div>
 
-                <p className="text-[9px] text-slate-500 leading-normal">{status.desc}</p>
+                <p data-track-status-desc={t.id} className="text-[9px] text-slate-500 leading-normal">{status.desc}</p>
+                <div>{renderEngagement(t)}</div>
               </div>
             );
           })
         )}
+        <LazyListSentinel
+          hasMore={tracksList.hasMore}
+          loading={tracksList.loadingMore}
+          onLoadMore={tracksList.loadMore}
+        />
       </div>
+
+      <TrackEngagementModal
+        trackId={engagementTrack?.id ?? null}
+        trackTitle={engagementTrack?.title}
+        open={!!engagementTrack}
+        onClose={() => setEngagementTrack(null)}
+      />
     </div>
   );
 };

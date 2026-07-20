@@ -1,21 +1,28 @@
-import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from './AuthContext';
 import Hls from 'hls.js';
 import {
   describeStreamPath,
   getEffectiveQuality,
   getStreamCandidatesForQuality,
-  getOwnerStreamCandidates,
   loadStoredQuality,
   saveStoredQuality,
   isStudioMasterQuality,
   isMasterStreamPath,
+  isFlacHlsPath,
   resolveStreamUrl as resolveMasterStreamUrl,
   QUALITY_LABELS,
   type QualityLevelSetting,
 } from '../utils/streamQuality';
 import { parseStoredStreamQuality } from '../utils/userSettings';
-import { showError } from '../utils/swal';
+import { showError, showInfo } from '../utils/swal';
+import { hasPaidSubscription } from '../utils/accountTier';
+import {
+  endRadioListenSession,
+  heartbeatRadioListenSession,
+  reportTrackListenProgress,
+  startRadioListenSession,
+} from '../utils/wallet';
 import {
   applyAudioSinkId,
   enumerateAudioOutputDevices,
@@ -33,9 +40,14 @@ export interface Track {
   artist_name: string;
   artist_name_override?: string;
   album_title?: string;
+  album_artist?: string;
   cover_art_url?: string;
   stream_url?: string;
   hls_playlist_path?: string;
+  hls_normal_path?: string;
+  hls_high_path?: string;
+  hls_lossless_path?: string;
+  hls_hires_path?: string;
   mp3_320_path?: string;
   aac_256_path?: string;
   aac_128_path?: string;
@@ -43,6 +55,8 @@ export interface Track {
   duration: number;
   sample_rate?: number;
   bit_depth?: number;
+  bitrate?: number;
+  channels?: number;
   quality_score?: number;
   quality_level?: string;
   file_format?: string;
@@ -51,7 +65,10 @@ export interface Track {
   composer?: string;
   lyricist?: string;
   year?: number;
+  track_number?: number;
   language?: string;
+  comment?: string;
+  copyright?: string;
   genres?: string[];
 }
 
@@ -72,6 +89,7 @@ export interface RadioStation {
   current_program_title?: string;
   rj_name?: string;
   licence?: string;
+  licence_document_url?: string;
   street_address?: string;
   city?: string;
   state_province?: string;
@@ -90,12 +108,19 @@ export interface RadioStation {
 
 type RepeatMode = 'none' | 'all' | 'one';
 
+export type TrackReactionValue = 'like' | 'dislike';
+
+type TimeListener = (time: number) => void;
+
 interface AudioContextType {
   currentTrack: Track | null;
   activeRadioStation: RadioStation | null;
   isPlaying: boolean;
   duration: number;
-  currentTime: number;
+  /** Read latest playhead without subscribing to React re-renders. */
+  getCurrentTime: () => number;
+  /** High-frequency playhead updates (DOM/UI); does not re-render context consumers. */
+  subscribeTime: (listener: TimeListener) => () => void;
   volume: number;
   isMuted: boolean;
   isRadioSync: boolean;
@@ -103,10 +128,11 @@ interface AudioContextType {
   repeatMode: RepeatMode;
   isShuffle: boolean;
   favorites: number[];
+  trackReactions: Record<number, TrackReactionValue>;
+  radioProgramReactions: Record<string, TrackReactionValue>;
   playQueue: Track[];
   currentQueueIndex: number;
   showPremiumModal: boolean;
-  equalizerBars: number[];
   qualityLevelSetting: QualityLevelSetting;
   activeStreamLabel: string | null;
   analyser: AnalyserNode | null;
@@ -125,7 +151,14 @@ interface AudioContextType {
   setRepeatMode: (mode: RepeatMode) => void;
   toggleShuffle: () => void;
   toggleFavorite: (trackId: number) => void;
+  setTrackReaction: (trackId: number, reaction: TrackReactionValue | null) => void;
+  setRadioProgramReaction: (
+    stationId: number,
+    programKey: string,
+    reaction: TrackReactionValue | null,
+  ) => void;
   addToQueue: (track: Track) => void;
+  playQueueTracks: (tracks: Track[]) => void;
   removeFromQueue: (trackId: number) => void;
   clearQueue: () => void;
   reorderQueue: (startIndex: number, endIndex: number) => void;
@@ -148,23 +181,41 @@ export { QUALITY_LABELS } from '../utils/streamQuality';
 
 const resolveStorageUrl = (url?: string): string => {
   if (!url) return "";
+  // Absolute CDN / S3 / MinIO URLs — use as-is
+  if (/^https?:\/\//i.test(url)) return url;
   if (url.startsWith("/api/")) return url;
-  if (url.startsWith("/storage") || url.includes("/storage/")) {
-    const normalized = url.startsWith('/') ? url : `/${url}`;
-    return `${window.location.protocol}//${window.location.host}${normalized}`;
+  // Same-origin storage proxy paths
+  if (url.startsWith("/storage")) {
+    return `${window.location.protocol}//${window.location.host}${url}`;
+  }
+  const storageIdx = url.indexOf("/storage/");
+  if (storageIdx >= 0) {
+    return `${window.location.protocol}//${window.location.host}${url.slice(storageIdx)}`;
   }
   return "";
 };
 
+const PREVIEW_LIMIT_SECONDS = 30;
+const RADIO_PREVIEW_LIMIT_SECONDS = 60;
+/** Max position jump counted as continuous playback between timeupdate samples. */
+const LISTEN_SAMPLE_MAX_DELTA_SEC = 5;
+/** Prefetch related tracks when this many (or fewer) remain after the current index. */
+const AUTOPLAY_PREFETCH_REMAINING = 3;
+/** Related-track batch size for lazy queue growth. */
+const AUTOPLAY_BATCH_SIZE = 12;
+/** Start preloading the next track's stream when this many seconds remain. */
+const AUTOPLAY_PRELOAD_SECONDS = 30;
+/** Retry play() while backgrounded when the browser blocked autoplay. */
+const BACKGROUND_PLAY_RETRY_MS = 2000;
+
 export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { token, isPremium, canConfigureStreamQuality, userMode, currentUser, isStaffInAdminMode, updateStreamQuality } = useAuth();
+  const { token, isPremium, canConfigureStreamQuality, userMode, serverUserMode, currentUser, isStaffInAdminMode, updateStreamQuality } = useAuth();
 
   // State variables
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [activeRadioStation, setActiveRadioStation] = useState<RadioStation | null>(null);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [duration, setDuration] = useState<number>(0);
-  const [currentTime, setCurrentTime] = useState<number>(0);
   const [volume, setVolume] = useState<number>(0.8);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [isRadioSync, setIsRadioSync] = useState<boolean>(false);
@@ -172,6 +223,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('none');
   const [isShuffle, setIsShuffle] = useState<boolean>(false);
   const [favorites, setFavorites] = useState<number[]>([]);
+  const [trackReactions, setTrackReactions] = useState<Record<number, TrackReactionValue>>({});
+  const [radioProgramReactions, setRadioProgramReactions] = useState<Record<string, TrackReactionValue>>({});
   const [playQueue, setPlayQueue] = useState<Track[]>([]);
   const [currentQueueIndex, setCurrentQueueIndex] = useState<number>(-1);
   const [showPremiumModal, setShowPremiumModal] = useState<boolean>(false);
@@ -189,9 +242,31 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const qualityLevelSettingRef = useRef<QualityLevelSetting>('normal');
   const pendingSeekRef = useRef<number | null>(null);
   const currentTimeRef = useRef(0);
+  const timeListenersRef = useRef(new Set<TimeListener>());
+
+  const getCurrentTime = useCallback(() => currentTimeRef.current, []);
+
+  const publishTime = useCallback((time: number) => {
+    currentTimeRef.current = time;
+    timeListenersRef.current.forEach((listener) => {
+      try {
+        listener(time);
+      } catch {
+        /* ignore subscriber errors */
+      }
+    });
+  }, []);
+
+  const subscribeTime = useCallback((listener: TimeListener) => {
+    timeListenersRef.current.add(listener);
+    listener(currentTimeRef.current);
+    return () => {
+      timeListenersRef.current.delete(listener);
+    };
+  }, []);
+
   const applyQualityChangeRef = useRef<(quality: QualityLevelSetting) => void>(() => {});
   const playTrackRef = useRef<(track: Track, isRadio?: boolean, autoPlay?: boolean) => void | Promise<void>>(async () => {});
-  const [equalizerBars, setEqualizerBars] = useState<number[]>(new Array(20).fill(0));
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
 
   // Refs for HTMLAudioElement & HLS
@@ -200,10 +275,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const webrtcPCRef = useRef<RTCPeerConnection | null>(null);
   const websocketRef = useRef<WebSocket | null>(null);
   const previewTimerRef = useRef<any>(null);
-  const equalizerIntervalRef = useRef<any>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const animFrameRef = useRef<number | null>(null);
   const hasSyncedLiveHeadRef = useRef(false);
   const fadeIntervalRef = useRef<any>(null);
 
@@ -216,6 +289,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Keep latest state refs to avoid stale closures in audio event handlers
   const currentTrackRef = useRef(currentTrack);
   const isPremiumRef = useRef(isPremium);
+  const playingOwnUploadRef = useRef(false);
   const canConfigureStreamQualityRef = useRef(canConfigureStreamQuality);
   const activeRadioStationRef = useRef(activeRadioStation);
   const isPlayingRef = useRef(isPlaying);
@@ -227,14 +301,49 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const isMutedRef = useRef(isMuted);
   // Tracks whether the user EXPLICITLY pressed pause (vs browser-initiated background pause)
   const userPausedRef = useRef(false);
+  /** True when play() was blocked while advancing tracks (common on mobile background tabs). */
+  const pendingContinuePlaybackRef = useRef(false);
   const playbackEpochRef = useRef(0);
   const ownedBlobUrlRef = useRef<string | null>(null);
+  const walletBilledTrackRef = useRef<number | null>(null);
+  const accumulatedListenSecondsRef = useRef(0);
+  const lastListenSampleTimeRef = useRef<number | null>(null);
+  const radioWalletSessionRef = useRef<{ stationId: number; token: string } | null>(null);
+  const radioWalletHeartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isStaffInAdminModeRef = useRef(isStaffInAdminMode);
+  const tokenRef = useRef(token);
+  const currentUserRef = useRef(currentUser);
+  const autoplayRefillInFlightRef = useRef(false);
+  const autoplayLastFailedSeedRef = useRef<number | null>(null);
+  const playNextRef = useRef<() => void>(() => {});
+  const handleTrackEndedRef = useRef<() => void>(() => {});
+  const maybePrefetchAutoplayRef = useRef<() => void>(() => {});
+  const preloadNextTrackStreamRef = useRef<() => void>(() => {});
+  /** True while swapping sources during auto-advance — suppresses background pause/resume races. */
+  const sourceTransitionRef = useRef(false);
+  const preloadHlsRef = useRef<Hls | null>(null);
+  const preloadedTrackIdRef = useRef<number | null>(null);
+  const preloadedStreamUrlRef = useRef<string | null>(null);
+  const preloadInFlightRef = useRef(false);
 
-  const resetAudioElementForNewSource = () => {
+  const destroyPreloadHls = () => {
+    if (preloadHlsRef.current) {
+      preloadHlsRef.current.destroy();
+      preloadHlsRef.current = null;
+    }
+    preloadedTrackIdRef.current = null;
+    preloadedStreamUrlRef.current = null;
+  };
+
+  const resetAudioElementForNewSource = (opts?: { keepPlaying?: boolean }) => {
     const audio = audioRef.current;
     if (!audio) return;
 
-    audio.pause();
+    if (opts?.keepPlaying) {
+      sourceTransitionRef.current = true;
+    } else {
+      audio.pause();
+    }
 
     if (hlsRef.current) {
       hlsRef.current.stopLoad();
@@ -260,12 +369,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     audio.removeAttribute('src');
     audio.src = '';
     audio.srcObject = null;
-    audio.load();
+    if (!opts?.keepPlaying) {
+      audio.load();
+    }
   };
 
   const stopAllPlayback = () => {
     playbackEpochRef.current += 1;
     userPausedRef.current = true;
+    pendingContinuePlaybackRef.current = false;
     isPlayingRef.current = false;
 
     if (fadeIntervalRef.current) {
@@ -273,6 +385,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       fadeIntervalRef.current = null;
     }
 
+    destroyPreloadHls();
     resetAudioElementForNewSource();
     if (webrtcPCRef.current) {
       webrtcPCRef.current.close();
@@ -292,7 +405,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setCurrentTrack(null);
     setActiveRadioStation(null);
     setIsRadioSync(false);
-    setCurrentTime(0);
+    publishTime(0);
     setDuration(0);
     setPlayQueue([]);
     setCurrentQueueIndex(-1);
@@ -423,12 +536,119 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => { repeatModeRef.current = repeatMode; }, [repeatMode]);
   useEffect(() => { playQueueRef.current = playQueue; }, [playQueue]);
   useEffect(() => { currentQueueIndexRef.current = currentQueueIndex; }, [currentQueueIndex]);
+
+  // Lazy-load related tracks into Now Playing when the queue is nearly exhausted
+  useEffect(() => {
+    maybePrefetchAutoplayRef.current();
+  }, [currentTrack?.id, currentQueueIndex, playQueue.length, activeRadioStation?.id, repeatMode]);
+
+  // Preload the next track's HLS manifest as soon as playback starts
+  useEffect(() => {
+    if (currentTrack && isPlaying && !activeRadioStation) {
+      preloadNextTrackStreamRef.current();
+    }
+  }, [currentTrack?.id, isPlaying, activeRadioStation?.id]);
   useEffect(() => { isShuffleRef.current = isShuffle; }, [isShuffle]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
+  useEffect(() => { isStaffInAdminModeRef.current = isStaffInAdminMode; }, [isStaffInAdminMode]);
+  useEffect(() => { tokenRef.current = token; }, [token]);
+  useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
+
+  const canBillListenActivity = useCallback(() => {
+    const user = currentUserRef.current;
+    const activeToken = tokenRef.current;
+    if (!user || !activeToken || isStaffInAdminModeRef.current) return false;
+    if ((user.real_role || user.role) === 'admin') return false;
+    return user.subscription === 'premium' && hasPaidSubscription(user);
+  }, []);
+
+  const clearRadioWalletSession = useCallback(async () => {
+    const session = radioWalletSessionRef.current;
+    const activeToken = tokenRef.current;
+    if (radioWalletHeartbeatRef.current) {
+      clearInterval(radioWalletHeartbeatRef.current);
+      radioWalletHeartbeatRef.current = null;
+    }
+    radioWalletSessionRef.current = null;
+    if (session && activeToken) {
+      try {
+        await endRadioListenSession(activeToken, session.stationId, session.token);
+      } catch {
+        // Best-effort billing cleanup.
+      }
+    }
+  }, []);
+
+  const startRadioWalletBilling = useCallback(async (stationId: number) => {
+    await clearRadioWalletSession();
+    const activeToken = tokenRef.current;
+    if (!activeToken || !canBillListenActivity()) return;
+    try {
+      const data = await startRadioListenSession(activeToken, stationId);
+      if (!data.billable || !data.session_token) return;
+      radioWalletSessionRef.current = { stationId, token: data.session_token };
+      radioWalletHeartbeatRef.current = setInterval(() => {
+        const session = radioWalletSessionRef.current;
+        const tok = tokenRef.current;
+        if (!session || !tok) return;
+        void heartbeatRadioListenSession(tok, session.stationId, session.token).catch(() => {});
+      }, 30000);
+    } catch {
+      // Billing is best-effort and should not block playback.
+    }
+  }, [canBillListenActivity, clearRadioWalletSession]);
+
+  const maybeReportTrackListenProgress = useCallback((track: Track, listenedSeconds: number) => {
+    const activeToken = tokenRef.current;
+    if (!activeToken || !canBillListenActivity()) return;
+    if (walletBilledTrackRef.current === track.id) return;
+    const threshold =
+      track.duration && track.duration > 0
+        ? Math.max(30, track.duration * 0.5)
+        : 30;
+    if (listenedSeconds < threshold) return;
+    walletBilledTrackRef.current = track.id;
+    void reportTrackListenProgress(activeToken, track.id, listenedSeconds).catch(() => {});
+  }, [canBillListenActivity]);
+
+  const resetListenTimeTracking = useCallback(() => {
+    accumulatedListenSecondsRef.current = 0;
+    lastListenSampleTimeRef.current = null;
+  }, []);
+
+  const sampleAccumulatedListenTime = useCallback((currentTime: number) => {
+    const last = lastListenSampleTimeRef.current;
+    if (last !== null) {
+      const delta = currentTime - last;
+      if (delta > 0 && delta <= LISTEN_SAMPLE_MAX_DELTA_SEC) {
+        accumulatedListenSecondsRef.current += delta;
+      }
+    }
+    lastListenSampleTimeRef.current = currentTime;
+    return accumulatedListenSecondsRef.current;
+  }, []);
+  const maybeReportTrackListenProgressRef = useRef(maybeReportTrackListenProgress);
+  useEffect(() => {
+    maybeReportTrackListenProgressRef.current = maybeReportTrackListenProgress;
+  }, [maybeReportTrackListenProgress]);
+
+  useEffect(() => {
+    if (!activeRadioStation) {
+      if (radioWalletSessionRef.current || radioWalletHeartbeatRef.current) {
+        void clearRadioWalletSession();
+      }
+    }
+  }, [activeRadioStation, clearRadioWalletSession]);
+
+  useEffect(() => () => {
+    void clearRadioWalletSession();
+  }, [clearRadioWalletSession]);
 
   useEffect(() => {
     setFavorites([]);
+    setTrackReactions({});
+    setRadioProgramReactions({});
     if (!token) {
       return;
     }
@@ -443,6 +663,44 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       } catch (e) {
         console.warn('Failed to load favorites:', e);
+      }
+    })();
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/reactions`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json() as Record<string, TrackReactionValue>;
+          const parsed: Record<number, TrackReactionValue> = {};
+          for (const [trackId, reaction] of Object.entries(data)) {
+            if (reaction === 'like' || reaction === 'dislike') {
+              parsed[Number(trackId)] = reaction;
+            }
+          }
+          setTrackReactions(parsed);
+        }
+      } catch (e) {
+        console.warn('Failed to load track reactions:', e);
+      }
+    })();
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/reactions/radio-programs`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (res.ok) {
+          const data = await res.json() as Record<string, TrackReactionValue>;
+          const parsed: Record<string, TrackReactionValue> = {};
+          for (const [key, reaction] of Object.entries(data)) {
+            if (reaction === 'like' || reaction === 'dislike') {
+              parsed[key] = reaction;
+            }
+          }
+          setRadioProgramReactions(parsed);
+        }
+      } catch (e) {
+        console.warn('Failed to load radio program reactions:', e);
       }
     })();
   }, [token]);
@@ -495,13 +753,23 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   }, [token]);
 
-  // Stop library music/other stations playback when radio admin switches to Admin Mode
+  // Stop library tracks and other stations when radio admin switches to Admin Mode.
+  // Own station may keep playing in both modes with no preview limit.
   useEffect(() => {
     if (
-      userMode === 'admin' &&
+      serverUserMode === 'admin' &&
       currentUser &&
       (currentUser.real_role || currentUser.role) === 'radio_admin'
     ) {
+      const station = activeRadioStationRef.current;
+      const role = currentUser.real_role || currentUser.role;
+      const isOwnStation = !!(
+        station &&
+        role === 'radio_admin' &&
+        station.owner_id === currentUser.id
+      );
+      if (isOwnStation) return;
+
       if (audioRef.current) {
         audioRef.current.pause();
         audioRef.current.src = '';
@@ -511,7 +779,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setActiveRadioStation(null);
       setIsRadioSync(false);
     }
-  }, [userMode, currentUser]);
+  }, [serverUserMode, currentUser]);
 
   // Initialize Audio Object
   useEffect(() => {
@@ -529,10 +797,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setIsPlaying(true);
       audio.playbackRate = playbackSpeedRef.current;
       const track = currentTrackRef.current;
-      if (track && token && !activeRadioStationRef.current && track.id < 100000) {
+      const activeToken = tokenRef.current;
+      if (track && activeToken && !activeRadioStationRef.current && track.id < 100000) {
         fetch(`${API_URL}/music/${track.id}/play`, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${token}` }
+          headers: { Authorization: `Bearer ${activeToken}` }
         }).catch(() => {});
       }
       // Tell Chrome Android this page is actively playing media — required for background audio
@@ -541,6 +810,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     };
     const onPause = () => {
+      if (sourceTransitionRef.current) {
+        sourceTransitionRef.current = false;
+        return;
+      }
       // If the page is hidden (background/minimize/lock) AND the user did NOT explicitly pause,
       // Chrome is pausing our audio — immediately try to resume it
       if (document.hidden && !userPausedRef.current) {
@@ -557,15 +830,15 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     };
     const onTimeUpdate = () => {
-      currentTimeRef.current = audio.currentTime;
-      setCurrentTime(audio.currentTime);
+      const t = audio.currentTime;
+      publishTime(t);
       // Update Chrome's notification seek bar position
       if ('mediaSession' in navigator && !activeRadioStationRef.current && audio.duration && isFinite(audio.duration)) {
         try {
           navigator.mediaSession.setPositionState({
             duration: audio.duration,
             playbackRate: audio.playbackRate,
-            position: audio.currentTime,
+            position: t,
           });
         } catch (_) {}
       }
@@ -583,19 +856,46 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       }
 
-      // Enforce guest limits here
-      if (!isPremiumRef.current) {
-        if (activeRadioStationRef.current && audio.currentTime >= 60) {
-          // Live radio limit of 1 minute
+      // Enforce guest limits only during active playback
+      if (!audio.paused && !isPremiumRef.current && !playingOwnUploadRef.current) {
+        if (activeRadioStationRef.current && audio.currentTime >= RADIO_PREVIEW_LIMIT_SECONDS) {
+          const st = activeRadioStationRef.current;
+          const u = currentUserRef.current;
+          const isOwnStation = !!(
+            u?.id &&
+            st.owner_id === u.id &&
+            (u.real_role || u.role) === 'radio_admin'
+          );
+          if (!isOwnStation) {
+            handleLimitReached();
+          }
+        } else if (!activeRadioStationRef.current && audio.currentTime >= PREVIEW_LIMIT_SECONDS) {
           handleLimitReached();
-        } else if (!activeRadioStationRef.current && audio.currentTime >= 30) {
-          // Standard track limit of 30 seconds
-          handleLimitReached();
+        }
+      }
+
+      const track = currentTrackRef.current;
+      if (track && !activeRadioStationRef.current && track.id < 100000 && !audio.paused) {
+        const listened = sampleAccumulatedListenTime(audio.currentTime);
+        maybeReportTrackListenProgressRef.current(track, listened);
+      }
+
+      // Preload next track stream and extend queue while approaching the end (critical on mobile)
+      if (
+        !activeRadioStationRef.current &&
+        !audio.paused &&
+        audio.duration &&
+        isFinite(audio.duration)
+      ) {
+        const remaining = audio.duration - t;
+        if (remaining > 0 && remaining <= AUTOPLAY_PRELOAD_SECONDS) {
+          preloadNextTrackStreamRef.current();
+          maybePrefetchAutoplayRef.current();
         }
       }
     };
     const onDurationChange = () => setDuration(audio.duration || 0);
-    const onEnded = () => handleTrackEnded();
+    const onEnded = () => handleTrackEndedRef.current();
     const onRateChange = () => {
       if (audio.playbackRate !== playbackSpeedRef.current) {
         audio.playbackRate = playbackSpeedRef.current;
@@ -635,6 +935,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       audio.removeEventListener('ended', onEnded);
       audio.removeEventListener('ratechange', onRateChange);
       audio.removeEventListener('error', onError);
+      destroyPreloadHls();
       audio.pause();
       if (hlsRef.current) {
         hlsRef.current.destroy();
@@ -653,7 +954,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   // Wire up MediaSession custom events to actual playPrevious / playNext functions
   useEffect(() => {
     const handlePrev = () => playPrevious();
-    const handleNext = () => playNext();
+    const handleNext = () => playNextRef.current();
     window.addEventListener('mediasession:previous', handlePrev);
     window.addEventListener('mediasession:next', handleNext);
     return () => {
@@ -662,68 +963,111 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
   }, []);
 
-  // Auto-resume audio when user returns to page after browser suspends it in background
+  const tryContinuePlayback = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || userPausedRef.current) {
+      pendingContinuePlaybackRef.current = false;
+      return;
+    }
+    if (!audio.paused && !audio.ended) {
+      pendingContinuePlaybackRef.current = false;
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'playing';
+      }
+      return;
+    }
+    audio.playbackRate = playbackSpeedRef.current;
+    void audio
+      .play()
+      .then(() => {
+        pendingContinuePlaybackRef.current = false;
+        userPausedRef.current = false;
+        isPlayingRef.current = true;
+        setIsPlaying(true);
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.playbackState = 'playing';
+        }
+        const target = isMutedRef.current ? 0 : volumeRef.current;
+        if (audio.volume < target - 0.01) {
+          fadeVolume(target, 300);
+        }
+      })
+      .catch(() => {
+        // Mobile browsers often reject play() while the tab is hidden; keep retrying.
+        pendingContinuePlaybackRef.current = true;
+      });
+  }, []);
+
+  // Auto-resume when returning to the tab, or when a background next-track play() was blocked
   useEffect(() => {
     let wasPlayingBeforeHide = false;
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        // Record whether audio was actively playing when page went hidden
-        wasPlayingBeforeHide = isPlayingRef.current && !audioRef.current?.paused;
-      } else {
-        // Page is visible again — if we were playing before, try to resume
-        if (wasPlayingBeforeHide && audioRef.current?.paused) {
-          audioRef.current.play().catch(() => {});
-        }
+        wasPlayingBeforeHide =
+          (isPlayingRef.current || pendingContinuePlaybackRef.current) &&
+          !userPausedRef.current;
+      } else if (
+        !userPausedRef.current &&
+        (wasPlayingBeforeHide || pendingContinuePlaybackRef.current) &&
+        audioRef.current
+      ) {
+        tryContinuePlayback();
+      }
+    };
+    const handlePageShow = () => {
+      if (!userPausedRef.current && pendingContinuePlaybackRef.current) {
+        tryContinuePlayback();
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, []);
-
-  // Real VU meter — driven by Web Audio API AnalyserNode
-  useEffect(() => {
-    const NUM_BARS = 20;
-
-    const stopAnalyser = () => {
-      if (animFrameRef.current !== null) {
-        cancelAnimationFrame(animFrameRef.current);
-        animFrameRef.current = null;
-      }
-      setEqualizerBars(new Array(NUM_BARS).fill(0));
+    window.addEventListener('pageshow', handlePageShow);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('pageshow', handlePageShow);
     };
+  }, [tryContinuePlayback]);
 
-    if (!isPlaying) {
-      stopAnalyser();
-      return;
-    }
+  // Keep retrying play() while backgrounded if the browser blocked track-advance autoplay
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (
+        pendingContinuePlaybackRef.current &&
+        !userPausedRef.current &&
+        audioRef.current
+      ) {
+        tryContinuePlayback();
+      }
+    }, BACKGROUND_PLAY_RETRY_MS);
+    return () => clearInterval(id);
+  }, [tryContinuePlayback]);
+
+  // Wire AnalyserNode once for the canvas equalizer (no React state updates per frame)
+  useEffect(() => {
+    if (!isPlaying) return;
 
     const audio = audioRef.current;
-    if (!audio) { stopAnalyser(); return; }
+    if (!audio) return;
 
-    // Lazily create AudioContext + analyser once
     if (!audioCtxRef.current) {
       try {
         audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
       } catch (e) {
         console.warn('Web Audio API not supported:', e);
-        stopAnalyser();
         return;
       }
     }
 
     const ctx = audioCtxRef.current;
 
-    // Resume if suspended (browser autoplay policy)
     if (ctx.state === 'suspended') {
       ctx.resume().catch(() => { });
     }
 
-    // Create analyser only once per audio element
     if (!analyserRef.current) {
       try {
         const source = ctx.createMediaElementSource(audio);
         const analyserNode = ctx.createAnalyser();
-        analyserNode.fftSize = 4096; // High resolution FFT Size
+        analyserNode.fftSize = 4096;
         analyserNode.smoothingTimeConstant = 0.85;
         analyserNode.minDecibels = -95;
         analyserNode.maxDecibels = -15;
@@ -732,67 +1076,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         analyserRef.current = analyserNode;
         setAnalyser(analyserNode);
       } catch (e) {
-        // CORS or already-connected element — fall back to random
+        // CORS or already-connected element — canvas equalizer handles null analyser
         console.warn('AnalyserNode setup failed (likely CORS on radio stream):', e);
-        equalizerIntervalRef.current = setInterval(() => {
-          setEqualizerBars(prev => prev.map(() => Math.floor(Math.random() * 80) + 10));
-        }, 120);
-        return () => {
-          if (equalizerIntervalRef.current) clearInterval(equalizerIntervalRef.current);
-          setEqualizerBars(new Array(NUM_BARS).fill(0));
-        };
       }
     }
-
-    const analyser = analyserRef.current;
-    const dataArray = new Float32Array(analyser.frequencyBinCount);
-
-    const tick = () => {
-      analyser.getFloatFrequencyData(dataArray);
-
-      // Map frequency bins to 20 bands logarithmically like the broadcaster
-      const maxBin = Math.min(150, dataArray.length);
-      const logIndices = new Array(NUM_BARS + 1);
-      const minLog = Math.log10(1);
-      const maxLog = Math.log10(maxBin || 1);
-      const logRange = maxLog - minLog;
-
-      for (let i = 0; i <= NUM_BARS; i++) {
-        logIndices[i] = Math.round(Math.pow(10, minLog + (i / NUM_BARS) * logRange));
-      }
-
-      const bars = new Array(NUM_BARS);
-      for (let i = 0; i < NUM_BARS; i++) {
-        const startIdx = logIndices[i];
-        const endIdx = Math.max(startIdx + 1, logIndices[i + 1]);
-
-        // Average the db value in the bin range
-        let sum = 0;
-        let count = 0;
-        for (let j = startIdx; j < endIdx && j < dataArray.length; j++) {
-          sum += dataArray[j];
-          count++;
-        }
-        const avgDb = count > 0 ? sum / count : -100;
-
-        // High frequency treble boost (boost = 1.0 + i/20 * 5.0)
-        // Since db scale is logarithmic, amp * boost => db + 20 * log10(boost)
-        const boost = 1.0 + (i / NUM_BARS) * 5.0;
-        const boostedDb = avgDb + (20 * Math.log10(boost));
-
-        // Map decibels (-50dB to -5dB) to level scale (0 to 100)
-        // val = (boostedDb + 50) / 45 * 100
-        const level = Math.max(0, Math.min(100, Math.round(((boostedDb + 50) / 45) * 100)));
-        bars[i] = level;
-      }
-
-      setEqualizerBars(bars);
-      animFrameRef.current = requestAnimationFrame(tick);
-    };
-
-    animFrameRef.current = requestAnimationFrame(tick);
-
-    return () => { stopAnalyser(); };
   }, [isPlaying]);
 
   const handleLimitReached = () => {
@@ -803,24 +1090,266 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setShowPremiumModal(true);
   };
 
+  const isOwnRadioStation = (
+    station?: RadioStation | null,
+    user?: typeof currentUser,
+  ) => {
+    const st = station ?? activeRadioStationRef.current;
+    const u = user ?? currentUserRef.current;
+    if (!st || !u?.id) return false;
+    const role = u.real_role || u.role;
+    return role === 'radio_admin' && st.owner_id === u.id;
+  };
+
+  const isPreviewBlockedAt = (
+    position: number,
+    isRadio = false,
+    isOwnUpload = playingOwnUploadRef.current,
+  ) => {
+    if (isPremiumRef.current || isOwnUpload) return false;
+    if (isRadio && isOwnRadioStation()) return false;
+    if (isRadio) return position >= RADIO_PREVIEW_LIMIT_SECONDS;
+    return position >= PREVIEW_LIMIT_SECONDS;
+  };
+
+  const refillQueueFromRadio = async (seed: Track): Promise<Track[]> => {
+    if (autoplayRefillInFlightRef.current) return [];
+    if (activeRadioStationRef.current) return [];
+    // Virtual live-radio ids are large sentinels; never seed autoplay from them
+    if (seed.id >= 100000) return [];
+    if (autoplayLastFailedSeedRef.current === seed.id) return [];
+
+    autoplayRefillInFlightRef.current = true;
+    try {
+      const queue = playQueueRef.current;
+      const current = currentTrackRef.current;
+      // Always exclude the seed, everything already queued, and the track currently playing
+      // so a second prefetch cannot re-append the song that is still playing.
+      const exclude = new Set<number>([seed.id, ...queue.map((t) => t.id)]);
+      if (current?.id != null && current.id < 100000) {
+        exclude.add(current.id);
+      }
+      const params = new URLSearchParams({ limit: String(AUTOPLAY_BATCH_SIZE) });
+      if (exclude.size > 0) {
+        params.set('exclude_ids', Array.from(exclude).join(','));
+      }
+      const headers: HeadersInit = {};
+      if (tokenRef.current) {
+        headers.Authorization = `Bearer ${tokenRef.current}`;
+      }
+      const res = await fetch(`${API_URL}/discovery/tracks/${seed.id}/radio?${params}`, { headers });
+      if (!res.ok) {
+        autoplayLastFailedSeedRef.current = seed.id;
+        return [];
+      }
+      const related = (await res.json()) as Track[];
+      if (!Array.isArray(related) || related.length === 0) {
+        autoplayLastFailedSeedRef.current = seed.id;
+        return [];
+      }
+
+      const fresh = related.filter((t) => !exclude.has(t.id));
+      if (fresh.length === 0) {
+        autoplayLastFailedSeedRef.current = seed.id;
+        return [];
+      }
+
+      const prev = playQueueRef.current;
+      const seen = new Set(prev.map((t) => t.id));
+      if (current?.id != null) seen.add(current.id);
+      const toAppend = fresh.filter((t) => !seen.has(t.id));
+      if (toAppend.length === 0) {
+        autoplayLastFailedSeedRef.current = seed.id;
+        return [];
+      }
+
+      const nextQueue = [...prev, ...toAppend];
+      playQueueRef.current = nextQueue;
+      setPlayQueue(nextQueue);
+      autoplayLastFailedSeedRef.current = null;
+      return toAppend;
+    } catch (e) {
+      console.warn('Failed to refill autoplay queue:', e);
+      return [];
+    } finally {
+      autoplayRefillInFlightRef.current = false;
+    }
+  };
+
+  const maybePrefetchAutoplay = () => {
+    if (autoplayRefillInFlightRef.current) return;
+    if (activeRadioStationRef.current) return;
+    if (repeatModeRef.current === 'all') return;
+
+    const queue = playQueueRef.current;
+    const index = currentQueueIndexRef.current;
+    const current = currentTrackRef.current;
+    if (!current || current.id >= 100000) return;
+
+    // Empty queue while a library track is playing: treat as 0 remaining and fill Now Playing
+    let remaining = 0;
+    if (queue.length === 0) {
+      remaining = 0;
+    } else if (index < 0) {
+      remaining = queue.length;
+    } else {
+      remaining = Math.max(0, queue.length - 1 - index);
+    }
+
+    if (remaining > AUTOPLAY_PREFETCH_REMAINING) return;
+
+    // Prefer seeding from the tail of the queue so recommendations chain forward
+    const seed = queue.length > 0 ? queue[queue.length - 1] : current;
+    if (autoplayLastFailedSeedRef.current === seed.id) return;
+    void refillQueueFromRadio(seed);
+  };
+  maybePrefetchAutoplayRef.current = maybePrefetchAutoplay;
+
+  const getNextQueueTrack = (): Track | null => {
+    const queue = playQueueRef.current;
+    const index = currentQueueIndexRef.current;
+    if (queue.length === 0) return null;
+    if (isShuffleRef.current) {
+      return queue[Math.floor(Math.random() * queue.length)] ?? null;
+    }
+    if (index + 1 < queue.length) return queue[index + 1];
+    if (repeatModeRef.current === 'all') return queue[0] ?? null;
+    return null;
+  };
+
+  const buildStreamCandidatesForTrack = (track: Track): string[] => {
+    const role = currentUserRef.current?.real_role || currentUserRef.current?.role;
+    const isOwnUpload =
+      role === 'studio_admin' &&
+      !!currentUserRef.current?.artist_profile?.id &&
+      track.artist_id === currentUserRef.current.artist_profile.id;
+    const canPlayOriginalMaster = isOwnUpload || role === 'admin';
+    return getStreamCandidatesForQuality(
+      track,
+      getEffectiveQuality(qualityLevelSettingRef.current, canConfigureStreamQualityRef.current),
+      isPremiumRef.current || canPlayOriginalMaster,
+    );
+  };
+
+  const preloadNextTrackStream = () => {
+    if (activeRadioStationRef.current || userPausedRef.current) return;
+
+    const nextTrack = getNextQueueTrack();
+    if (!nextTrack || nextTrack.id >= 100000) return;
+    if (preloadedTrackIdRef.current === nextTrack.id || preloadInFlightRef.current) return;
+
+    const candidates = buildStreamCandidatesForTrack(nextTrack);
+    if (candidates.length === 0) return;
+
+    const streamPath = candidates[0];
+    preloadInFlightRef.current = true;
+
+    void (async () => {
+      try {
+        let streamUrl = isMasterStreamPath(streamPath)
+          ? await resolveMasterStreamUrl(streamPath, nextTrack)
+          : resolveStorageUrl(streamPath);
+        if (!streamUrl) return;
+
+        destroyPreloadHls();
+        preloadedTrackIdRef.current = nextTrack.id;
+        preloadedStreamUrlRef.current = streamUrl;
+
+        if (streamUrl.includes('.m3u8') && Hls.isSupported()) {
+          const hls = new Hls();
+          preloadHlsRef.current = hls;
+          hls.loadSource(streamUrl);
+          hls.on(Hls.Events.ERROR, (_event, data) => {
+            if (data.fatal) destroyPreloadHls();
+          });
+        } else if (streamUrl.includes('.m3u8')) {
+          void fetch(streamUrl).catch(() => {});
+        }
+      } catch (e) {
+        console.warn('Failed to preload next track stream:', e);
+        destroyPreloadHls();
+      } finally {
+        preloadInFlightRef.current = false;
+      }
+    })();
+  };
+  preloadNextTrackStreamRef.current = preloadNextTrackStream;
+
   const handleTrackEnded = () => {
     if (repeatModeRef.current === 'one') {
       if (audioRef.current) {
         audioRef.current.currentTime = 0;
         audioRef.current.play().catch(() => { });
       }
-    } else {
-      const queue = playQueueRef.current;
-      if (queue.length === 0 || currentQueueIndexRef.current >= queue.length - 1) {
-        setIsPlaying(false);
-        if (activeRadioStationRef.current) {
-          setActiveRadioStation(null);
-          setIsRadioSync(false);
-        }
-      } else {
-        playNext();
-      }
+      return;
     }
+
+    const queue = playQueueRef.current;
+    const index = currentQueueIndexRef.current;
+
+    // Synchronous advance when the next track is already in the queue (mobile background requirement)
+    const hasQueuedNext =
+      !activeRadioStationRef.current &&
+      queue.length > 0 &&
+      (isShuffleRef.current || index + 1 < queue.length || repeatModeRef.current === 'all');
+
+    if (hasQueuedNext) {
+      sourceTransitionRef.current = true;
+      if ('mediaSession' in navigator && !userPausedRef.current) {
+        navigator.mediaSession.playbackState = 'playing';
+      }
+      playNextRef.current();
+      return;
+    }
+
+    const atEnd = queue.length === 0 || index >= queue.length - 1;
+    if (atEnd && repeatModeRef.current !== 'all') {
+      // Library autoplay: when the queue is exhausted, continue with related tracks
+      if (!activeRadioStationRef.current && currentTrackRef.current) {
+        void refillQueueFromRadio(currentTrackRef.current).then((appended) => {
+          if (appended.length > 0) {
+            playNextRef.current();
+          } else {
+            setIsPlaying(false);
+          }
+        });
+        return;
+      }
+      setIsPlaying(false);
+      if (activeRadioStationRef.current) {
+        setActiveRadioStation(null);
+        setIsRadioSync(false);
+      }
+      return;
+    }
+
+    playNextRef.current();
+  };
+  handleTrackEndedRef.current = handleTrackEnded;
+
+  /**
+   * Keep Now Playing aligned with what is actually playing.
+   * Explicit plays (Home, search, etc.) always start a fresh queue — like YouTube Music —
+   * instead of jumping to a later occurrence of the same track in the old list.
+   * Next/prev set currentQueueIndex before calling playTrack, so they hit the
+   * "already current" path and preserve the existing queue.
+   */
+  const ensurePlayingTrackQueued = (t: Track) => {
+    const queue = playQueueRef.current;
+    const idx = currentQueueIndexRef.current;
+    if (idx >= 0 && idx < queue.length && queue[idx].id === t.id) {
+      const next = queue.map((item, i) => (i === idx ? { ...item, ...t } : item));
+      playQueueRef.current = next;
+      setPlayQueue(next);
+      return;
+    }
+    // New playback context: replace Now Playing with this track; autoplay refills after it
+    autoplayLastFailedSeedRef.current = null;
+    const nextQueue = [t];
+    playQueueRef.current = nextQueue;
+    currentQueueIndexRef.current = 0;
+    setPlayQueue(nextQueue);
+    setCurrentQueueIndex(0);
   };
 
   const playTrack = async (track: Track, isRadio = false, autoPlay = true) => {
@@ -831,6 +1360,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     if (isRadio) {
       hasSyncedLiveHeadRef.current = false;
+      playingOwnUploadRef.current = false;
     }
 
     if (isStaffInAdminMode && (currentUser?.real_role || currentUser?.role) === 'radio_admin' && !isRadio) {
@@ -846,19 +1376,47 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       websocketRef.current.close();
       websocketRef.current = null;
     }
-    resetAudioElementForNewSource();
+    // Do not tear down the audio element yet — keep the media session alive until the
+    // next stream is ready (critical for mobile background autoplay continuity).
 
-    // Clear live radio station status if playing normal track
+    // Clear live radio station status if playing normal track (non-blocking so we
+    // can start the next track without an await gap that breaks background play()).
     if (!isRadio) {
+      void clearRadioWalletSession();
       setActiveRadioStation(null);
       setIsRadioSync(false);
+      walletBilledTrackRef.current = null;
+      resetListenTimeTracking();
     }
 
+    const role = currentUser?.real_role || currentUser?.role;
+    const canPlayOriginalMasterFor = (t: Track) => {
+      const isOwnUpload =
+        !isRadio &&
+        role === 'studio_admin' &&
+        !!currentUser?.artist_profile?.id &&
+        t.artist_id === currentUser.artist_profile.id;
+      return isOwnUpload || (!isRadio && role === 'admin');
+    };
+
+    const buildCandidatesFor = (t: Track) =>
+      isRadio
+        ? [t.stream_url || t.hls_playlist_path || ''].filter(Boolean)
+        : getStreamCandidatesForQuality(
+            t,
+            getEffectiveQuality(qualityLevelSettingRef.current, canConfigureStreamQualityRef.current),
+            isPremiumRef.current || canPlayOriginalMasterFor(t),
+          );
+
     let trackToPlay = track;
-    // Only re-fetch metadata for real music library tracks, not virtual live-radio tracks
-    if (!isRadio) {
+    // Fast path: queue advances already carry stream URLs — skip the metadata await so
+    // play() can stay chained to the prior track's `ended` (mobile background requirement).
+    const cachedCandidates = !isRadio ? buildCandidatesFor(track) : [];
+    if (!isRadio && cachedCandidates.length === 0) {
       try {
-        const res = await fetch(`${API_URL}/music/${track.id}`);
+        const res = await fetch(`${API_URL}/music/${track.id}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
         if (res.ok) {
           trackToPlay = await res.json();
         }
@@ -869,46 +1427,56 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     if (epoch !== playbackEpochRef.current) return;
 
-    const role = currentUser?.real_role || currentUser?.role;
+    // Library tracks must live in the queue at the current index (not as a UI-only prepend)
+    if (!isRadio) {
+      ensurePlayingTrackQueued(trackToPlay);
+    }
+
     const isOwnUpload =
       !isRadio &&
       role === 'studio_admin' &&
       !!currentUser?.artist_profile?.id &&
       trackToPlay.artist_id === currentUser.artist_profile.id;
+    const isPlatformAdminPreview = !isRadio && role === 'admin';
+    const canPlayOriginalMaster = isOwnUpload || isPlatformAdminPreview;
 
     if (isStaffInAdminMode && role === 'studio_admin' && !isRadio && !isOwnUpload) {
       console.warn("Studio admins in admin mode can only play tracks they uploaded.");
       return;
     }
 
-    // Determine stream candidates from quality preference and subscription tier
-    const candidates = isRadio
-      ? [trackToPlay.stream_url || trackToPlay.hls_playlist_path || ''].filter(Boolean)
-      : isOwnUpload
-        ? getOwnerStreamCandidates(trackToPlay)
+    playingOwnUploadRef.current = canPlayOriginalMaster;
+
+    const buildCandidates = (t: Track) =>
+      isRadio
+        ? [t.stream_url || t.hls_playlist_path || ''].filter(Boolean)
         : getStreamCandidatesForQuality(
-            trackToPlay,
+            t,
             getEffectiveQuality(qualityLevelSettingRef.current, canConfigureStreamQualityRef.current),
-            isPremiumRef.current,
+            isPremiumRef.current || canPlayOriginalMaster,
           );
+
+    // Determine stream candidates from quality preference (HLS segments)
+    let candidates = buildCandidates(trackToPlay);
 
     if (!isRadio && candidates.length === 0) {
       const effectiveQuality = getEffectiveQuality(
         qualityLevelSettingRef.current,
         canConfigureStreamQualityRef.current,
       );
+      pendingContinuePlaybackRef.current = false;
+      isPlayingRef.current = false;
+      setIsPlaying(false);
       if (isPremiumRef.current && isStudioMasterQuality(effectiveQuality)) {
         showError(
-          'Studio Master Unavailable',
-          token
-            ? 'The original lossless file is not available for this track yet.'
-            : 'Sign in to stream the original studio master file.',
+          'Stream Unavailable',
+          `The ${QUALITY_LABELS[effectiveQuality]} HLS playlist is not ready for this track yet. It may still be transcoding.`,
         );
       } else {
         showError(
           'Stream Unavailable',
           isPremiumRef.current
-            ? 'No audio file is available for the selected quality tier yet. The track may still be transcoding.'
+            ? 'No HLS stream is available for the selected quality tier yet. The track may still be transcoding.'
             : 'Preview stream is not ready yet. Please try again shortly.',
         );
       }
@@ -923,16 +1491,43 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const beginPlayback = () => {
       if (epoch !== playbackEpochRef.current || !audioRef.current) return;
       audioRef.current.playbackRate = playbackSpeedRef.current;
-      audioRef.current.volume = 0;
+      // Skip fade-from-zero while backgrounded — some mobile browsers treat volume-0
+      // play as inaudible and drop the session; also speeds up next-track start.
+      if (document.hidden) {
+        audioRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
+      } else {
+        audioRef.current.volume = 0;
+      }
+      userPausedRef.current = false;
+      isPlayingRef.current = true;
+      setIsPlaying(true);
+      if ('mediaSession' in navigator) {
+        navigator.mediaSession.playbackState = 'playing';
+      }
       audioRef.current
         .play()
         .then(() => {
-          const target = isMutedRef.current ? 0 : volumeRef.current;
-          fadeVolume(target, 300);
+          pendingContinuePlaybackRef.current = false;
+          if (!document.hidden) {
+            const target = isMutedRef.current ? 0 : volumeRef.current;
+            fadeVolume(target, 300);
+          }
         })
-        .catch((e) => console.log('Autoplay blocked: ', e));
-      userPausedRef.current = false;
-      setIsPlaying(true);
+        .catch((e) => {
+          console.log('Autoplay blocked: ', e);
+          pendingContinuePlaybackRef.current = true;
+          const audio = audioRef.current;
+          if (!audio) return;
+          const retry = () => {
+            audio.removeEventListener('canplay', retry);
+            audio.removeEventListener('loadeddata', retry);
+            if (!userPausedRef.current && pendingContinuePlaybackRef.current) {
+              tryContinuePlayback();
+            }
+          };
+          audio.addEventListener('canplay', retry);
+          audio.addEventListener('loadeddata', retry);
+        });
     };
 
     const restorePlaybackPosition = (isHls = false): Promise<void> => {
@@ -953,7 +1548,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           if (settled) return;
           settled = true;
           cleanup();
-          setCurrentTime(audio.currentTime);
+          publishTime(audio.currentTime);
           resolve();
         };
 
@@ -1026,13 +1621,23 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                   ? audioRef.current.duration
                   : target,
               );
-              setCurrentTime(audioRef.current.currentTime);
+              publishTime(audioRef.current.currentTime);
             } catch {
               console.warn('Could not restore playback position after stream reload.');
             }
           }
         }
         if (autoPlay) {
+          const position = audioRef.current?.currentTime ?? seekAfterLoad ?? 0;
+          if (isPreviewBlockedAt(position, isRadio, canPlayOriginalMaster)) {
+            userPausedRef.current = true;
+            isPlayingRef.current = false;
+            setIsPlaying(false);
+            if (audioRef.current) {
+              audioRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
+            }
+            return;
+          }
           beginPlayback();
         } else if (audioRef.current) {
           audioRef.current.volume = isMutedRef.current ? 0 : volumeRef.current;
@@ -1041,6 +1646,38 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           setIsPlaying(false);
         }
       });
+    };
+
+    let qualityFallbackNotified = false;
+    let streamRefreshAttempted = false;
+
+    /** On stream failure: refresh URLs once and retry the preferred tier before downgrading. */
+    const afterStreamFailure = async (failedIndex: number) => {
+      if (!isRadio && !streamRefreshAttempted && track.id) {
+        streamRefreshAttempted = true;
+        try {
+          const res = await fetch(`${API_URL}/music/${track.id}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          });
+          if (res.ok) {
+            const fresh = await res.json();
+            trackToPlay = fresh;
+            setCurrentTrack(fresh);
+            setPlayQueue((prev) =>
+              prev.map((item) => (item.id === fresh.id ? { ...item, ...fresh } : item)),
+            );
+            const refreshed = buildCandidates(fresh);
+            if (refreshed.length > 0) {
+              candidates = refreshed;
+              // Retry preferred quality with fresh generation URLs before any downgrade
+              return tryCandidate(0);
+            }
+          }
+        } catch (e) {
+          console.warn('Failed to refresh stream URLs after playback failure:', e);
+        }
+      }
+      return tryCandidate(failedIndex + 1);
     };
 
     const tryCandidate = async (index: number) => {
@@ -1054,11 +1691,27 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       const streamPath = candidates[index];
+      const preferredPath = candidates[0];
+      if (
+        !isRadio &&
+        !qualityFallbackNotified &&
+        index > 0 &&
+        preferredPath &&
+        isFlacHlsPath(preferredPath) &&
+        !isFlacHlsPath(streamPath)
+      ) {
+        qualityFallbackNotified = true;
+        showInfo(
+          'Quality adjusted',
+          `This browser could not play ${describeStreamPath(preferredPath, trackToPlay)}. Playing ${describeStreamPath(streamPath, trackToPlay)} instead.`,
+        );
+      }
+
       let streamUrl = isMasterStreamPath(streamPath)
         ? await resolveMasterStreamUrl(streamPath, trackToPlay)
         : resolveStorageUrl(streamPath);
       if (!streamUrl) {
-        tryCandidate(index + 1);
+        await afterStreamFailure(index);
         return;
       }
 
@@ -1074,10 +1727,48 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
       seekRestoreCleanup?.();
       seekRestoreCleanup = null;
-      resetAudioElementForNewSource();
+
+      const isAutoAdvance = !shouldRestorePosition && autoPlay && !isRadio;
+      const keepPlaying = isAutoAdvance && (document.hidden || pendingContinuePlaybackRef.current);
+      const canUsePreload =
+        isAutoAdvance &&
+        preloadedTrackIdRef.current === trackToPlay.id &&
+        preloadedStreamUrlRef.current === streamUrl;
+
+      sourceTransitionRef.current = keepPlaying;
+      resetAudioElementForNewSource({ keepPlaying });
 
       if (streamUrl.includes('.m3u8')) {
         if (Hls.isSupported()) {
+          if (canUsePreload && preloadHlsRef.current) {
+            const hls = preloadHlsRef.current;
+            preloadHlsRef.current = null;
+            preloadedTrackIdRef.current = null;
+            preloadedStreamUrlRef.current = null;
+            hlsRef.current = hls;
+            hls.attachMedia(audioRef.current);
+            hls.on(Hls.Events.ERROR, (_event, data) => {
+              if (!data.fatal) return;
+              console.warn('HLS fatal error on preloaded stream, recovering:', data);
+              seekRestoreCleanup?.();
+              seekRestoreCleanup = null;
+              hls.destroy();
+              hlsRef.current = null;
+              void afterStreamFailure(index);
+            });
+            if (hls.levels.length > 0) {
+              onStreamReady(true);
+            } else {
+              const onPreloadManifest = () => {
+                hls.off(Hls.Events.MANIFEST_PARSED, onPreloadManifest);
+                onStreamReady(true);
+              };
+              hls.on(Hls.Events.MANIFEST_PARSED, onPreloadManifest);
+            }
+            return;
+          }
+
+          destroyPreloadHls();
           const hls = new Hls();
           hlsRef.current = hls;
           hls.loadSource(streamUrl);
@@ -1091,18 +1782,18 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           });
           hls.on(Hls.Events.ERROR, (_event, data) => {
             if (!data.fatal) return;
-            console.warn('HLS fatal error, trying next quality candidate:', data);
+            console.warn('HLS fatal error, recovering stream before quality downgrade:', data);
             seekRestoreCleanup?.();
             seekRestoreCleanup = null;
             hls.destroy();
             hlsRef.current = null;
-            tryCandidate(index + 1);
+            void afterStreamFailure(index);
           });
         } else if (audioRef.current.canPlayType('application/vnd.apple.mpegurl')) {
           const audio = audioRef.current;
           const onNativeError = () => {
             audio.removeEventListener('error', onNativeError);
-            tryCandidate(index + 1);
+            void afterStreamFailure(index);
           };
           audio.addEventListener('error', onNativeError);
           audio.src = streamUrl;
@@ -1116,7 +1807,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             { once: true }
           );
         } else {
-          tryCandidate(index + 1);
+          await afterStreamFailure(index);
         }
         return;
       }
@@ -1124,8 +1815,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const audio = audioRef.current;
       const onDirectError = () => {
         audio.removeEventListener('error', onDirectError);
-        console.warn('Direct stream failed, trying next quality candidate');
-        tryCandidate(index + 1);
+        console.warn('Direct stream failed, recovering stream before quality downgrade');
+        void afterStreamFailure(index);
       };
       audio.addEventListener('error', onDirectError);
       audio.src = streamUrl;
@@ -1142,7 +1833,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     // Reset details
     setCurrentTrack(trackToPlay);
-    setCurrentTime(seekAfterLoad ?? 0);
+    publishTime(seekAfterLoad ?? 0);
     setDuration(trackToPlay.duration || 0);
 
     // Register MediaSession API for lock screen / notification media controls on mobile
@@ -1155,10 +1846,16 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           ? [{ src: trackToPlay.cover_art_url, sizes: '512x512', type: 'image/jpeg' }]
           : [],
       });
+      if (autoPlay) {
+        navigator.mediaSession.playbackState = 'playing';
+      }
       navigator.mediaSession.setActionHandler('play', () => {
-        audioRef.current?.play();
+        userPausedRef.current = false;
+        tryContinuePlayback();
       });
       navigator.mediaSession.setActionHandler('pause', () => {
+        userPausedRef.current = true;
+        pendingContinuePlaybackRef.current = false;
         audioRef.current?.pause();
       });
       navigator.mediaSession.setActionHandler('previoustrack', () => {
@@ -1170,6 +1867,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       navigator.mediaSession.setActionHandler('seekto', (details) => {
         if (audioRef.current && details.seekTime !== undefined) {
           audioRef.current.currentTime = details.seekTime;
+          lastListenSampleTimeRef.current = details.seekTime;
         }
       });
     }
@@ -1239,6 +1937,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setActiveRadioStation(station);
     setIsRadioSync(true);
     setCurrentTrack(null);
+    void startRadioWalletBilling(station.id);
 
     // Register MediaSession for lock screen / notification controls on mobile
     if ('mediaSession' in navigator) {
@@ -1452,6 +2151,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (!audioRef.current) return;
     if (isPlaying) {
       userPausedRef.current = true; // Mark as intentional user pause
+      pendingContinuePlaybackRef.current = false;
       isPlayingRef.current = false; // Sync update to prevent onError from firing when unloading source
       setIsPlaying(false);
 
@@ -1487,15 +2187,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         }
       });
     } else {
-      // Trigger checkout modal if already blocked at guest threshold
-      if (!isPremium) {
-        if (activeRadioStation && currentTime >= 60) {
-          setShowPremiumModal(true);
-          return;
-        } else if (!activeRadioStation && currentTime >= 30) {
-          setShowPremiumModal(true);
-          return;
-        }
+      const position = Math.max(audioRef.current.currentTime ?? 0, currentTimeRef.current);
+      if (isPreviewBlockedAt(position, !!activeRadioStation)) {
+        setShowPremiumModal(true);
+        return;
       }
 
       if (activeRadioStation) {
@@ -1518,7 +2213,8 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const seek = (time: number) => {
     if (!audioRef.current || isRadioSync) return; // Prevent live stream seeking
     audioRef.current.currentTime = time;
-    setCurrentTime(time);
+    publishTime(time);
+    lastListenSampleTimeRef.current = time;
   };
 
   const adjustVolume = (vol: number) => {
@@ -1581,22 +2277,136 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
+  const setRadioProgramReaction = async (
+    stationId: number,
+    programKey: string,
+    reaction: TrackReactionValue | null,
+  ) => {
+    if (!token) return;
+    const key = `${stationId}:${programKey}`;
+    const previous = radioProgramReactions[key] ?? null;
+    setRadioProgramReactions((prev) => {
+      const next = { ...prev };
+      if (reaction === null) {
+        delete next[key];
+      } else {
+        next[key] = reaction;
+      }
+      return next;
+    });
+    try {
+      const encodedKey = encodeURIComponent(programKey);
+      if (reaction === null) {
+        const res = await fetch(`${API_URL}/reactions/radio/${stationId}/${encodedKey}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok && res.status !== 404) throw new Error('failed');
+      } else {
+        const res = await fetch(`${API_URL}/reactions/radio/${stationId}/${encodedKey}`, {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ reaction }),
+        });
+        if (!res.ok) throw new Error('failed');
+      }
+    } catch (e) {
+      setRadioProgramReactions((prev) => {
+        const next = { ...prev };
+        if (previous === null) {
+          delete next[key];
+        } else {
+          next[key] = previous;
+        }
+        return next;
+      });
+      console.warn('Failed to sync radio program reaction:', e);
+    }
+  };
+
+  const setTrackReaction = async (trackId: number, reaction: TrackReactionValue | null) => {
+    if (!token) return;
+    const previous = trackReactions[trackId] ?? null;
+    setTrackReactions(prev => {
+      const next = { ...prev };
+      if (reaction === null) {
+        delete next[trackId];
+      } else {
+        next[trackId] = reaction;
+      }
+      return next;
+    });
+    try {
+      if (reaction === null) {
+        const res = await fetch(`${API_URL}/reactions/${trackId}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok && res.status !== 404) throw new Error('failed');
+      } else {
+        const res = await fetch(`${API_URL}/reactions/${trackId}`, {
+          method: 'PUT',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ reaction }),
+        });
+        if (!res.ok) throw new Error('failed');
+      }
+    } catch (e) {
+      setTrackReactions(prev => {
+        const next = { ...prev };
+        if (previous === null) {
+          delete next[trackId];
+        } else {
+          next[trackId] = previous;
+        }
+        return next;
+      });
+      console.warn('Failed to sync track reaction:', e);
+    }
+  };
+
   const addToQueue = (track: Track) => {
     setPlayQueue(prev => {
       if (prev.some(t => t.id === track.id)) return prev;
+      const next = [...prev, track];
+      playQueueRef.current = next;
       if (prev.length === 0) {
+        currentQueueIndexRef.current = 0;
         setCurrentQueueIndex(0);
         playTrack(track);
       }
-      return [...prev, track];
+      return next;
     });
   };
 
+  const playQueueTracks = (tracks: Track[]) => {
+    if (tracks.length === 0) return;
+    autoplayLastFailedSeedRef.current = null;
+    playQueueRef.current = tracks;
+    currentQueueIndexRef.current = 0;
+    setPlayQueue(tracks);
+    setCurrentQueueIndex(0);
+    void playTrack(tracks[0]);
+  };
+
   const removeFromQueue = (trackId: number) => {
-    setPlayQueue(prev => prev.filter(t => t.id !== trackId));
+    setPlayQueue(prev => {
+      const next = prev.filter(t => t.id !== trackId);
+      playQueueRef.current = next;
+      return next;
+    });
   };
 
   const clearQueue = () => {
+    autoplayLastFailedSeedRef.current = null;
+    playQueueRef.current = [];
+    currentQueueIndexRef.current = -1;
     setPlayQueue([]);
     setCurrentQueueIndex(-1);
     setCurrentTrack(null);
@@ -1607,12 +2417,25 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const playNext = () => {
     const queue = playQueueRef.current;
     const index = currentQueueIndexRef.current;
+
     if (queue.length === 0) {
       if (repeatModeRef.current === 'all' && currentTrackRef.current) {
-        playTrack(currentTrackRef.current);
+        void playTrack(currentTrackRef.current);
+        return;
+      }
+      if (!activeRadioStationRef.current && currentTrackRef.current) {
+        void refillQueueFromRadio(currentTrackRef.current).then((appended) => {
+          if (appended.length === 0) return;
+          const nextQueue = playQueueRef.current;
+          if (nextQueue.length === 0) return;
+          currentQueueIndexRef.current = 0;
+          setCurrentQueueIndex(0);
+          void playTrack(nextQueue[0]);
+        });
       }
       return;
     }
+
     let nextIndex = index + 1;
 
     if (isShuffleRef.current) {
@@ -1620,14 +2443,27 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     } else if (nextIndex >= queue.length) {
       if (repeatModeRef.current === 'all') {
         nextIndex = 0;
+      } else if (!activeRadioStationRef.current && currentTrackRef.current) {
+        void refillQueueFromRadio(currentTrackRef.current).then((appended) => {
+          if (appended.length === 0) return;
+          const nextQueue = playQueueRef.current;
+          const playIndex = Math.min(index + 1, nextQueue.length - 1);
+          if (playIndex < 0 || playIndex >= nextQueue.length) return;
+          currentQueueIndexRef.current = playIndex;
+          setCurrentQueueIndex(playIndex);
+          void playTrack(nextQueue[playIndex]);
+        });
+        return;
       } else {
         return; // Playback finished
       }
     }
 
+    currentQueueIndexRef.current = nextIndex;
     setCurrentQueueIndex(nextIndex);
-    playTrack(queue[nextIndex]);
+    void playTrack(queue[nextIndex]);
   };
+  playNextRef.current = playNext;
 
   const playPrevious = () => {
     const queue = playQueueRef.current;
@@ -1643,8 +2479,9 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     }
 
+    currentQueueIndexRef.current = prevIndex;
     setCurrentQueueIndex(prevIndex);
-    playTrack(queue[prevIndex]);
+    void playTrack(queue[prevIndex]);
   };
 
   const reorderQueue = (startIndex: number, endIndex: number) => {
@@ -1678,24 +2515,27 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       prevPremiumRef.current = isPremium;
       return;
     }
-    if (prevPremiumRef.current && !isPremium && currentTrackRef.current && !activeRadioStationRef.current) {
+    if (prevPremiumRef.current && !isPremium && currentTrackRef.current && !activeRadioStationRef.current && !playingOwnUploadRef.current) {
+      const wasPlaying = isPlayingRef.current && !(audioRef.current?.paused ?? true);
       const savedPosition = Math.max(
         audioRef.current?.currentTime ?? 0,
         currentTimeRef.current,
       );
+      const blocked = isPreviewBlockedAt(savedPosition, false, playingOwnUploadRef.current);
       pendingSeekRef.current = savedPosition >= 0.25 ? savedPosition : null;
-      void playTrackRef.current(currentTrackRef.current, false);
+      void playTrackRef.current(currentTrackRef.current, false, wasPlaying && !blocked);
     }
     prevPremiumRef.current = isPremium;
   }, [isPremium, token]);
 
-  return (
-    <AudioContext.Provider value={{
+  const contextValue = useMemo(
+    () => ({
       currentTrack,
       activeRadioStation,
       isPlaying,
       duration,
-      currentTime,
+      getCurrentTime,
+      subscribeTime,
       volume,
       isMuted,
       isRadioSync,
@@ -1703,10 +2543,11 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       repeatMode,
       isShuffle,
       favorites,
+      trackReactions,
+      radioProgramReactions,
       playQueue,
       currentQueueIndex,
       showPremiumModal,
-      equalizerBars,
       qualityLevelSetting,
       activeStreamLabel,
       analyser,
@@ -1725,7 +2566,10 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setRepeatMode,
       toggleShuffle,
       toggleFavorite,
+      setTrackReaction,
+      setRadioProgramReaction,
       addToQueue,
+      playQueueTracks,
       removeFromQueue,
       clearQueue,
       reorderQueue,
@@ -1737,7 +2581,63 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       refreshOutputDevices,
       setOutputDevice,
       promptSelectOutputDevice,
-    }}>
+    }),
+    [
+      currentTrack,
+      activeRadioStation,
+      isPlaying,
+      duration,
+      getCurrentTime,
+      subscribeTime,
+      volume,
+      isMuted,
+      isRadioSync,
+      playbackSpeed,
+      repeatMode,
+      isShuffle,
+      favorites,
+      trackReactions,
+      radioProgramReactions,
+      playQueue,
+      currentQueueIndex,
+      showPremiumModal,
+      qualityLevelSetting,
+      activeStreamLabel,
+      analyser,
+      outputDevices,
+      selectedOutputDeviceId,
+      outputDeviceSupported,
+      outputDevicesLoading,
+      playTrack,
+      playRadioStation,
+      togglePlay,
+      seek,
+      adjustVolume,
+      toggleMute,
+      setSpeed,
+      setRepeatMode,
+      toggleShuffle,
+      toggleFavorite,
+      setTrackReaction,
+      setRadioProgramReaction,
+      addToQueue,
+      playQueueTracks,
+      removeFromQueue,
+      clearQueue,
+      reorderQueue,
+      playNext,
+      playPrevious,
+      setShowPremiumModal,
+      setQualityLevelSetting,
+      updateTrackMetadata,
+      refreshOutputDevices,
+      setOutputDevice,
+      promptSelectOutputDevice,
+    ],
+  );
+
+  return (
+    <AudioContext.Provider value={contextValue}>
       {children}
     </AudioContext.Provider>
   );

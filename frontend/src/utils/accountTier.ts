@@ -1,8 +1,9 @@
 import type { User } from '../context/AuthContext';
+import { parseServerDateTime } from './dateTime';
 
 export function getTrialDaysLeft(user: User | null): number {
   if (!user?.created_at) return 0;
-  const createdAt = new Date(user.created_at);
+  const createdAt = parseServerDateTime(user.created_at);
   const now = new Date();
   const diffDays = (now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24);
   return Math.max(0, Math.ceil(7 - diffDays));
@@ -17,7 +18,7 @@ export function hasPaidSubscription(user: User | null): boolean {
   if (!['premium', 'unlimited'].includes(user.subscription || '')) return false;
   if (user.subscription === 'unlimited') return true;
   if (!user.subscription_expires_at) return true;
-  return new Date(user.subscription_expires_at) > new Date();
+  return parseServerDateTime(user.subscription_expires_at) > new Date();
 }
 
 export function isOnFreeTrial(user: User | null): boolean {

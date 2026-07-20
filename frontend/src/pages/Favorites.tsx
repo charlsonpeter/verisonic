@@ -3,6 +3,7 @@ import { Heart, Disc } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio, Track } from '../context/AudioContext';
 import { TrackRow } from '../components/shared/TrackRow';
+import { TrackRowSkeleton } from '../components/shared/skeleton';
 
 interface FavoritesProps {
   onViewDetails: (track: Track) => void;
@@ -21,26 +22,36 @@ export const Favorites: React.FC<FavoritesProps> = ({ onViewDetails }) => {
       return;
     }
 
+    let cancelled = false;
     const loadFavoriteTracks = async () => {
-      setIsLoading(true);
+      const showSkeleton = favoriteTracks.length === 0;
+      if (showSkeleton) setIsLoading(true);
       try {
         const res = await fetch('/api/favorites', {
           headers: { Authorization: `Bearer ${token}` },
         });
+        if (cancelled) return;
         if (res.ok) {
           setFavoriteTracks(await res.json());
         } else {
           setFavoriteTracks([]);
         }
       } catch (e) {
-        console.error('Failed to load favorite tracks:', e);
-        setFavoriteTracks([]);
+        if (!cancelled) {
+          console.error('Failed to load favorite tracks:', e);
+          setFavoriteTracks([]);
+        }
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
 
-    loadFavoriteTracks();
+    void loadFavoriteTracks();
+    return () => {
+      cancelled = true;
+    };
+    // Re-fetch when favorite ids change, but avoid dependency on favoriteTracks length
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, favorites]);
 
   if (!token) {
@@ -62,7 +73,7 @@ export const Favorites: React.FC<FavoritesProps> = ({ onViewDetails }) => {
       </div>
 
       {isLoading ? (
-        <p className="text-xs text-slate-500 text-center py-14">Loading favorites...</p>
+        <TrackRowSkeleton count={6} />
       ) : favoriteTracks.length === 0 ? (
         <div className="text-center py-14 bg-slate-900/10 rounded-3xl p-6">
           <Heart className="w-8 h-8 mx-auto mb-2 text-slate-600" />

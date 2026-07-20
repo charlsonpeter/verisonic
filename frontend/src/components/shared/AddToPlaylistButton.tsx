@@ -13,9 +13,16 @@ interface PlaylistOption {
 
 interface AddToPlaylistButtonProps {
   track: Track;
+  /** `row` = compact list control; `round` = mobile expanded player chip; `player` = desktop transport-style icon */
+  variant?: 'row' | 'round' | 'player';
+  className?: string;
 }
 
-export const AddToPlaylistButton: React.FC<AddToPlaylistButtonProps> = ({ track }) => {
+export const AddToPlaylistButton: React.FC<AddToPlaylistButtonProps> = ({
+  track,
+  variant = 'row',
+  className = '',
+}) => {
   const { token, canUsePlaylists } = useAuth();
   const [open, setOpen] = useState(false);
   const [playlists, setPlaylists] = useState<PlaylistOption[]>([]);
@@ -23,6 +30,7 @@ export const AddToPlaylistButton: React.FC<AddToPlaylistButtonProps> = ({ track 
   const [isAdding, setIsAdding] = useState<number | null>(null);
   const [newName, setNewName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [menuPos, setMenuPos] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -49,6 +57,33 @@ export const AddToPlaylistButton: React.FC<AddToPlaylistButtonProps> = ({ track 
     }
   };
 
+  const updateMenuPosition = () => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) {
+      setMenuPos(null);
+      return;
+    }
+    const menuWidth = 224;
+    const gap = 8;
+    const left = Math.min(
+      Math.max(12, rect.right - menuWidth),
+      window.innerWidth - menuWidth - 12,
+    );
+
+    if (variant === 'round' || variant === 'player') {
+      // Anchor just above the trigger (works regardless of menu height)
+      setMenuPos({
+        bottom: Math.max(12, window.innerHeight - rect.top + gap),
+        left,
+      });
+    } else {
+      setMenuPos({
+        top: Math.min(rect.bottom + gap, window.innerHeight - 12),
+        left,
+      });
+    }
+  };
+
   useEffect(() => {
     setPlaylists([]);
     setOpen(false);
@@ -59,6 +94,21 @@ export const AddToPlaylistButton: React.FC<AddToPlaylistButtonProps> = ({ track 
       loadPlaylists();
     }
   }, [open, disabled, token]);
+
+  useEffect(() => {
+    if (!open) {
+      setMenuPos(null);
+      return;
+    }
+    updateMenuPosition();
+    const handleReposition = () => updateMenuPosition();
+    window.addEventListener('resize', handleReposition);
+    window.addEventListener('scroll', handleReposition, true);
+    return () => {
+      window.removeEventListener('resize', handleReposition);
+      window.removeEventListener('scroll', handleReposition, true);
+    };
+  }, [open, variant]);
 
   useEffect(() => {
     if (!open) return;
@@ -125,20 +175,31 @@ export const AddToPlaylistButton: React.FC<AddToPlaylistButtonProps> = ({ track 
     }
   };
 
-  const rect = buttonRef.current?.getBoundingClientRect();
-  const menuStyle: React.CSSProperties = rect
+  const menuStyle: React.CSSProperties = menuPos
     ? {
         position: 'fixed',
-        top: Math.min(rect.bottom + 6, window.innerHeight - 280),
-        left: Math.min(rect.right - 224, window.innerWidth - 240),
+        top: menuPos.top,
+        bottom: menuPos.bottom,
+        left: menuPos.left,
         width: 224,
-        zIndex: 9999,
+        zIndex: 10050,
       }
-    : {};
+    : { display: 'none' };
 
   if (disabled) {
     return null;
   }
+
+  const buttonClass =
+    variant === 'round'
+      ? `w-10 h-10 rounded-full bg-white/5 flex items-center justify-center text-slate-450 transition active:scale-90 ${
+          open ? 'text-rose-400 bg-rose-500/10' : ''
+        } ${className}`
+      : variant === 'player'
+        ? `transition disabled:opacity-30 ${
+            open ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'
+          } ${className}`
+      : `p-1.5 rounded-lg hover:bg-slate-800 text-slate-500 hover:text-rose-400 transition ${className}`;
 
   return (
     <>
@@ -149,10 +210,17 @@ export const AddToPlaylistButton: React.FC<AddToPlaylistButtonProps> = ({ track 
           e.stopPropagation();
           setOpen(v => !v);
         }}
-        className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-500 hover:text-rose-400 transition"
+        className={buttonClass}
         title="Add to Playlist"
+        aria-label="Add to Playlist"
       >
-        <FolderHeart className="w-3.5 h-3.5" />
+        {variant === 'round' ? (
+          <Plus className="w-4.5 h-4.5" />
+        ) : variant === 'player' ? (
+          <Plus className="w-4 h-4" />
+        ) : (
+          <FolderHeart className="w-3.5 h-3.5" />
+        )}
       </button>
 
       {open && createPortal(

@@ -1,4 +1,5 @@
 """Subscription lifecycle: active period, queued plan changes, cancellation."""
+import calendar
 import datetime
 from typing import Optional
 
@@ -10,6 +11,32 @@ from app.models import User
 
 def utcnow() -> datetime.datetime:
     return datetime.datetime.utcnow()
+
+
+def add_calendar_month(dt: datetime.datetime) -> datetime.datetime:
+    """Advance by one calendar month, clamping day (e.g. Jan 31 -> Feb 28/29)."""
+    month = dt.month + 1
+    year = dt.year
+    if month > 12:
+        month = 1
+        year += 1
+    day = min(dt.day, calendar.monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
+
+
+def add_calendar_year(dt: datetime.datetime) -> datetime.datetime:
+    """Advance by one calendar year, clamping Feb 29 when needed."""
+    year = dt.year + 1
+    day = min(dt.day, calendar.monthrange(year, dt.month)[1])
+    return dt.replace(year=year, day=day)
+
+
+def compute_subscription_expires_at(base: datetime.datetime, cycle: Optional[str]) -> datetime.datetime:
+    if cycle == "monthly":
+        return add_calendar_month(base)
+    if cycle == "yearly":
+        return add_calendar_year(base)
+    return base + datetime.timedelta(days=30)
 
 
 def premium_is_active(user: User, *, at: Optional[datetime.datetime] = None) -> bool:
@@ -36,13 +63,13 @@ def apply_plan_immediately(user: User, plan: SubscriptionPlan) -> None:
         user.subscription_activated_at = now
     user.subscription = plan.subscription
     user.subscription_cycle = plan.cycle
-    user.subscription_expires_at = base + datetime.timedelta(days=plan.duration_days)
+    user.subscription_expires_at = compute_subscription_expires_at(base, plan.cycle)
     user.pending_plan_id = None
     user.pending_plan_paid = False
     user.subscription_cancel_at_period_end = False
 
 
-def apply_admin_subscription(user: User, subscription: str, subscription_cycle: Optional[str]) -> None:
+def apply_admin_subscription(user: User, subscription: str, subscription_cycle: Optional[str], db: Optional[Session] = None) -> None:
     """Apply subscription tier from super-admin user management."""
     now = utcnow()
     user.pending_plan_id = None
@@ -63,14 +90,10 @@ def apply_admin_subscription(user: User, subscription: str, subscription_cycle: 
         user.subscription_expires_at = None
         return
 
-    plan_id = plan_id_for_cycle(subscription_cycle or "")
-    plan = get_plan(plan_id) if plan_id else None
-    duration_days = plan.duration_days if plan else 30
-
     user.subscription = "premium"
     user.subscription_cycle = subscription_cycle
     user.subscription_activated_at = now
-    user.subscription_expires_at = now + datetime.timedelta(days=duration_days)
+    user.subscription_expires_at = compute_subscription_expires_at(now, subscription_cycle)
 
 
 def queue_plan_change(user: User, plan: SubscriptionPlan, *, prepaid: bool) -> None:
@@ -101,8 +124,14 @@ def apply_free_on_payment_failure(user: User) -> None:
 
 
 def handle_subscription_payment_failure(user: User, payment) -> None:
-    """Mark payment failed; downgrade non-premium users to free, keep active premium."""
+    """Mark payment failed; downgrade non-premium users to free, keep active premium/unlimited."""
     payment.status = "failed"
+
+    if user.subscription == "unlimited":
+        if user.pending_plan_id == payment.plan_id:
+            user.pending_plan_id = None
+            user.pending_plan_paid = False
+        return
 
     if premium_is_active(user):
         if user.pending_plan_id == payment.plan_id:
@@ -133,12 +162,13 @@ def apply_pending_subscription_if_due(user: User, db: Session) -> bool:
         db.commit()
         return True
 
-    pending = get_plan(user.pending_plan_id) if user.pending_plan_id else None
-    if pending and user.pending_plan_paid:
+    pending = get_plan(user.pending_plan_id, db) if user.pending_plan_id else None
+    if pending and (user.pending_plan_paid or pending.cycle):
+        # Apply queued plan at period end (prepaid upgrade or scheduled downgrade).
         user.subscription = pending.subscription
         user.subscription_cycle = pending.cycle
         user.subscription_activated_at = period_end
-        user.subscription_expires_at = period_end + datetime.timedelta(days=pending.duration_days)
+        user.subscription_expires_at = compute_subscription_expires_at(period_end, pending.cycle)
         user.pending_plan_id = None
         user.pending_plan_paid = False
         user.subscription_cancel_at_period_end = False
@@ -159,6 +189,12 @@ def apply_pending_subscription_if_due(user: User, db: Session) -> bool:
 def validate_checkout_plan(user: User, plan: SubscriptionPlan) -> None:
     """Raise ValueError when checkout is not allowed for this user/plan."""
     from fastapi import HTTPException, status
+
+    if user.subscription == "unlimited":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unlimited accounts cannot purchase a self-serve plan.",
+        )
 
     active = premium_is_active(user)
     if not active:

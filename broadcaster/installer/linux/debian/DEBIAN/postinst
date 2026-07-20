@@ -1,0 +1,42 @@
+#!/bin/sh
+set -e
+
+PERMISSIONS_DOC="/usr/share/doc/verisonic-broadcaster/audio-permissions.txt"
+
+_install_missing_runtime_deps() {
+  # Best-effort for users who installed with plain `dpkg -i` (skips Depends).
+  # Prefer: sudo apt install ./verisonic-broadcaster_*.deb
+  need=""
+  command -v wpctl >/dev/null 2>&1 || need="$need wireplumber"
+  command -v pw-dump >/dev/null 2>&1 || need="$need pipewire-bin"
+  if [ -n "$need" ] && command -v apt-get >/dev/null 2>&1; then
+    echo "Installing missing audio tooling:$need"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $need || true
+  fi
+}
+
+case "$1" in
+  configure)
+    if command -v update-desktop-database >/dev/null 2>&1; then
+      update-desktop-database /usr/share/applications || true
+    fi
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+      gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
+    fi
+
+    _install_missing_runtime_deps
+
+    echo "VeriSonic Broadcaster installed."
+    echo "Launch from Applications (search: VeriSonic Broadcaster) or run: verisonic-broadcaster"
+    echo "Grant audio input (capture/record) access for microphones, line-in, USB interfaces,"
+    echo "and loopback devices. See: $PERMISSIONS_DOC"
+    echo ""
+    echo "Login auto-start is installed but disabled by default (enable in your desktop"
+    echo "Startup Applications list if desired — same policy as macOS)."
+    echo ""
+    echo "If input devices are unavailable, add your user to the audio group and re-login:"
+    echo "  sudo usermod -aG audio \$USER"
+    ;;
+esac
+
+exit 0

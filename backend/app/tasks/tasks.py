@@ -2,11 +2,169 @@ import os
 import shutil
 import tempfile
 import subprocess
+import uuid
 from celery_worker import celery_app
 from app.db.session import SessionLocal
 from app.models import Track, AudioAnalysisReport
 from app.services.audio import extract_metadata, analyze_audio_spectral, calculate_quality_score
-from app.services.storage import upload_file_path, upload_file
+from app.services.storage import upload_file_path, delete_prefix_except
+from app.core.redis_client import get_redis
+from app.db.session import SQLALCHEMY_DATABASE_URL
+from sqlalchemy import or_, text, create_engine
+from sqlalchemy.pool import NullPool
+
+
+HLS_TRANSCODE_LOCK_TTL_SEC = 7200
+HLS_RETRANSCODE_SWEEP_LOCK_TTL_SEC = 300
+# Keep prior gens at least 2h, longer for long tracks, so in-flight listeners survive republish
+HLS_OLD_GEN_CLEANUP_MIN_SEC = 7200
+HLS_OLD_GEN_CLEANUP_DURATION_FACTOR = 3
+HLS_OLD_GEN_CLEANUP_PADDING_SEC = 600
+
+# Postgres advisory-lock namespace (avoid colliding with unrelated app locks).
+# Sweep uses a dedicated high key; track locks use a separate range that cannot
+# overlap it (track_id 1 must not equal the sweep key).
+_PG_LOCK_SWEEP_KEY = 2_100_000_000
+_PG_LOCK_TRACK_BASE = 2_200_000_000
+
+# Dedicated NullPool engine so long-held advisory locks do not starve the app pool
+_lock_engine = create_engine(SQLALCHEMY_DATABASE_URL, poolclass=NullPool, pool_pre_ping=True)
+
+
+def _transcode_lock_key(track_id: int) -> bytes:
+    return f"hls:transcode:{track_id}".encode()
+
+
+def _pg_lock_key_for_track(track_id: int) -> int:
+    return _PG_LOCK_TRACK_BASE + int(track_id)
+
+
+def _acquire_pg_advisory_lock(lock_key: int):
+    """
+    Session-scoped Postgres advisory lock on a NullPool connection.
+    Caller must release via _release_pg_advisory_lock.
+    """
+    conn = _lock_engine.connect()
+    try:
+        acquired = conn.execute(
+            text("SELECT pg_try_advisory_lock(:k)"),
+            {"k": lock_key},
+        ).scalar()
+        if not acquired:
+            conn.close()
+            return None
+        return conn
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return None
+
+
+def _release_pg_advisory_lock(conn, lock_key: int) -> None:
+    if conn is None:
+        return
+    try:
+        conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": lock_key})
+    except Exception:
+        pass
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
+def _acquire_transcode_lock(track_id: int):
+    """
+    Acquire a cross-worker lock for this track.
+    Postgres advisory lock is authoritative (works when Redis is down).
+    Redis marker is best-effort for sweep heuristics.
+    Returns (pg_conn_or_None, acquired: bool).
+    """
+    pg_conn = _acquire_pg_advisory_lock(_pg_lock_key_for_track(track_id))
+    if pg_conn is None:
+        return None, False
+
+    client = get_redis()
+    if client:
+        try:
+            client.set(
+                _transcode_lock_key(track_id),
+                b"1",
+                ex=HLS_TRANSCODE_LOCK_TTL_SEC,
+            )
+        except Exception:
+            pass
+    return pg_conn, True
+
+
+def _release_transcode_lock(track_id: int, pg_conn) -> None:
+    _release_pg_advisory_lock(pg_conn, _pg_lock_key_for_track(track_id))
+    client = get_redis()
+    if not client:
+        return
+    try:
+        client.delete(_transcode_lock_key(track_id))
+    except Exception:
+        pass
+
+
+def _acquire_retranscode_sweep_lock():
+    """Sweep lock: Redis NX when possible, else Postgres advisory."""
+    client = get_redis()
+    if client:
+        try:
+            if client.set(
+                b"hls:retranscode_sweep",
+                b"1",
+                nx=True,
+                ex=HLS_RETRANSCODE_SWEEP_LOCK_TTL_SEC,
+            ):
+                return ("redis", None)
+            return None  # not acquired
+        except Exception:
+            pass
+
+    pg_conn = _acquire_pg_advisory_lock(_PG_LOCK_SWEEP_KEY)
+    if pg_conn is None:
+        return None
+    return ("pg", pg_conn)
+
+
+def _release_retranscode_sweep_lock(token) -> None:
+    if not token:
+        return
+    kind, pg_conn = token
+    if kind == "pg":
+        _release_pg_advisory_lock(pg_conn, _PG_LOCK_SWEEP_KEY)
+    # Redis sweep key expires via TTL
+
+
+def _is_transcode_locked(track_id: int) -> bool:
+    client = get_redis()
+    if client:
+        try:
+            if client.exists(_transcode_lock_key(track_id)):
+                return True
+        except Exception:
+            pass
+    # Probe PG lock without holding it
+    conn = _acquire_pg_advisory_lock(_pg_lock_key_for_track(track_id))
+    if conn is None:
+        return True
+    _release_pg_advisory_lock(conn, _pg_lock_key_for_track(track_id))
+    return False
+
+
+def _hls_cleanup_countdown_sec(duration: float | None) -> int:
+    duration_sec = float(duration or 0)
+    return int(
+        max(
+            HLS_OLD_GEN_CLEANUP_MIN_SEC,
+            duration_sec * HLS_OLD_GEN_CLEANUP_DURATION_FACTOR + HLS_OLD_GEN_CLEANUP_PADDING_SEC,
+        )
+    )
 
 @celery_app.task(name="app.tasks.tasks.analyze_audio_task")
 def analyze_audio_task(track_id: int, temp_file_path: str):
@@ -54,7 +212,7 @@ def analyze_audio_task(track_id: int, temp_file_path: str):
         track.channels = metadata["channels"]
         track.original_file_path = original_key
         
-        # If no lyrics exist, try to populate from metadata or auto-transcribe (fallback to English AI transcript)
+        # If no lyrics exist, populate from embedded metadata tags when present
         if not track.lyrics:
             if metadata.get("lyrics"):
                 track.lyrics = metadata["lyrics"]
@@ -72,13 +230,21 @@ def analyze_audio_task(track_id: int, temp_file_path: str):
             report.cutoff_frequency = spectral["cutoff_frequency"]
             report.high_frequency_energy = spectral["high_frequency_energy"]
             report.spectrogram_path = img_key
+            report.is_fake_upscaled = spectral.get("is_fake_upscaled")
+            report.spectral_entropy_high_band = spectral.get("spectral_entropy_high_band")
+            report.authenticity_score = spectral.get("authenticity_score")
+            report.true_quality_tier = spectral.get("true_quality_tier")
         else:
             report = AudioAnalysisReport(
                 track_id=track_id,
                 max_frequency=spectral["max_frequency"],
                 cutoff_frequency=spectral["cutoff_frequency"],
                 high_frequency_energy=spectral["high_frequency_energy"],
-                spectrogram_path=img_key
+                spectrogram_path=img_key,
+                is_fake_upscaled=spectral.get("is_fake_upscaled"),
+                spectral_entropy_high_band=spectral.get("spectral_entropy_high_band"),
+                authenticity_score=spectral.get("authenticity_score"),
+                true_quality_tier=spectral.get("true_quality_tier"),
             )
             db.add(report)
         db.commit()
@@ -109,16 +275,79 @@ def analyze_audio_task(track_id: int, temp_file_path: str):
     finally:
         db.close()
 
+
+def _ffmpeg_hls(
+    input_file_path: str,
+    out_dir: str,
+    audio_args: list,
+    segment_type: str = "mpegts",
+) -> str:
+    """Run ffmpeg HLS encode into out_dir; return local playlist path."""
+    os.makedirs(out_dir, exist_ok=True)
+    playlist = os.path.join(out_dir, "playlist.m3u8")
+    cmd = [
+        "ffmpeg", "-y", "-i", input_file_path,
+        "-vn",
+        *audio_args,
+        "-f", "hls",
+        "-hls_time", "6",
+        "-hls_playlist_type", "vod",
+    ]
+    if segment_type == "fmp4":
+        cmd.extend([
+            "-hls_segment_type", "fmp4",
+            "-hls_fmp4_init_filename", "init.mp4",
+            "-hls_segment_filename", os.path.join(out_dir, "segment_%03d.m4s"),
+        ])
+    else:
+        cmd.extend([
+            "-hls_segment_filename", os.path.join(out_dir, "segment_%03d.ts"),
+        ])
+    cmd.append(playlist)
+    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return playlist
+
+
+def _upload_hls_directory(local_dir: str, s3_prefix: str) -> str:
+    """Upload all HLS artifacts under local_dir to s3_prefix; return playlist key."""
+    playlist_key = f"{s3_prefix}/playlist.m3u8"
+    for filename in os.listdir(local_dir):
+        file_path = os.path.join(local_dir, filename)
+        if not os.path.isfile(file_path):
+            continue
+        key = f"{s3_prefix}/{filename}"
+        lower = filename.lower()
+        if lower.endswith(".m3u8"):
+            content_type = "application/x-mpegURL"
+        elif lower.endswith(".ts"):
+            content_type = "video/MP2T"
+        elif lower.endswith(".m4s"):
+            content_type = "video/iso.segment"
+        elif lower.endswith(".mp4"):
+            content_type = "video/mp4"
+        else:
+            content_type = "application/octet-stream"
+        upload_file_path(file_path, key, content_type=content_type)
+    return playlist_key
+
+
 @celery_app.task(name="app.tasks.tasks.transcode_audio_task")
 def transcode_audio_task(track_id: int, local_file_path: str = None):
     """
-    Transcodes approved audio to:
-    - 320kbps MP3
-    - 256kbps AAC
-    - 128kbps AAC
-    - HLS Adaptive Bitrate segments (.m3u8)
-    Uploads all outputs to S3/MinIO and updates DB paths.
+    Transcodes approved audio to progressive download fallbacks plus four
+    quality-tier HLS playlists:
+      - normal:   AAC 128 kbps (MPEG-TS)
+      - high:     AAC 256 kbps (MPEG-TS)
+      - lossless: FLAC CD quality 16-bit/44.1 kHz (fMP4)
+      - hires:    FLAC at original sample rate / bit depth (fMP4)
     """
+    pg_lock_conn, lock_acquired = _acquire_transcode_lock(track_id)
+    if not lock_acquired:
+        # Avoid duplicate parallel work from overlapping startup/approve queues
+        if local_file_path and os.path.exists(local_file_path):
+            os.remove(local_file_path)
+        return {"status": "skipped", "reason": "transcode already in progress", "track_id": track_id}
+
     db = SessionLocal()
     temp_dir = tempfile.mkdtemp()
     
@@ -126,6 +355,20 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
         track = db.query(Track).filter(Track.id == track_id).first()
         if not track:
             return {"status": "error", "error": "Track not found"}
+
+        # Another queued job may have finished while we waited for the lock/countdown
+        if (
+            local_file_path is None
+            and track.hls_normal_path
+            and track.hls_high_path
+            and track.hls_lossless_path
+            and track.hls_hires_path
+        ):
+            return {
+                "status": "skipped",
+                "reason": "already has four HLS quality playlists",
+                "track_id": track_id,
+            }
 
         input_file_path = local_file_path
         if not input_file_path or not os.path.exists(input_file_path):
@@ -144,7 +387,7 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
             )
             input_file_path = downloaded_temp_file
 
-        # 1. Transcode to 320kbps MP3
+        # Progressive fallbacks (downloads / legacy; not used for primary streaming)
         mp3_path = os.path.join(temp_dir, f"track_{track_id}_320.mp3")
         subprocess.run([
             "ffmpeg", "-y", "-i", input_file_path,
@@ -156,7 +399,6 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
         upload_file_path(mp3_path, mp3_key, content_type="audio/mpeg")
         track.mp3_320_path = mp3_key
         
-        # 2. Transcode to 256kbps AAC
         aac_256_path = os.path.join(temp_dir, f"track_{track_id}_256.aac")
         subprocess.run([
             "ffmpeg", "-y", "-i", input_file_path,
@@ -168,7 +410,6 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
         upload_file_path(aac_256_path, aac_256_key, content_type="audio/aac")
         track.aac_256_path = aac_256_key
         
-        # 3. Transcode to 128kbps AAC
         aac_128_path = os.path.join(temp_dir, f"track_{track_id}_128.aac")
         subprocess.run([
             "ffmpeg", "-y", "-i", input_file_path,
@@ -179,36 +420,62 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
         aac_128_key = f"transcoded/{track_id}/128k.aac"
         upload_file_path(aac_128_path, aac_128_key, content_type="audio/aac")
         track.aac_128_path = aac_128_key
- 
-        # 4. Transcode to HLS stream (AAC master & segments)
-        hls_dir = os.path.join(temp_dir, "hls")
-        os.makedirs(hls_dir, exist_ok=True)
-        hls_playlist = os.path.join(hls_dir, "playlist.m3u8")
-        
-        subprocess.run([
-            "ffmpeg", "-y", "-i", input_file_path,
-            "-codec:a", "aac", "-b:a", "256k",
-            "-hls_time", "6",
-            "-hls_playlist_type", "vod",
-            "-hls_segment_filename", os.path.join(hls_dir, "segment_%03d.ts"),
-            hls_playlist
-        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        
-        # Upload all HLS files
-        hls_prefix = f"hls/{track_id}"
-        playlist_key = f"{hls_prefix}/playlist.m3u8"
-        
-        # Upload files in directory
-        for filename in os.listdir(hls_dir):
-            file_path = os.path.join(hls_dir, filename)
-            key = f"{hls_prefix}/{filename}"
-            if filename.endswith(".m3u8"):
-                upload_file_path(file_path, key, content_type="application/x-mpegURL")
-            elif filename.endswith(".ts"):
-                upload_file_path(file_path, key, content_type="video/MP2T")
- 
-        track.hls_playlist_path = playlist_key
+
+        # Encode all four HLS tiers locally first — never wipe S3 until encodes succeed.
+        normal_dir = os.path.join(temp_dir, "hls_normal")
+        _ffmpeg_hls(
+            input_file_path,
+            normal_dir,
+            ["-codec:a", "aac", "-b:a", "128k"],
+            segment_type="mpegts",
+        )
+
+        high_dir = os.path.join(temp_dir, "hls_high")
+        _ffmpeg_hls(
+            input_file_path,
+            high_dir,
+            ["-codec:a", "aac", "-b:a", "256k"],
+            segment_type="mpegts",
+        )
+
+        lossless_dir = os.path.join(temp_dir, "hls_lossless")
+        _ffmpeg_hls(
+            input_file_path,
+            lossless_dir,
+            ["-codec:a", "flac", "-sample_fmt", "s16", "-ar", "44100"],
+            segment_type="fmp4",
+        )
+
+        hires_dir = os.path.join(temp_dir, "hls_hires")
+        _ffmpeg_hls(
+            input_file_path,
+            hires_dir,
+            ["-codec:a", "flac"],
+            segment_type="fmp4",
+        )
+
+        # Publish under a new generation prefix, then point DB at it, then clean old trees later.
+        gen = uuid.uuid4().hex[:12]
+        gen_root = f"hls/{track_id}/{gen}"
+
+        hls_normal_key = _upload_hls_directory(normal_dir, f"{gen_root}/normal")
+        hls_high_key = _upload_hls_directory(high_dir, f"{gen_root}/high")
+        hls_lossless_key = _upload_hls_directory(lossless_dir, f"{gen_root}/lossless")
+        hls_hires_key = _upload_hls_directory(hires_dir, f"{gen_root}/hires")
+
+        track.hls_normal_path = hls_normal_key
+        track.hls_high_path = hls_high_key
+        track.hls_lossless_path = hls_lossless_key
+        track.hls_hires_path = hls_hires_key
+        # Legacy field points at high-quality HLS for readiness filters
+        track.hls_playlist_path = hls_high_key
         db.commit()
+
+        # Defer cleanup so in-flight HLS listeners on the prior generation can finish
+        cleanup_old_hls_gens_task.apply_async(
+            args=[track_id, f"{gen_root}/"],
+            countdown=_hls_cleanup_countdown_sec(track.duration),
+        )
         
         return {"status": "success", "track_id": track_id}
         
@@ -218,8 +485,224 @@ def transcode_audio_task(track_id: int, local_file_path: str = None):
         return {"status": "error", "error": str(e)}
         
     finally:
+        _release_transcode_lock(track_id, pg_lock_conn)
         db.close()
         # Clean up temporary directory & input local file
         shutil.rmtree(temp_dir, ignore_errors=True)
         if local_file_path and os.path.exists(local_file_path):
             os.remove(local_file_path)
+
+
+@celery_app.task(name="app.tasks.tasks.cleanup_old_hls_gens_task")
+def cleanup_old_hls_gens_task(track_id: int, keep_prefix: str):
+    """
+    Remove prior HLS generations after a grace period for in-flight listeners.
+    Always keeps the generation currently referenced in the DB (not a stale
+    keep_prefix), so a later re-transcode cannot be deleted by an older cleanup job.
+    """
+    db = SessionLocal()
+    try:
+        track = db.query(Track).filter(Track.id == track_id).first()
+        if not track:
+            return {"status": "skipped", "reason": "track not found"}
+
+        current_key = (
+            track.hls_high_path
+            or track.hls_normal_path
+            or track.hls_lossless_path
+            or track.hls_hires_path
+            or track.hls_playlist_path
+            or ""
+        )
+        effective_keep = keep_prefix
+        # paths look like: hls/{track_id}/{gen}/high/playlist.m3u8
+        parts = current_key.split("/")
+        if len(parts) >= 3 and parts[0] == "hls" and parts[1] == str(track_id):
+            effective_keep = f"hls/{track_id}/{parts[2]}/"
+
+        delete_prefix_except(f"hls/{track_id}/", effective_keep)
+        return {
+            "status": "success",
+            "track_id": track_id,
+            "kept": effective_keep,
+            "requested_keep": keep_prefix,
+        }
+    except Exception as e:
+        print(f"Error in cleanup_old_hls_gens_task: {e}")
+        return {"status": "error", "error": str(e)}
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.tasks.tasks.queue_missing_hls_retranscodes_task")
+def queue_missing_hls_retranscodes_task():
+    """
+    Queue re-transcodes for approved tracks missing any of the four HLS quality paths.
+    Safe to run on startup; skips tracks that already have all four playlists.
+    Deduplicates concurrent API restarts and in-flight worker jobs via Redis/Postgres locks.
+    """
+    sweep_token = _acquire_retranscode_sweep_lock()
+    if not sweep_token:
+        return {"status": "skipped", "reason": "sweep already running"}
+
+    db = SessionLocal()
+    try:
+        tracks = (
+            db.query(Track)
+            .filter(
+                Track.approved == True,  # noqa: E712
+                Track.original_file_path.isnot(None),
+                or_(
+                    Track.hls_normal_path.is_(None),
+                    Track.hls_high_path.is_(None),
+                    Track.hls_lossless_path.is_(None),
+                    Track.hls_hires_path.is_(None),
+                ),
+            )
+            .all()
+        )
+        queued = 0
+        skipped_locked = 0
+        for i, track in enumerate(tracks):
+            if _is_transcode_locked(track.id):
+                skipped_locked += 1
+                continue
+            # Stagger to avoid thundering herd on the worker
+            transcode_audio_task.apply_async(args=[track.id, None], countdown=i * 2)
+            queued += 1
+        return {
+            "status": "success",
+            "queued": queued,
+            "skipped_locked": skipped_locked,
+        }
+    finally:
+        db.close()
+        _release_retranscode_sweep_lock(sweep_token)
+
+@celery_app.task(bind=True, name="app.tasks.tasks.extract_lyrics_task")
+def extract_lyrics_task(
+    self,
+    track_id: int,
+    script_mode: str = "native",
+    lyrics_text: str | None = None,
+):
+    """
+    Manually triggered hybrid lyrics extraction for a track.
+    Downloads the original audio, runs the pipeline, and stores LRC + timed segments.
+    """
+    from app.services.lyrics_pipeline import (
+        LyricsPipelineError,
+        run_hybrid_lyrics_pipeline,
+        validate_pipeline_config,
+    )
+    from app.core.config import settings
+    from app.services.storage import s3_client
+
+    def update_progress(stage: str, progress: int, message: str) -> None:
+        self.update_state(
+            state="PROGRESS",
+            meta={
+                "stage": stage,
+                "progress": progress,
+                "message": message,
+            },
+        )
+
+    db = SessionLocal()
+    temp_dir = tempfile.mkdtemp()
+    input_file_path = None
+
+    try:
+        validate_pipeline_config(settings)
+        update_progress("starting", 5, "Starting lyrics extraction...")
+
+        track = db.query(Track).filter(Track.id == track_id).first()
+        if not track:
+            return {"status": "error", "error": "Track not found"}
+
+        if not track.original_file_path:
+            return {"status": "error", "error": "Original audio file not found for this track"}
+
+        ext = os.path.splitext(track.original_file_path)[1].lower() or ".wav"
+        fd, input_file_path = tempfile.mkstemp(suffix=ext, dir=temp_dir)
+        os.close(fd)
+
+        update_progress("download", 15, "Downloading audio from storage...")
+        s3_client.download_file(
+            Bucket=settings.S3_BUCKET_NAME,
+            Key=track.original_file_path,
+            Filename=input_file_path,
+        )
+
+        artist_name = (
+            track.artist_name_override
+            if track.artist_name_override
+            else (track.artist.stage_name if track.artist else "Unknown Artist")
+        )
+        album_name = track.album.title if track.album else None
+
+        update_progress("pipeline", 20, "Running lyrics pipeline...")
+        result = run_hybrid_lyrics_pipeline(
+            input_file_path,
+            track.title,
+            artist_name,
+            output_script=script_mode,
+            lyrics_api_url=settings.LYRICS_API_URL,
+            album_name=album_name,
+            duration=track.duration,
+            existing_lyrics=lyrics_text,
+            lalal_api_key=settings.LALAL_API_KEY,
+            google_project_id=settings.GOOGLE_CLOUD_PROJECT_ID,
+            google_vertex_location=settings.GOOGLE_VERTEX_LOCATION,
+            google_credentials_path=settings.GOOGLE_APPLICATION_CREDENTIALS,
+            gemini_model=settings.GEMINI_MODEL,
+            progress_callback=update_progress,
+        )
+
+        update_progress("saving", 95, "Saving lyrics to track...")
+        track.lyrics = result.lrc_text
+        track.lyrics_timed = result.timed
+        if result.language:
+            track.lyrics_language = result.language
+        db.commit()
+
+        return {
+            "status": "success",
+            "track_id": track_id,
+            "source": result.source,
+        }
+    except LyricsPipelineError as exc:
+        db.rollback()
+        print(f"Lyrics pipeline error for track {track_id}: {exc}")
+        return {"status": "error", "error": str(exc)}
+    except Exception as exc:
+        db.rollback()
+        print(f"Error in extract_lyrics_task: {exc}")
+        return {"status": "error", "error": str(exc)}
+    finally:
+        db.close()
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@celery_app.task(name="app.tasks.tasks.settle_daily_revenue_task")
+def settle_daily_revenue_task(settlement_date: str | None = None):
+    """Settle previous UTC day (or an explicit YYYY-MM-DD) into owner wallets."""
+    from app.services.daily_settlement_service import settle_day, settle_previous_utc_day
+
+    db = SessionLocal()
+    try:
+        if settlement_date:
+            run = settle_day(db, settlement_date)
+        else:
+            run = settle_previous_utc_day(db)
+        return {
+            "status": run.status,
+            "settlement_date": run.settlement_date,
+            "listeners_processed": run.listeners_processed,
+            "owners_credited": run.owners_credited,
+            "total_credited_paise": run.total_credited_paise,
+            "error_message": run.error_message,
+        }
+    finally:
+        db.close()
+

@@ -1,7 +1,6 @@
 PyQt5>=5.15.0
+pyobjc-framework-AVFoundation>=10.0; sys_platform == "darwin"
 sounddevice>=0.4.6
 numpy>=1.20.0
 lameenc>=1.4.0
-websocket-client>=1.6.0
 websockets>=11.0
-aiortc>=1.6.0

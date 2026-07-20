@@ -1,0 +1,12 @@
+Package: verisonic-broadcaster
+Version: 1.0.0
+Section: sound
+Priority: optional
+Architecture: amd64
+Maintainer: VeriSonic <contact@verisonic.com>
+Depends: libportaudio2, libasound2t64 | libasound2, libxkbcommon-x11-0, libegl1, wireplumber, pipewire-bin, pipewire-pulse | pulseaudio
+Recommends: pulseaudio-utils
+Description: VeriSonic Live Broadcaster
+ Desktop client for capturing live audio from microphones, line-in, USB interfaces,
+ and loopback input devices, then streaming to your VeriSonic radio station.
+ Runs as a background tray application with login auto-start.

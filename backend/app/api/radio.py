@@ -8,7 +8,8 @@ import random
 import secrets
 import asyncio
 from collections import deque
-from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Header, Request
+from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect, Header, Request, File, UploadFile, Query
+from pydantic import BaseModel
 
 try:
     from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack, RTCConfiguration, RTCIceServer
@@ -20,7 +21,8 @@ except ImportError:
     class MediaStreamTrack:
         pass
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import or_
 from typing import List, Dict, Set, Optional
 
 from app.db.session import get_db
@@ -33,6 +35,12 @@ from app.schemas import (
     RadioScheduleResponse,
     VerifyBroadcastKeyRequest,
     VerifyBroadcastKeyResponse,
+    PaginatedRadioStationListResponse,
+    RadioProgramCommentCreate,
+    RadioProgramCommentResponse,
+    PaginatedRadioProgramCommentListResponse,
+    RadioProgramListResponse,
+    RadioProgramEngagementResponse,
 )
 from app.api.auth import get_current_admin, get_current_user, get_current_radio_admin, get_optional_current_user
 from app.core.rate_limit import enforce_rate_limit
@@ -42,6 +50,8 @@ from app.core.ws_auth import extract_ws_token, resolve_ws_user
 from app.api.music import serialize_track
 from app.services.storage import generate_presigned_url
 from app.services.live_stream import live_stream_manager
+from app.services.licence_documents import licence_document_url, store_licence_document
+from app.services.cover_images import resolve_cover_art_url_with_fallback, store_profile_cover
 
 # =====================================================================
 # SERVER-SIDE WEBRTC DELIVERY (SFU relay from LiveStreamManager queue)
@@ -303,6 +313,25 @@ def _verify_station_stream_key(station: RadioStation, stream_key: str) -> bool:
         return False
 
 
+def _admin_owner_fields(db: Session, viewer: Optional[User], owner_id: Optional[int]) -> dict:
+    if not viewer or getattr(viewer, "role", None) != "admin" or not owner_id:
+        return {}
+    owner = db.query(User).filter(User.id == owner_id).first()
+    if not owner:
+        return {}
+    return {"owner_name": owner.full_name, "owner_email": owner.email}
+
+
+def _can_view_licence_document(viewer: Optional[User], owner_id: Optional[int]) -> bool:
+    if not viewer:
+        return False
+    if getattr(viewer, "role", None) == "admin":
+        return True
+    if getattr(viewer, "role", None) == "radio_admin" and owner_id == viewer.id:
+        return True
+    return False
+
+
 def serialize_station(
     station: RadioStation,
     db: Session,
@@ -310,6 +339,7 @@ def serialize_station(
     *,
     include_stream_key: bool = False,
 ) -> dict:
+    admin_owner = _admin_owner_fields(db, viewer, station.owner_id)
     stream_key_value = None
     if include_stream_key and _viewer_can_see_stream_key(viewer, station):
         _ensure_stream_key_fresh(station, db)
@@ -365,6 +395,11 @@ def serialize_station(
     profile_data = {
         "category": station.category,
         "licence": station.licence,
+        "licence_document_url": (
+            licence_document_url(station.licence_document_path)
+            if _can_view_licence_document(viewer, station.owner_id)
+            else None
+        ),
         "street_address": station.street_address,
         "city": station.city,
         "state_province": station.state_province,
@@ -388,7 +423,7 @@ def serialize_station(
             "id": station.id,
             "name": station.name,
             "description": station.description,
-            "cover_art_url": station.cover_art_url or "https://images.unsplash.com/photo-1507838153414-b4b713384a76?w=150&auto=format&fit=crop",
+            "cover_art_url": resolve_cover_art_url_with_fallback(station.cover_art_url),
             "is_active": station.is_active,
             "stream_url": f"/api/radio/{station.id}/live",
             "owner_id": station.owner_id,
@@ -404,7 +439,8 @@ def serialize_station(
             "rj_details": station.rj_details,
             "listeners_count": listeners_count,
             "is_online": True,
-            **profile_data
+            **profile_data,
+            **admin_owner,
         }
 
     if station.stream_url and station.stream_url.startswith("/api/radio/"):
@@ -412,7 +448,7 @@ def serialize_station(
             "id": station.id,
             "name": station.name,
             "description": station.description,
-            "cover_art_url": station.cover_art_url or "https://images.unsplash.com/photo-1507838153414-b4b713384a76?w=150&auto=format&fit=crop",
+            "cover_art_url": resolve_cover_art_url_with_fallback(station.cover_art_url),
             "is_active": station.is_active,
             "stream_url": station.stream_url,
             "owner_id": station.owner_id,
@@ -428,7 +464,8 @@ def serialize_station(
             "rj_details": station.rj_details,
             "listeners_count": listeners_count,
             "is_online": True,
-            **profile_data
+            **profile_data,
+            **admin_owner,
         }
 
     # Otherwise, the station is offline (no live broadcaster, no stream url)
@@ -436,7 +473,7 @@ def serialize_station(
         "id": station.id,
         "name": station.name,
         "description": station.description,
-        "cover_art_url": station.cover_art_url or "https://images.unsplash.com/photo-1507838153414-b4b713384a76?w=150&auto=format&fit=crop",
+        "cover_art_url": resolve_cover_art_url_with_fallback(station.cover_art_url),
         "is_active": station.is_active,
         "stream_url": None,
         "owner_id": station.owner_id,
@@ -452,7 +489,8 @@ def serialize_station(
         "rj_details": station.rj_details,
         "listeners_count": 0,
         "is_online": False,
-        **profile_data
+        **profile_data,
+        **admin_owner,
     }
 
 @router.post("", response_model=RadioStationResponse)
@@ -576,7 +614,13 @@ def update_radio_station(
     if station_in.social_instagram is not None:
         station.social_instagram = station_in.social_instagram
     if station_in.programs_list is not None:
-        station.programs_list = station_in.programs_list
+        from app.services.radio_programs import normalize_programs_list_raw, parse_programs_list, valid_programs, validate_programs_no_overlap
+
+        parsed_programs = valid_programs(parse_programs_list(station_in.programs_list))
+        overlap_error = validate_programs_no_overlap(parsed_programs)
+        if overlap_error:
+            raise HTTPException(status_code=400, detail=overlap_error)
+        station.programs_list = normalize_programs_list_raw(station_in.programs_list)
     if station_in.is_active is not None:
         station.is_active = station_in.is_active
         if station.is_active:
@@ -593,6 +637,107 @@ def update_radio_station(
     db.commit()
     db.refresh(station)
     return serialize_station(station, db, viewer=current_user, include_stream_key=True)
+
+
+@router.post("/{id}/licence-document", response_model=RadioStationResponse)
+async def upload_station_licence_document(
+    id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_radio_admin),
+):
+    station = db.query(RadioStation).filter(RadioStation.id == id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail="Radio station not found")
+
+    real_role = getattr(current_user, "_real_role", None) or current_user.role
+    if real_role == "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Platform admins can only view licence documents",
+        )
+    if station.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to modify this station")
+
+    station.licence_document_path = await store_licence_document(file, "radio", station.id)
+    db.commit()
+    db.refresh(station)
+    return serialize_station(station, db, viewer=current_user, include_stream_key=True)
+
+
+@router.post("/{id}/cover", response_model=RadioStationResponse)
+async def upload_station_cover(
+    id: int,
+    cover_image: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_radio_admin),
+):
+    station = db.query(RadioStation).filter(RadioStation.id == id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail="Radio station not found")
+
+    real_role = getattr(current_user, "_real_role", None) or current_user.role
+    if real_role == "admin":
+        raise HTTPException(
+            status_code=403,
+            detail="Platform admins can only view station covers",
+        )
+    if station.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to modify this station")
+
+    station.cover_art_url = await store_profile_cover(cover_image, "radio", station.id)
+    db.commit()
+    db.refresh(station)
+    return serialize_station(station, db, viewer=current_user, include_stream_key=True)
+
+
+def _apply_radio_status_filter(query, status: Optional[str]):
+    if status == "active":
+        return query.filter(RadioStation.is_active == True)
+    if status == "disabled":
+        return query.filter(RadioStation.is_active == False, RadioStation.reactivation_requested == False)
+    if status == "pending":
+        return query.filter(RadioStation.is_active == False, RadioStation.reactivation_requested == True)
+    return query
+
+
+def _apply_radio_search_filter(query, search: Optional[str]):
+    if not search or not search.strip():
+        return query
+    pattern = f"%{search.strip()}%"
+    return query.outerjoin(User, RadioStation.owner_id == User.id).filter(
+        or_(
+            RadioStation.name.ilike(pattern),
+            RadioStation.category.ilike(pattern),
+            RadioStation.broadcast_frequency.ilike(pattern),
+            RadioStation.licence.ilike(pattern),
+            User.full_name.ilike(pattern),
+            User.email.ilike(pattern),
+        )
+    )
+
+
+@router.get("/admin", response_model=PaginatedRadioStationListResponse)
+def list_radio_stations_admin(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin),
+):
+    query = db.query(RadioStation)
+    query = _apply_radio_search_filter(query, search)
+    query = _apply_radio_status_filter(query, status)
+    total = query.count()
+    stations = query.order_by(RadioStation.id.desc()).offset(offset).limit(limit).all()
+    items = [serialize_station(s, db, viewer=current_user) for s in stations]
+    return PaginatedRadioStationListResponse(
+        items=items,
+        total=total,
+        has_more=offset + len(stations) < total,
+    )
+
 
 @router.get("", response_model=List[RadioStationResponse])
 def list_radio_stations(
@@ -641,7 +786,7 @@ def add_track_to_schedule(
     db.refresh(schedule)
     
     # Serialize the linked track using serialize_track
-    serialized_track = serialize_track(track, db)
+    serialized_track = serialize_track(track, db, viewer=current_user)
     
     return {
         "id": schedule.id,
@@ -1032,3 +1177,261 @@ async def webrtc_listener(id: int, params: dict, buffer_sec: Optional[float] = N
     webrtc_manager.register_listener(id, pc, relay_track)
 
     return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+
+
+class RadioListenStartResponse(BaseModel):
+    session_token: Optional[str] = None
+    billable: bool = False
+
+
+class RadioListenHeartbeatRequest(BaseModel):
+    session_token: str
+
+
+class RadioListenHeartbeatResponse(BaseModel):
+    total_credit_paise: int = 0  # always 0; credits come from daily settlement
+    total_seconds: int = 0
+
+
+class RadioListenEndRequest(BaseModel):
+    session_token: str
+
+
+@router.post("/{id}/listen-session/start", response_model=RadioListenStartResponse)
+def start_radio_listen_billing(
+    id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    station = db.query(RadioStation).filter(RadioStation.id == id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail="Radio station not found")
+
+    from app.services.wallet_service import is_billable_listener, start_radio_listen_session
+
+    if not is_billable_listener(current_user):
+        return RadioListenStartResponse(session_token=None, billable=False)
+
+    token = start_radio_listen_session(db, listener=current_user, station=station)
+    return RadioListenStartResponse(session_token=token, billable=token is not None)
+
+
+@router.post("/{id}/listen-session/heartbeat", response_model=RadioListenHeartbeatResponse)
+def heartbeat_radio_listen_billing(
+    id: int,
+    body: RadioListenHeartbeatRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    from app.services.wallet_service import heartbeat_radio_listen_session
+
+    total_seconds = heartbeat_radio_listen_session(
+        db,
+        listener=current_user,
+        session_token=body.session_token,
+    )
+    return RadioListenHeartbeatResponse(
+        total_credit_paise=0,
+        total_seconds=total_seconds or 0,
+    )
+
+
+@router.post("/{id}/listen-session/end", status_code=status.HTTP_204_NO_CONTENT)
+def end_radio_listen_billing(
+    id: int,
+    body: RadioListenEndRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    from app.services.wallet_service import end_radio_listen_session
+
+    end_radio_listen_session(db, listener=current_user, session_token=body.session_token)
+    return None
+
+
+def _authorize_radio_station_manage(station: RadioStation, current_user: User) -> None:
+    real_role = getattr(current_user, "_real_role", None) or current_user.role
+    if real_role == "admin":
+        return
+    if station.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+
+def _find_station_program(station: RadioStation, db: Session, program_key: str) -> dict:
+    from app.services.radio_programs import ensure_station_program_ids
+
+    programs = ensure_station_program_ids(station, db)
+    for program in programs:
+        if str(program.get("id")) == program_key:
+            return program
+    raise HTTPException(status_code=404, detail="Program not found")
+
+
+@router.get("/{id}/programs", response_model=RadioProgramListResponse)
+def get_radio_station_programs(
+    id: int,
+    search: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_radio_admin),
+):
+    from app.services.radio_programs import ensure_station_program_ids
+    from app.services.radio_engagement import build_program_engagement_items
+
+    station = db.query(RadioStation).filter(RadioStation.id == id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail="Radio station not found")
+    _authorize_radio_station_manage(station, current_user)
+
+    programs = ensure_station_program_ids(station, db)
+    if search and search.strip():
+        pattern = search.strip().lower()
+        programs = [
+            p for p in programs
+            if pattern in str(p.get("title", "")).lower()
+            or pattern in str(p.get("rj", "")).lower()
+        ]
+    items = [
+        RadioProgramEngagementResponse(**item)
+        for item in build_program_engagement_items(id, programs, db)
+    ]
+    return RadioProgramListResponse(items=items, total=len(items))
+
+
+@router.get("/{id}/programs/{program_key}/engagement", response_model=RadioProgramEngagementResponse)
+def get_radio_station_program_engagement(
+    id: int,
+    program_key: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_radio_admin),
+):
+    from app.services.radio_engagement import engagement_counts_for_programs
+
+    station = db.query(RadioStation).filter(RadioStation.id == id).first()
+    if not station:
+        raise HTTPException(status_code=404, detail="Radio station not found")
+    _authorize_radio_station_manage(station, current_user)
+
+    program = _find_station_program(station, db, program_key)
+    counts = engagement_counts_for_programs(db, id, [program_key]).get(program_key, {})
+    return RadioProgramEngagementResponse(
+        station_id=id,
+        program_key=program_key,
+        title=str(program.get("title") or "Untitled Program"),
+        rj_name=program.get("rj"),
+        time_from=program.get("timeFrom"),
+        time_to=program.get("timeTo"),
+        like_count=counts.get("like_count", 0),
+        dislike_count=counts.get("dislike_count", 0),
+        comment_count=counts.get("comment_count", 0),
+    )
+
+
+def _program_exists_on_station(station: RadioStation, db: Session, program_key: str) -> bool:
+    from app.services.radio_programs import ensure_station_program_ids
+    programs = ensure_station_program_ids(station, db)
+    return any(str(p.get("id")) == program_key for p in programs)
+
+
+@router.get(
+    "/{station_id}/programs/{program_key}/comments",
+    response_model=PaginatedRadioProgramCommentListResponse,
+)
+def list_radio_program_comments(
+    station_id: int,
+    program_key: str,
+    limit: int = Query(10, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    parent_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
+    from app.models import RadioProgramComment
+    from app.services.radio_engagement import load_paginated_comments_for_program
+
+    station = db.query(RadioStation).filter(RadioStation.id == station_id).first()
+    if not station or not _program_exists_on_station(station, db, program_key):
+        raise HTTPException(status_code=404, detail="Program not found")
+
+    if parent_id is not None:
+        parent = (
+            db.query(RadioProgramComment)
+            .filter(
+                RadioProgramComment.id == parent_id,
+                RadioProgramComment.station_id == station_id,
+                RadioProgramComment.program_key == program_key,
+            )
+            .first()
+        )
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent comment not found")
+
+    items, total, has_more = load_paginated_comments_for_program(
+        db,
+        station_id,
+        program_key,
+        current_user,
+        limit=limit,
+        offset=offset,
+        parent_id=parent_id,
+    )
+    return PaginatedRadioProgramCommentListResponse(items=items, total=total, has_more=has_more)
+
+
+@router.post(
+    "/{station_id}/programs/{program_key}/comments",
+    response_model=RadioProgramCommentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_radio_program_comment(
+    station_id: int,
+    program_key: str,
+    comment_in: RadioProgramCommentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.models import RadioProgramComment
+    from app.services.radio_engagement import serialize_program_comment
+
+    station = db.query(RadioStation).filter(RadioStation.id == station_id).first()
+    if not station or not _program_exists_on_station(station, db, program_key):
+        raise HTTPException(status_code=404, detail="Program not found")
+
+    body = comment_in.body.strip()
+    if not body:
+        raise HTTPException(status_code=400, detail="Comment cannot be empty")
+    if len(body) > 2000:
+        raise HTTPException(status_code=400, detail="Comment is too long (max 2000 characters)")
+
+    parent_id = comment_in.parent_id
+    if parent_id is not None:
+        parent = (
+            db.query(RadioProgramComment)
+            .filter(
+                RadioProgramComment.id == parent_id,
+                RadioProgramComment.station_id == station_id,
+                RadioProgramComment.program_key == program_key,
+            )
+            .first()
+        )
+        if not parent:
+            raise HTTPException(status_code=400, detail="Parent comment not found on this program")
+        if parent.parent_id is not None:
+            raise HTTPException(status_code=400, detail="Replies can only be made to top-level comments")
+
+    comment = RadioProgramComment(
+        station_id=station_id,
+        program_key=program_key,
+        user_id=current_user.id,
+        body=body,
+        parent_id=parent_id,
+    )
+    db.add(comment)
+    db.commit()
+    db.refresh(comment)
+    comment = (
+        db.query(RadioProgramComment)
+        .options(joinedload(RadioProgramComment.user).joinedload(User.artist_profile))
+        .filter(RadioProgramComment.id == comment.id)
+        .first()
+    )
+    return serialize_program_comment(comment, db, current_user)

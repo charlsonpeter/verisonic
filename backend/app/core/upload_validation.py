@@ -23,6 +23,13 @@ ALLOWED_IMAGE_MAGIC = {
     b"RIFF": {".webp"},
 }
 
+ALLOWED_LICENCE_DOCUMENT_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".webp"}
+ALLOWED_LICENCE_DOCUMENT_MAGIC = {
+    **ALLOWED_IMAGE_MAGIC,
+    b"%PDF": {".pdf"},
+}
+MAX_LICENCE_DOCUMENT_BYTES = 10 * 1024 * 1024
+
 
 async def read_upload_header(upload: UploadFile, size: int = 16) -> bytes:
     chunk = await upload.read(size)
@@ -90,5 +97,31 @@ async def validate_cover_upload(cover_image: UploadFile) -> str:
     await cover_image.seek(0)
     if len(body) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Cover image exceeds 10 MB limit.")
+
+    return ext
+
+
+async def validate_licence_document_upload(file: UploadFile) -> str:
+    filename = file.filename or ""
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_LICENCE_DOCUMENT_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid licence document format. Allowed: PDF, JPG, PNG, WEBP",
+        )
+
+    header = await read_upload_header(file)
+    if not _match_magic(header, ext, ALLOWED_LICENCE_DOCUMENT_MAGIC):
+        raise HTTPException(
+            status_code=400,
+            detail="Licence document content does not match the declared format.",
+        )
+
+    body = await file.read()
+    await file.seek(0)
+    if len(body) > MAX_LICENCE_DOCUMENT_BYTES:
+        raise HTTPException(status_code=400, detail="Licence document exceeds 10 MB limit.")
+    if len(body) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
     return ext

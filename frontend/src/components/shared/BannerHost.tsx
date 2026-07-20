@@ -44,7 +44,7 @@ export const BannerHost: React.FC = () => {
       aria-live="polite"
     >
       <div
-        className={`pointer-events-auto flex items-start gap-3 px-3.5 py-3 rounded-2xl border shadow-2xl backdrop-blur-xl transition-all duration-300 ${
+        className={`pointer-events-auto flex items-start gap-3 px-3.5 py-3 rounded-2xl border shadow-2xl md:backdrop-blur-xl transition-all duration-300 ${
           bannerStyles[banner.type]
         } ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-2'}`}
       >

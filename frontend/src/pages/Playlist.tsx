@@ -3,6 +3,7 @@ import { Play, Disc, Plus, Trash2, FolderHeart, Loader2, GripVertical, ChevronLe
 import { useAuth } from '../context/AuthContext';
 import { useAudio, Track } from '../context/AudioContext';
 import { TrackRow } from '../components/shared/TrackRow';
+import { PlaylistListSkeleton } from '../components/shared/skeleton';
 import { toastError, toastSuccess } from '../utils/toast';
 
 interface PlaylistData {
@@ -329,7 +330,7 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
       {/* Mobile track screen — no hidden playlist header sibling */}
       {showTracksOnMobile && selected && (
         <div className="lg:hidden space-y-4">
-          <div className="sticky top-0 z-20 -mx-6 px-6 py-3 bg-slate-950/95 backdrop-blur-md border-b border-white/5 flex items-center gap-3">
+          <div className="sticky top-0 z-20 -mx-6 px-6 py-3 bg-slate-950 border-b border-white/5 flex items-center gap-3">
             <button
               type="button"
               onClick={() => setMobileTracksOpen(false)}
@@ -381,7 +382,7 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
 
           <div className="bg-slate-900/20 border border-white/5 rounded-2xl overflow-hidden">
             {isLoading ? (
-              <p className="text-xs text-slate-500 text-center py-8">Loading playlists...</p>
+              <PlaylistListSkeleton count={4} />
             ) : playlists.length === 0 ? (
               <p className="text-xs text-slate-500 text-center py-8 px-4">No playlists yet. Create one above.</p>
             ) : (

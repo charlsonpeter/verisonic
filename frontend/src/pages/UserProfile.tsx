@@ -1,8 +1,9 @@
 import React from 'react';
-import { User as UserIcon, Activity, Key, Settings } from 'lucide-react';
+import { Activity, Key, Settings } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
 import { AppModal } from '../components/shared/AppModal';
+import { ProfileAvatarUpload } from '../components/shared/ProfileAvatarUpload';
 import {
   getAccountTierLabel,
   hasPaidSubscription,
@@ -11,7 +12,7 @@ import {
 import { SubscriptionDates } from '../components/subscription/SubscriptionDates';
 
 export const UserProfile: React.FC = () => {
-  const { currentUser, fetchCurrentUser } = useAuth();
+  const { currentUser, fetchCurrentUser, token } = useAuth();
   const { favorites } = useAudio();
 
   // Profile details update states
@@ -56,7 +57,7 @@ export const UserProfile: React.FC = () => {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+          'Authorization': `Bearer ${token || ''}`
         },
         body: JSON.stringify({
           full_name: fullName,
@@ -96,7 +97,7 @@ export const UserProfile: React.FC = () => {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
+          'Authorization': `Bearer ${token || ''}`
         },
         body: JSON.stringify({
           old_password: oldPassword,
@@ -139,9 +140,16 @@ export const UserProfile: React.FC = () => {
         {/* Ambient blob */}
         <div className="absolute top-0 right-0 w-32 h-32 bg-rose-500/5 rounded-full blur-2xl animate-pulse" />
         
-        <div className="w-24 h-24 rounded-full bg-slate-800 border-2 border-white/10 flex items-center justify-center text-slate-300 shadow-md flex-shrink-0">
-          <UserIcon className="w-12 h-12" />
-        </div>
+        <ProfileAvatarUpload
+          fullName={fullName}
+          email={email}
+          imageUrl={currentUser?.profile_image_url}
+          token={token}
+          className="w-24 h-24"
+          fallbackIconClassName="w-12 h-12"
+          initialsClassName="text-2xl"
+          onUploaded={() => { void fetchCurrentUser?.(); }}
+        />
         
         <div className="text-center md:text-left space-y-2.5 flex-1 min-w-0">
           <div className="flex flex-col md:flex-row items-center gap-2">

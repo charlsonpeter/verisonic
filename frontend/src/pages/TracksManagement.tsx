@@ -1,42 +1,373 @@
-import React, { useState, useEffect } from 'react';
-import { Music, Trash2, CheckCircle2, XCircle, RefreshCw, Star, Play, Ban, Check, Edit3, X, UploadCloud, AlertTriangle, ShieldCheck } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Music, Trash2, CheckCircle2, XCircle, RefreshCw, Star, Play, Ban, Check, Edit3, X, UploadCloud, AlertTriangle, ShieldCheck, Camera, ChevronDown, Sparkles } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio } from '../context/AudioContext';
 import { AppModal } from '../components/shared/AppModal';
 import { showError, showConfirm } from '../utils/swal';
+import { toastError, toastSuccess } from '../utils/toast';
 import { trackHasPlayableStream } from '../utils/streamQuality';
 import { createAuthenticatedWebSocket } from '../utils/authTokens';
+import { TableSkeleton, TrackCardSkeleton } from '../components/shared/skeleton';
+import { useLazyList, DEFAULT_LAZY_PAGE_SIZE } from '../hooks/useLazyList';
+import { LazyListSentinel } from '../components/shared/LazyListSentinel';
+import { ListSearchInput } from '../components/shared/ListSearchInput';
+import {
+  applyTrackStatusWsUpdates,
+  getTrackStatusDetails,
+  mergeTrackStatusUpdate,
+  trackStatusUpdateNeedsRerender,
+  type TrackStatusWsUpdate,
+} from '../utils/trackStatusWs';
+
+const TRACK_READY_DESC = 'lossless FLAC master ready';
 
 interface UploadQueueItem {
   id: string;
   file: File;
-  title: string;
-  album: string;
-  genres: string;
-  artist?: string;
-  composer?: string;
-  lyricist?: string;
-  year?: string;
-  lyrics?: string;
-  language?: string;
-  status: 'pending' | 'uploading' | 'analyzing' | 'transcoding' | 'completed' | 'rejected' | 'failed';
+  status: 'pending' | 'uploading' | 'analyzing' | 'transcoding' | 'completed' | 'rejected' | 'failed' | 'cancelled';
   progress: number;
   message: string;
-  qualityScore?: number;
-  qualityLevel?: string;
+}
+
+type TrackStatusFilter = 'all' | 'analyzing' | 'transcoding' | 'ready' | 'rejected';
+type LyricsScriptMode = 'native' | 'latin';
+
+interface LyricsExtractionProgress {
+  message: string;
+  progress: number;
+  stage?: string;
 }
 
 interface TracksManagementProps {
   onViewReport?: (track: any) => void;
 }
 
+const KEEP_SAME = '__KEEP_SAME__';
+const LRC_TIMESTAMP_LINE_RE = /^\[\d{1,2}:\d{2}(?:\.\d{1,3})?\]\s*/;
+
+const lyricsHaveTimestamps = (text: string) =>
+  text.split('\n').some((line) => LRC_TIMESTAMP_LINE_RE.test(line.trim()));
+const KEEP_SAME_LABEL = '<Keep Same>';
+
+const formatTrackOwnerName = (track: { owner_name?: string | null; owner_email?: string | null }) =>
+  track.owner_name || track.owner_email?.split('@')[0] || 'Unknown Owner';
+
+const genreNamesFromTrack = (track: any) =>
+  Array.isArray(track?.genres)
+    ? track.genres.map((g: string | { name: string }) => (typeof g === 'string' ? g : g.name)).join(', ')
+    : '';
+
+const uniqueFieldValues = (tracks: any[], getter: (t: any) => string): string[] => {
+  const seen = new Set<string>();
+  const values: string[] = [];
+  for (const t of tracks) {
+    const v = String(getter(t) ?? '').trim();
+    if (!seen.has(v)) {
+      seen.add(v);
+      values.push(v);
+    }
+  }
+  return values;
+};
+
+const consensusOrKeep = (values: string[]) =>
+  values.length === 1 ? values[0] : KEEP_SAME;
+
+const optionLabel = (value: string, max = 72) => {
+  if (value === '') return '(empty)';
+  const oneLine = value.replace(/\s+/g, ' ').trim();
+  return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
+};
+
+type BulkTagFieldProps = {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: string[];
+  multiline?: boolean;
+  type?: string;
+  list?: string;
+  required?: boolean;
+  placeholder?: string;
+  min?: number;
+  rows?: number;
+  className?: string;
+  hideLabel?: boolean;
+  onExpand?: () => void;
+};
+
+const BulkTagField: React.FC<BulkTagFieldProps> = ({
+  label,
+  value,
+  onChange,
+  options,
+  multiline = false,
+  type = 'text',
+  list,
+  required,
+  placeholder,
+  min,
+  rows = 4,
+  className = '',
+  hideLabel = false,
+  onExpand,
+}) => {
+  const mixed = options.length > 1;
+  // After bulk apply, options may collapse to one value while state is still KEEP_SAME.
+  const safeValue = !mixed && value === KEEP_SAME ? (options[0] ?? '') : value;
+  const isKeep = value === KEEP_SAME && mixed;
+  const [menuOpen, setMenuOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const fieldClass =
+    'w-full bg-slate-950 border border-white/5 p-2.5 rounded-xl text-xs outline-none focus:border-rose-500 text-slate-200';
+
+  useEffect(() => {
+    if (!mixed && value === KEEP_SAME) {
+      onChange(options[0] ?? '');
+    }
+  }, [mixed, value, options, onChange]);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [menuOpen]);
+
+  const rightPad = mixed && onExpand ? 'pr-16' : mixed || onExpand ? 'pr-9' : '';
+  const displayValue = isKeep ? KEEP_SAME_LABEL : safeValue;
+
+  const matchesOption = (text: string) =>
+    options.some((opt) => opt.toLowerCase().includes(text.toLowerCase()));
+
+  const handleMixedChange = (next: string) => {
+    if (next === KEEP_SAME_LABEL) {
+      onChange(KEEP_SAME);
+      return;
+    }
+    onChange(next);
+    if (next === '' || matchesOption(next)) {
+      setMenuOpen(true);
+    } else {
+      setMenuOpen(false);
+    }
+  };
+
+  const handleMixedKeyDown = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    if (!isKeep) return;
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      e.preventDefault();
+      onChange('');
+      setMenuOpen(false);
+      return;
+    }
+    // Printable character while Keep Same is selected → replace with that character
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      onChange(e.key);
+      setMenuOpen(false);
+    }
+  };
+
+  return (
+    <div className={`space-y-1 ${className}`} ref={rootRef}>
+      {!hideLabel && (
+        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{label}</label>
+      )}
+      {mixed ? (
+        <div className="relative group">
+          {multiline ? (
+            <textarea
+              value={displayValue}
+              onChange={(e) => handleMixedChange(e.target.value)}
+              onKeyDown={handleMixedKeyDown}
+              onFocus={(e) => {
+                setMenuOpen(true);
+                if (isKeep) e.currentTarget.select();
+              }}
+              rows={rows}
+              className={`${fieldClass} font-sans leading-relaxed resize-none ${rightPad}`}
+              placeholder={placeholder}
+            />
+          ) : (
+            <input
+              type={type === 'number' ? 'text' : type}
+              value={displayValue}
+              onChange={(e) => handleMixedChange(e.target.value)}
+              onKeyDown={handleMixedKeyDown}
+              onFocus={(e) => {
+                setMenuOpen(true);
+                if (isKeep) e.currentTarget.select();
+              }}
+              min={min}
+              className={`${fieldClass} ${rightPad}`}
+              placeholder={placeholder}
+              autoComplete="off"
+            />
+          )}
+          <div className="absolute top-2 right-2 flex items-center gap-0.5">
+            {onExpand && !isKeep && (
+              <button
+                type="button"
+                onClick={onExpand}
+                title="Edit in large mode"
+                aria-label="Edit in large mode"
+                className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-white/5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-70 transition"
+              >
+                <Edit3 className="w-3.5 h-3.5" />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setMenuOpen((open) => !open)}
+              className="p-1 rounded-md text-slate-400 hover:text-white hover:bg-white/5 transition"
+              aria-label={`Show ${label || 'field'} options`}
+              tabIndex={-1}
+            >
+              <ChevronDown className={`w-3.5 h-3.5 transition ${menuOpen ? 'rotate-180' : ''}`} />
+            </button>
+          </div>
+          {menuOpen && (
+            <div className="absolute z-30 left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-slate-950 shadow-xl">
+              <button
+                type="button"
+                onClick={() => {
+                  onChange(KEEP_SAME);
+                  setMenuOpen(false);
+                }}
+                className={`w-full text-left px-3 py-2 text-xs font-semibold transition ${
+                  isKeep ? 'bg-rose-600/15 text-rose-300' : 'text-slate-300 hover:bg-white/5'
+                }`}
+              >
+                {KEEP_SAME_LABEL}
+              </button>
+              {options.map((opt) => (
+                <button
+                  type="button"
+                  key={`${label}-${opt || '__empty'}`}
+                  onClick={() => {
+                    onChange(opt);
+                    setMenuOpen(false);
+                  }}
+                  className={`w-full text-left px-3 py-2 text-xs transition ${
+                    !isKeep && value === opt ? 'bg-rose-600/15 text-rose-300' : 'text-slate-300 hover:bg-white/5'
+                  }`}
+                >
+                  {optionLabel(opt)}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : multiline ? (
+        <div className="relative group">
+          <textarea
+            value={safeValue}
+            onChange={(e) => onChange(e.target.value)}
+            rows={rows}
+            required={required}
+            className={`${fieldClass} font-sans leading-relaxed resize-none ${onExpand ? 'pr-9' : ''}`}
+            placeholder={placeholder}
+          />
+          {onExpand && (
+            <button
+              type="button"
+              onClick={onExpand}
+              title="Edit in large mode"
+              aria-label="Edit in large mode"
+              className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/55 text-white border border-white/10 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-70 transition-opacity"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      ) : (
+        <input
+          type={type}
+          value={safeValue}
+          onChange={(e) => onChange(e.target.value)}
+          list={list}
+          required={required}
+          min={min}
+          className={fieldClass}
+          placeholder={placeholder}
+        />
+      )}
+    </div>
+  );
+};
+
 export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport }) => {
-  const { token, currentUser, fetchCurrentUser } = useAuth();
+  const { token, currentUser, fetchCurrentUser, isStaffInAdminMode } = useAuth();
   const { playTrack, currentTrack, isPlaying, updateTrackMetadata } = useAudio();
   
-  const [tracks, setTracks] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+  const isPlatformAdmin = currentUser?.role === 'admin';
+  const isStudioAdmin = currentUser?.role === 'studio_admin';
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<TrackStatusFilter>('all');
+  const [lyricsExtractionEnabled, setLyricsExtractionEnabled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!token || (!isStaffInAdminMode && !isPlatformAdmin)) {
+      setLyricsExtractionEnabled(false);
+      return;
+    }
+
+    setLyricsExtractionEnabled(false);
+    void fetch('/api/music/capabilities', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (res) => {
+        if (!res.ok) return false;
+        const data = await res.json();
+        return data.lyrics_extraction_enabled === true;
+      })
+      .then((enabled) => {
+        if (!cancelled) setLyricsExtractionEnabled(enabled);
+      })
+      .catch(() => {
+        if (!cancelled) setLyricsExtractionEnabled(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token, isStaffInAdminMode, isPlatformAdmin]);
+
+  const tracksList = useLazyList<any>({
+    fetchPage: useCallback(async (offset, limit) => {
+      if (!token) return { items: [], hasMore: false };
+      const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+      if (searchQuery.trim()) params.set('search', searchQuery.trim());
+      if (statusFilter !== 'all') params.set('status', statusFilter);
+      const res = await fetch(`/api/music/manage?${params}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        if (offset === 0) {
+          const errorData = await res.json().catch(() => ({}));
+          toastError(errorData.detail || 'Failed to fetch tracks.');
+        }
+        return { items: [], hasMore: false };
+      }
+      const data = await res.json();
+      return { items: data.items, hasMore: data.has_more };
+    }, [token, searchQuery, statusFilter]),
+    resetKey: token && (isStaffInAdminMode || isPlatformAdmin) ? `tracks-${searchQuery}-${statusFilter}` : null,
+    enabled: !!(token && (isStaffInAdminMode || isPlatformAdmin)),
+    pageSize: DEFAULT_LAZY_PAGE_SIZE,
+  });
+
+  const tracks = tracksList.items;
+  const isLoading = tracksList.loading;
+  const fetchTracks = (_silent = false) => { void tracksList.reload(); };
+
   const [selectedTrackIds, setSelectedTrackIds] = useState<number[]>([]);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
@@ -62,14 +393,14 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
         })
       });
       if (res.ok) {
-        setMessage({ type: 'success', text: 'Studio profile registered successfully!' });
+        toastSuccess('Studio profile registered successfully!');
         if (fetchCurrentUser) await fetchCurrentUser();
       } else {
         const errorData = await res.json();
-        setMessage({ type: 'error', text: errorData.detail || 'Failed to register studio.' });
+        toastError(errorData.detail || 'Failed to register studio.');
       }
     } catch {
-      setMessage({ type: 'error', text: 'Connection failed.' });
+      toastError('Connection failed.');
     } finally {
       setIsRegisteringStudio(false);
     }
@@ -80,6 +411,18 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
   const [isQueueUploading, setIsQueueUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const activeUploadXhrRef = useRef<XMLHttpRequest | null>(null);
+  const uploadStopRequestedRef = useRef(false);
+  const uploadQueueListRef = useRef<HTMLDivElement | null>(null);
+  const uploadingItemId = uploadQueue.find((q) => q.status === 'uploading')?.id;
+
+  useEffect(() => {
+    if (!uploadingItemId || !uploadQueueListRef.current) return;
+    const el = uploadQueueListRef.current.querySelector<HTMLElement>(
+      `[data-upload-item-id="${uploadingItemId}"]`,
+    );
+    el?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [uploadingItemId]);
 
   const [suggestions, setSuggestions] = useState<{
     artists: string[];
@@ -109,65 +452,18 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     }
   };
 
-  const parseFileMetadata = async (itemId: string, file: File) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    try {
-      const response = await fetch('/api/music/parse-metadata', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` },
-        body: formData,
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setUploadQueue(prev => prev.map(q => q.id === itemId ? {
-          ...q,
-          title: data.title || q.title,
-          artist: data.artist || q.artist,
-          album: data.album || q.album,
-          composer: data.composer || q.composer,
-          lyricist: data.lyricist || q.lyricist,
-          year: data.year ? String(data.year) : q.year,
-          lyrics: data.lyrics || q.lyrics,
-          language: data.language || q.language,
-          message: 'Metadata loaded'
-        } : q));
-      } else {
-        setUploadQueue(prev => prev.map(q => q.id === itemId ? { ...q, message: 'Ready' } : q));
-      }
-    } catch (err) {
-      console.error("Failed to parse metadata", err);
-      setUploadQueue(prev => prev.map(q => q.id === itemId ? { ...q, message: 'Ready' } : q));
-    }
-  };
-
   const handleFilesSelected = (files: FileList | null) => {
     if (!files) return;
     const newItems: UploadQueueItem[] = [];
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const baseName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
-      const itemId = Math.random().toString(36).substring(7);
-      
       newItems.push({
-        id: itemId,
+        id: Math.random().toString(36).substring(7),
         file,
-        title: baseName,
-        album: '',
-        genres: '',
-        artist: '',
-        composer: '',
-        lyricist: '',
-        year: '',
-        lyrics: '',
-        language: '',
         status: 'pending',
         progress: 0,
-        message: 'Reading metadata...'
+        message: '',
       });
-
-      // Trigger background parsing
-      parseFileMetadata(itemId, file);
     }
     setUploadQueue(prev => [...prev, ...newItems]);
     setUploadMessage(null);
@@ -175,21 +471,24 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
 
   const uploadSingleQueueItem = (item: UploadQueueItem): Promise<void> => {
     return new Promise((resolve) => {
-      setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'uploading', progress: 0, message: 'Uploading bytes...' } : q));
+      if (uploadStopRequestedRef.current) {
+        setUploadQueue(prev => prev.map(q => q.id === item.id ? {
+          ...q,
+          status: 'cancelled',
+          message: 'Cancelled',
+          progress: 0,
+        } : q));
+        resolve();
+        return;
+      }
+
+      setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, status: 'uploading', progress: 0, message: 'Uploading...' } : q));
       
       const formData = new FormData();
       formData.append('file', item.file);
-      formData.append('title', item.title);
-      formData.append('album_title', item.album);
-      formData.append('genres', item.genres);
-      if (item.artist) formData.append('artist_name', item.artist);
-      if (item.composer) formData.append('composer', item.composer);
-      if (item.lyricist) formData.append('lyricist', item.lyricist);
-      if (item.year) formData.append('year', item.year);
-      if (item.language) formData.append('language', item.language);
-      if (item.lyrics) formData.append('lyrics', item.lyrics);
       
       const xhr = new XMLHttpRequest();
+      activeUploadXhrRef.current = xhr;
       
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) {
@@ -199,6 +498,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       };
       
       xhr.onload = () => {
+        if (activeUploadXhrRef.current === xhr) activeUploadXhrRef.current = null;
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
             const data = JSON.parse(xhr.responseText);
@@ -224,17 +524,24 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       };
       
       xhr.onerror = () => {
-        setTimeout(() => {
-          setUploadQueue(prev => prev.map(q => q.id === item.id ? { 
-            ...q, 
-            status: 'completed', 
-            message: 'Approved: Studio Quality (95%) [Offline Mock]',
-            qualityScore: 95,
-            qualityLevel: 'Studio Quality'
-          } : q));
-          fetchTracks(true);
-          resolve();
-        }, 3000);
+        if (activeUploadXhrRef.current === xhr) activeUploadXhrRef.current = null;
+        setUploadQueue(prev => prev.map(q => q.id === item.id ? { 
+          ...q, 
+          status: 'failed', 
+          message: 'Upload failed.',
+        } : q));
+        resolve();
+      };
+
+      xhr.onabort = () => {
+        if (activeUploadXhrRef.current === xhr) activeUploadXhrRef.current = null;
+        setUploadQueue(prev => prev.map(q => q.id === item.id ? {
+          ...q,
+          status: 'cancelled',
+          message: 'Stopped',
+          progress: 0,
+        } : q));
+        resolve();
       };
       
       xhr.open('POST', `/api/music/upload`);
@@ -243,49 +550,45 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     });
   };
 
+  const handleStopUploadQueue = () => {
+    uploadStopRequestedRef.current = true;
+    const xhr = activeUploadXhrRef.current;
+    if (xhr) {
+      xhr.abort();
+      activeUploadXhrRef.current = null;
+    }
+    setUploadQueue(prev => prev.map(q =>
+      q.status === 'pending'
+        ? { ...q, status: 'cancelled', message: 'Cancelled', progress: 0 }
+        : q
+    ));
+    setUploadMessage({ type: 'error', text: 'Upload stopped. Remaining files were cancelled.' });
+  };
+
   const handleUploadQueue = async () => {
     if (uploadQueue.length === 0 || isQueueUploading) return;
+    uploadStopRequestedRef.current = false;
     setIsQueueUploading(true);
     setUploadMessage(null);
     
     const itemsToUpload = [...uploadQueue];
     for (const item of itemsToUpload) {
-      if (item.status === 'completed' || item.status === 'rejected' || item.status === 'failed') continue;
+      if (uploadStopRequestedRef.current) break;
+      if (item.status === 'completed' || item.status === 'rejected' || item.status === 'failed' || item.status === 'cancelled') continue;
       await uploadSingleQueueItem(item);
     }
     
     setIsQueueUploading(false);
+    activeUploadXhrRef.current = null;
     fetchSuggestions();
     fetchTracks(true);
   };
 
-  const fetchTracks = async (silent = false) => {
-    if (!silent) setIsLoading(true);
-    try {
-      const res = await fetch('/api/music/manage', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setTracks(data);
-      } else if (!silent) {
-        const errorData = await res.json();
-        setMessage({ type: 'error', text: errorData.detail || 'Failed to fetch tracks.' });
-      }
-    } catch (e) {
-      console.error("Failed to fetch tracks:", e);
-      if (!silent) {
-        setMessage({ type: 'error', text: 'Connection failed.' });
-      }
-    } finally {
-      if (!silent) setIsLoading(false);
-    }
-  };
-
   useEffect(() => {
-    fetchTracks();
-    fetchSuggestions();
-  }, []);
+    if (token && (isStaffInAdminMode || isPlatformAdmin)) {
+      fetchSuggestions();
+    }
+  }, [token, isStaffInAdminMode, isPlatformAdmin]);
 
   useEffect(() => {
     setSelectedTrackIds((prev) => prev.filter((id) => tracks.some((t) => t.id === id)));
@@ -303,37 +606,26 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       try {
         const data = JSON.parse(event.data);
         if (data.type === 'status_updates') {
-          const updates = data.tracks;
-          setTracks((prevTracks) => {
-            const hasNewTracks = updates.some((u: any) => 
-              !prevTracks.some((t: any) => t.id === u.track_id)
-            );
-            if (hasNewTracks) {
-              setTimeout(() => {
-                fetchTracks(true);
-              }, 0);
-            }
-            return prevTracks.map((track) => {
-              const update = updates.find((u: any) => u.track_id === track.id);
-              if (update) {
-                return {
-                  ...track,
-                  quality_score: update.quality_score,
-                  quality_level: update.quality_level,
-                  approved: update.approved
-                };
-              }
-              return track;
+          const updates = data.tracks as TrackStatusWsUpdate[];
+
+          tracksList.setItems((prevTracks) => {
+            const { next, changed } = applyTrackStatusWsUpdates(prevTracks, updates, {
+              readyDesc: TRACK_READY_DESC,
+              onNewTracks: () => { setTimeout(() => tracksList.reload(), 0); },
+              onReload: () => {
+                tracksList.reload();
+                fetchSuggestions();
+              },
             });
+            return changed ? next : prevTracks;
           });
 
-          const hasTerminalUpdate = updates.some((u: any) =>
-            u.status === 'completed' || u.status === 'rejected' || u.status === 'failed'
-          );
-          if (hasTerminalUpdate) {
-            fetchTracks(true);
-            fetchSuggestions();
-          }
+          setEditingTrack((prev: any | null) => {
+            if (!prev) return prev;
+            const update = updates.find((u) => u.track_id === prev.id);
+            if (!update || !trackStatusUpdateNeedsRerender(update, prev)) return prev;
+            return mergeTrackStatusUpdate(prev, update);
+          });
         }
       } catch (err) {
         console.error("Failed to parse status update:", err);
@@ -356,22 +648,21 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       "Yes, delete it"
     );
     if (!confirmed) return;
-    setMessage(null);
     try {
       const res = await fetch(`/api/music/${trackId}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
-        setMessage({ type: 'success', text: 'Track deleted successfully.' });
+        toastSuccess('Track deleted successfully.');
         setSelectedTrackIds((prev) => prev.filter((id) => id !== trackId));
         fetchTracks();
       } else {
         const data = await res.json();
-        setMessage({ type: 'error', text: data.detail || 'Failed to delete track.' });
+        toastError(data.detail || 'Failed to delete track.');
       }
     } catch {
-      setMessage({ type: 'error', text: 'Connection failed.' });
+      toastError('Connection failed.');
     }
   };
 
@@ -401,8 +692,6 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       `Yes, delete ${count}`
     );
     if (!confirmed) return;
-
-    setMessage(null);
     setIsBulkDeleting(true);
     try {
       const results = await Promise.allSettled(
@@ -423,59 +712,42 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       fetchTracks(true);
 
       if (failed === 0) {
-        setMessage({
-          type: 'success',
-          text: `${deleted} track${deleted === 1 ? '' : 's'} deleted successfully.`,
-        });
+        toastSuccess(`${deleted} track${deleted === 1 ? '' : 's'} deleted successfully.`);
       } else if (deleted > 0) {
-        setMessage({
-          type: 'error',
-          text: `${deleted} deleted, ${failed} failed. Refresh and try again for remaining tracks.`,
-        });
+        toastError(`${deleted} deleted, ${failed} failed. Refresh and try again for remaining tracks.`);
       } else {
-        setMessage({ type: 'error', text: 'Failed to delete selected tracks.' });
+        toastError('Failed to delete selected tracks.');
       }
     } catch {
-      setMessage({ type: 'error', text: 'Connection failed.' });
+      toastError('Connection failed.');
     } finally {
       setIsBulkDeleting(false);
     }
   };
 
   const handleApproveToggle = async (trackId: number, approve: boolean) => {
-    setMessage(null);
     try {
       const res = await fetch(`/api/music/${trackId}/approve?approved=${approve}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
-        setMessage({ 
-          type: 'success', 
-          text: `Track has been ${approve ? 'approved for streaming' : 'rejected and disabled'}.` 
-        });
+        toastSuccess(`Track has been ${approve ? 'approved for streaming' : 'rejected and disabled'}.`);
         fetchTracks();
       } else {
         const data = await res.json();
-        setMessage({ type: 'error', text: data.detail || 'Failed to update track approval.' });
+        toastError(data.detail || 'Failed to update track approval.');
       }
     } catch {
-      setMessage({ type: 'error', text: 'Connection failed.' });
+      toastError('Connection failed.');
     }
   };
 
-  const getStatusDetails = (t: any) => {
-    if (t.quality_score === null) {
-      return { label: 'Analyzing', style: 'bg-amber-500/10 border-amber-500/20 text-amber-400', desc: 'Running spectral checks...' };
-    }
-    if (t.approved && !t.hls_playlist_path) {
-      return { label: 'Transcoding', style: 'bg-cyan-500/10 border-cyan-500/20 text-cyan-400', desc: 'Generating adaptive streaming files...' };
-    }
-    if (t.approved && t.hls_playlist_path) {
-      return { label: 'Ready', style: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400', desc: 'lossless FLAC master ready' };
-    }
-    return { label: 'Rejected', style: 'bg-rose-500/10 border-rose-500/20 text-rose-455', desc: 'Failed spectral cutoff checks' };
-  };
+  const getStatusDetails = (t: {
+    quality_score: number | null;
+    approved: boolean;
+    hls_playlist_path?: string | null;
+  }) => getTrackStatusDetails(t, TRACK_READY_DESC);
 
   // Edit Track State
   const [editingTrack, setEditingTrack] = useState<any | null>(null);
@@ -485,61 +757,291 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
   const [editComposer, setEditComposer] = useState('');
   const [editLyricist, setEditLyricist] = useState('');
   const [editYear, setEditYear] = useState('');
+  const [editTrackNumber, setEditTrackNumber] = useState('');
+  const [editAlbumArtist, setEditAlbumArtist] = useState('');
+  const [editComment, setEditComment] = useState('');
+  const [editCopyright, setEditCopyright] = useState('');
   const [editGenres, setEditGenres] = useState('');
   const [editLyrics, setEditLyrics] = useState('');
   const [editLanguage, setEditLanguage] = useState('');
   const [editCoverFile, setEditCoverFile] = useState<File | null>(null);
   const [editCoverPreview, setEditCoverPreview] = useState<string>('');
+  const editCoverInputRef = useRef<HTMLInputElement>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
-  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isLyricsModalOpen, setIsLyricsModalOpen] = useState(false);
+  const [lyricsDraft, setLyricsDraft] = useState('');
+  const [lyricsScriptMode, setLyricsScriptMode] = useState<LyricsScriptMode>('native');
+  const [isGeneratingLyrics, setIsGeneratingLyrics] = useState(false);
+  const [lyricsExtractionProgress, setLyricsExtractionProgress] = useState<LyricsExtractionProgress | null>(null);
+  const lyricsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const handleTranscribeAI = async () => {
-    if (!editingTrack) return;
-    setIsTranscribing(true);
-    try {
-      const response = await fetch(`/api/music/${editingTrack.id}/transcribe`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setEditLyrics(data.lyrics);
-      } else {
-        showError("Transcription Failed", "Failed to transcribe. Make sure the original audio is uploaded and analyzed.");
-      }
-    } catch (err) {
-      console.error(err);
-      showError("Transcription Error", "Error triggering AI transcription.");
-    } finally {
-      setIsTranscribing(false);
-    }
+  const isMultiEdit = selectedTrackIds.length > 1;
+  const isSingleEdit = selectedTrackIds.length === 1;
+  const hasEditorTarget = selectedTrackIds.length > 0;
+
+  const selectedTracks = selectedTrackIds
+    .map((id) => tracks.find((t) => t.id === id))
+    .filter(Boolean) as any[];
+
+  const multiOptions = {
+    title: uniqueFieldValues(selectedTracks, (t) => t.title || ''),
+    artist: uniqueFieldValues(selectedTracks, (t) => t.artist_name || ''),
+    album: uniqueFieldValues(selectedTracks, (t) => t.album_title || ''),
+    albumArtist: uniqueFieldValues(selectedTracks, (t) => t.album_artist || ''),
+    composer: uniqueFieldValues(selectedTracks, (t) => t.composer || ''),
+    lyricist: uniqueFieldValues(selectedTracks, (t) => t.lyricist || ''),
+    year: uniqueFieldValues(selectedTracks, (t) => (t.year != null ? String(t.year) : '')),
+    trackNumber: uniqueFieldValues(selectedTracks, (t) => (t.track_number != null ? String(t.track_number) : '')),
+    language: uniqueFieldValues(selectedTracks, (t) => t.language || ''),
+    genres: uniqueFieldValues(selectedTracks, (t) => genreNamesFromTrack(t)),
+    comment: uniqueFieldValues(selectedTracks, (t) => t.comment || ''),
+    copyright: uniqueFieldValues(selectedTracks, (t) => t.copyright || ''),
+    lyrics: uniqueFieldValues(selectedTracks, (t) => t.lyrics || ''),
+    cover: uniqueFieldValues(selectedTracks, (t) => t.cover_art_url || ''),
   };
 
-  const handleEditClick = (track: any) => {
+  const clearTagEditor = () => {
+    setEditingTrack(null);
+    setEditTitle('');
+    setEditArtist('');
+    setEditAlbum('');
+    setEditComposer('');
+    setEditLyricist('');
+    setEditYear('');
+    setEditTrackNumber('');
+    setEditAlbumArtist('');
+    setEditComment('');
+    setEditCopyright('');
+    setEditGenres('');
+    setEditLyrics('');
+    setEditLanguage('');
+    setEditCoverFile(null);
+    setEditCoverPreview('');
+    setEditError(null);
+  };
+
+  const populateTagEditor = (track: any) => {
     setEditingTrack(track);
-    setEditTitle(track.title);
+    setEditTitle(track.title || '');
     setEditArtist(track.artist_name || '');
     setEditAlbum(track.album_title || '');
     setEditComposer(track.composer || '');
     setEditLyricist(track.lyricist || '');
     setEditYear(track.year ? String(track.year) : '');
+    setEditTrackNumber(track.track_number ? String(track.track_number) : '');
+    setEditAlbumArtist(track.album_artist || '');
+    setEditComment(track.comment || '');
+    setEditCopyright(track.copyright || '');
     setEditLanguage(track.language || '');
-    const genreNames = track.genres ? track.genres.map((g: any) => g.name).join(', ') : '';
-    setEditGenres(genreNames);
+    setEditGenres(genreNamesFromTrack(track));
     setEditLyrics(track.lyrics || '');
     setEditCoverFile(null);
     setEditCoverPreview(track.cover_art_url || '');
     setEditError(null);
   };
 
-  const handleEditSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingTrack) return;
-    setIsSavingEdit(true);
+  const populateMultiTagEditor = (selected: any[]) => {
+    setEditingTrack(null);
+    setEditTitle(consensusOrKeep(uniqueFieldValues(selected, (t) => t.title || '')));
+    setEditArtist(consensusOrKeep(uniqueFieldValues(selected, (t) => t.artist_name || '')));
+    setEditAlbum(consensusOrKeep(uniqueFieldValues(selected, (t) => t.album_title || '')));
+    setEditComposer(consensusOrKeep(uniqueFieldValues(selected, (t) => t.composer || '')));
+    setEditLyricist(consensusOrKeep(uniqueFieldValues(selected, (t) => t.lyricist || '')));
+    setEditYear(consensusOrKeep(uniqueFieldValues(selected, (t) => (t.year != null ? String(t.year) : ''))));
+    setEditTrackNumber(consensusOrKeep(uniqueFieldValues(selected, (t) => (t.track_number != null ? String(t.track_number) : ''))));
+    setEditAlbumArtist(consensusOrKeep(uniqueFieldValues(selected, (t) => t.album_artist || '')));
+    setEditComment(consensusOrKeep(uniqueFieldValues(selected, (t) => t.comment || '')));
+    setEditCopyright(consensusOrKeep(uniqueFieldValues(selected, (t) => t.copyright || '')));
+    setEditLanguage(consensusOrKeep(uniqueFieldValues(selected, (t) => t.language || '')));
+    setEditGenres(consensusOrKeep(uniqueFieldValues(selected, (t) => genreNamesFromTrack(t))));
+    setEditLyrics(consensusOrKeep(uniqueFieldValues(selected, (t) => t.lyrics || '')));
+    setEditCoverFile(null);
+    const covers = uniqueFieldValues(selected, (t) => t.cover_art_url || '');
+    setEditCoverPreview(covers.length === 1 ? covers[0] : '');
     setEditError(null);
+  };
 
+  useEffect(() => {
+    if (selectedTrackIds.length === 0) {
+      clearTagEditor();
+      return;
+    }
+    const selected = selectedTrackIds
+      .map((id) => tracks.find((t) => t.id === id))
+      .filter(Boolean) as any[];
+    if (selected.length === 0) {
+      clearTagEditor();
+      return;
+    }
+    if (selected.length === 1) {
+      populateTagEditor(selected[0]);
+      return;
+    }
+    populateMultiTagEditor(selected);
+    // Selection-driven only — avoid wiping in-progress edits on track list refreshes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedTrackIds.join(',')]);
+
+
+  const openLyricsModal = () => {
+    setLyricsDraft(editLyrics === KEEP_SAME ? '' : editLyrics);
+    setLyricsScriptMode('native');
+    if (!isGeneratingLyrics) setLyricsExtractionProgress(null);
+    setIsLyricsModalOpen(true);
+  };
+
+  const applyLyricsDraft = () => {
+    setEditLyrics(lyricsDraft);
+    setIsLyricsModalOpen(false);
+  };
+
+  const stopLyricsPolling = useCallback(() => {
+    if (lyricsPollRef.current) {
+      clearInterval(lyricsPollRef.current);
+      lyricsPollRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => stopLyricsPolling(), [stopLyricsPolling]);
+
+  const startLyricsPolling = useCallback((trackId: number, baselineLyrics: string, taskId?: string, syncMode = false) => {
+    stopLyricsPolling();
+    let attempts = 0;
+    const maxAttempts = 120;
+
+    lyricsPollRef.current = setInterval(async () => {
+      attempts += 1;
+      if (attempts > maxAttempts) {
+        stopLyricsPolling();
+        setIsGeneratingLyrics(false);
+        setLyricsExtractionProgress({
+          message: 'Timed out waiting for lyrics. Try refreshing the page.',
+          progress: 100,
+        });
+        return;
+      }
+
+      try {
+        if (taskId) {
+          const statusRes = await fetch(`/api/music/extract-lyrics/status/${taskId}`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            if (statusData.status === 'error') {
+              stopLyricsPolling();
+              setIsGeneratingLyrics(false);
+              setLyricsExtractionProgress(null);
+              toastError(statusData.error || 'Lyrics extraction failed.');
+              return;
+            }
+            if (statusData.status === 'progress') {
+              setLyricsExtractionProgress({
+                message: statusData.message || 'Processing...',
+                progress: Math.max(0, Math.min(100, statusData.progress ?? 0)),
+                stage: statusData.stage,
+              });
+              return;
+            }
+            if (statusData.status === 'pending') {
+              setLyricsExtractionProgress({
+                message: statusData.message || 'Queued — waiting for worker...',
+                progress: statusData.progress ?? 2,
+                stage: 'queued',
+              });
+              return;
+            }
+            if (statusData.status === 'success') {
+              setLyricsExtractionProgress({
+                message: 'Finalizing lyrics...',
+                progress: 98,
+                stage: 'finalizing',
+              });
+              // Fall through to fetch updated lyrics below.
+            }
+          }
+        }
+
+        const res = await fetch(`/api/music/${trackId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const newLyrics = (data.lyrics || '').trim();
+        if (newLyrics && newLyrics !== baselineLyrics.trim()) {
+          stopLyricsPolling();
+          setEditLyrics(newLyrics);
+          setLyricsDraft(newLyrics);
+          setIsGeneratingLyrics(false);
+          setLyricsExtractionProgress(null);
+          toastSuccess(syncMode ? 'Timestamps generated successfully.' : 'Lyrics generated successfully.');
+          fetchTracks();
+        }
+      } catch {
+        // Keep polling on transient errors
+      }
+    }, 3000);
+  }, [fetchTracks, stopLyricsPolling, token]);
+
+  const handleGenerateLyrics = async () => {
+    if (!isSingleEdit || !editingTrack || !token) return;
+
+    const draft = lyricsDraft.trim();
+    const syncMode = draft.length > 0;
+
+    if (syncMode) {
+      const confirmed = await showConfirm(
+        lyricsHaveTimestamps(draft) ? 'Re-sync timestamps?' : 'Generate timestamps?',
+        lyricsHaveTimestamps(draft)
+          ? 'This will align your lyric lines to the audio and update the timestamps.'
+          : 'This will add timestamps to your pasted lyrics without changing the text.',
+        'Generate timestamps'
+      );
+      if (!confirmed) return;
+    }
+
+    setIsGeneratingLyrics(true);
+    setLyricsExtractionProgress({
+      message: syncMode ? 'Queued — preparing timestamp sync...' : 'Queued — preparing lyrics extraction...',
+      progress: 2,
+      stage: 'queued',
+    });
+
+    try {
+      const params = new URLSearchParams({ script_mode: lyricsScriptMode });
+      const formData = new FormData();
+      if (syncMode) {
+        formData.append('lyrics_text', lyricsDraft);
+      }
+      const res = await fetch(`/api/music/${editingTrack.id}/extract-lyrics?${params}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: syncMode ? formData : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setIsGeneratingLyrics(false);
+        setLyricsExtractionProgress(null);
+        toastError(data.detail || (syncMode ? 'Failed to queue timestamp sync.' : 'Failed to queue lyrics extraction.'));
+        return;
+      }
+
+      toastSuccess(data.message || (syncMode ? 'Timestamp sync queued.' : 'Lyrics extraction queued.'));
+      startLyricsPolling(editingTrack.id, lyricsDraft, data.task_id, syncMode);
+    } catch {
+      setIsGeneratingLyrics(false);
+      setLyricsExtractionProgress(null);
+      toastError('Connection failed.');
+    }
+  };
+
+  const handleEditClick = (track: any) => {
+    setSelectedTrackIds([track.id]);
+  };
+
+  const buildSingleEditFormData = () => {
     const formData = new FormData();
     formData.append('title', editTitle);
     formData.append('artist_name', editArtist);
@@ -547,36 +1049,141 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     formData.append('composer', editComposer);
     formData.append('lyricist', editLyricist);
     formData.append('year', editYear);
+    formData.append('track_number', editTrackNumber);
+    formData.append('album_artist', editAlbumArtist);
+    formData.append('comment', editComment);
+    formData.append('copyright', editCopyright);
     formData.append('language', editLanguage);
     formData.append('genres', editGenres);
     formData.append('lyrics', editLyrics);
     if (editCoverFile) {
       formData.append('cover_image', editCoverFile);
     }
+    return formData;
+  };
+
+  const buildMultiEditFormData = () => {
+    const formData = new FormData();
+    const maybeAppend = (key: string, value: string) => {
+      if (value !== KEEP_SAME) formData.append(key, value);
+    };
+    maybeAppend('title', editTitle);
+    maybeAppend('artist_name', editArtist);
+    maybeAppend('album_title', editAlbum);
+    maybeAppend('composer', editComposer);
+    maybeAppend('lyricist', editLyricist);
+    maybeAppend('year', editYear);
+    maybeAppend('track_number', editTrackNumber);
+    maybeAppend('album_artist', editAlbumArtist);
+    maybeAppend('comment', editComment);
+    maybeAppend('copyright', editCopyright);
+    maybeAppend('language', editLanguage);
+    maybeAppend('genres', editGenres);
+    maybeAppend('lyrics', editLyrics);
+    if (editCoverFile) {
+      formData.append('cover_image', editCoverFile);
+    }
+    return formData;
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!hasEditorTarget) return;
+    setIsSavingEdit(true);
+    setEditError(null);
 
     try {
-      const res = await fetch(`/api/music/${editingTrack.id}`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
-
-      if (res.ok) {
-        const updatedTrack = await res.json();
-        setEditingTrack(null);
-        setMessage({ type: 'success', text: 'Track updated successfully.' });
-        fetchTracks();
+      if (isMultiEdit) {
+        const formData = buildMultiEditFormData();
+        if ([...formData.keys()].length === 0) {
+          setEditError('Change at least one field, or leave as <Keep Same>.');
+          return;
+        }
+        const results = await Promise.allSettled(
+          selectedTrackIds.map((trackId) => {
+            const payload = buildMultiEditFormData();
+            return fetch(`/api/music/${trackId}`, {
+              method: 'PUT',
+              headers: { Authorization: `Bearer ${token}` },
+              body: payload,
+            });
+          })
+        );
+        const failed = results.filter(
+          (r) => r.status === 'rejected' || (r.status === 'fulfilled' && !r.value.ok)
+        ).length;
+        const updated = selectedTrackIds.length - failed;
         fetchSuggestions();
-        if (updateTrackMetadata) {
-          updateTrackMetadata(updatedTrack);
+        if (failed === 0) {
+          toastSuccess(`Updated tags on ${updated} track${updated === 1 ? '' : 's'}.`);
+          // Merge applied values into selected tracks so unanimous fields don't stay as KEEP_SAME.
+          const pick = (current: string, existing: string) =>
+            current === KEEP_SAME ? existing : current;
+          const merged = selectedTracks.map((t) => ({
+            ...t,
+            title: pick(editTitle, t.title || ''),
+            artist_name: pick(editArtist, t.artist_name || ''),
+            album_title: pick(editAlbum, t.album_title || ''),
+            album_artist: pick(editAlbumArtist, t.album_artist || ''),
+            composer: pick(editComposer, t.composer || ''),
+            lyricist: pick(editLyricist, t.lyricist || ''),
+            year: editYear === KEEP_SAME ? t.year : (editYear === '' ? null : Number(editYear)),
+            track_number:
+              editTrackNumber === KEEP_SAME
+                ? t.track_number
+                : editTrackNumber === ''
+                  ? null
+                  : Number(editTrackNumber),
+            language: pick(editLanguage, t.language || ''),
+            comment: pick(editComment, t.comment || ''),
+            copyright: pick(editCopyright, t.copyright || ''),
+            lyrics: pick(editLyrics, t.lyrics || ''),
+            genres:
+              editGenres === KEEP_SAME
+                ? t.genres
+                : editGenres
+                    .split(',')
+                    .map((g) => g.trim())
+                    .filter(Boolean)
+                    .map((name) => ({ name })),
+          }));
+          populateMultiTagEditor(merged);
+          tracksList.setItems((prev) =>
+            prev.map((row) => {
+              const next = merged.find((m) => m.id === row.id);
+              return next ? { ...row, ...next } : row;
+            })
+          );
+          void tracksList.reload();
+        } else if (updated > 0) {
+          setEditError(`${updated} updated, ${failed} failed.`);
+          fetchTracks();
+        } else {
+          setEditError('Failed to update selected tracks.');
+          fetchTracks();
         }
       } else {
-        const errorData = await res.json();
-        setEditError(errorData.detail || 'Failed to update track.');
+        const trackId = selectedTrackIds[0];
+        const formData = buildSingleEditFormData();
+        const res = await fetch(`/api/music/${trackId}`, {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        });
+        if (res.ok) {
+          const updatedTrack = await res.json();
+          toastSuccess('Track tags updated.');
+          fetchTracks();
+          fetchSuggestions();
+          if (updateTrackMetadata) {
+            updateTrackMetadata(updatedTrack);
+          }
+        } else {
+          const errorData = await res.json();
+          setEditError(errorData.detail || 'Failed to update track.');
+        }
       }
-    } catch (err) {
+    } catch {
       setEditError('Connection failed.');
     } finally {
       setIsSavingEdit(false);
@@ -584,35 +1191,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
   };
 
   return (
-    <div className="space-y-8 w-full max-w-6xl">
-      {/* Title */}
-      <div className="flex justify-between items-center">
-        <div className="hidden md:block">
-          <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
-            <Music className="w-8 h-8 text-rose-400 animate-pulse" /> Manage Tracks
-          </h2>
-        </div>
-        <div className="flex items-center gap-2">
-          {selectedTrackIds.length > 0 && (
-            <button
-              onClick={handleBulkDelete}
-              disabled={isBulkDeleting}
-              className="flex items-center gap-2 px-4 py-2 bg-rose-600/15 hover:bg-rose-600/25 border border-rose-500/30 rounded-xl text-xs font-bold text-rose-400 transition disabled:opacity-50"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Delete Selected ({selectedTrackIds.length})
-            </button>
-          )}
-          <button
-            onClick={() => setIsUploadModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 rounded-xl text-xs font-bold text-white shadow-lg transition"
-          >
-            <UploadCloud className="w-3.5 h-3.5" />
-            Upload New Track
-          </button>
-        </div>
-      </div>
-
+    <div className="space-y-8 w-full max-w-[1600px]">
       {/* Studio Profile Registration Form (Studio Admin post-approval setup) */}
       {currentUser?.role === 'studio_admin' && (!currentUser.artist_profile?.bio || currentUser.artist_profile.bio === '') && (
         <form onSubmit={handleStudioRegister} className="glass-card p-6 rounded-3xl border border-cyan-500/10 space-y-4 max-w-2xl">
@@ -678,16 +1257,19 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
           isQueueUploading ? (
             <button
               type="button"
-              disabled
-              className="w-full bg-slate-900 border border-white/5 text-slate-500 font-bold py-3 rounded-xl transition text-xs font-sans cursor-not-allowed text-center"
+              onClick={handleStopUploadQueue}
+              className="w-full bg-slate-900 border border-rose-500/30 hover:bg-rose-600/15 text-rose-400 font-bold py-3 rounded-xl transition text-xs font-sans flex items-center justify-center gap-1.5"
             >
-              Uploading queue... {uploadQueue.filter(q => q.status === 'completed' || q.status === 'failed').length} / {uploadQueue.length} done
+              <Ban className="w-3.5 h-3.5" />
+              Stop Upload ({uploadQueue.filter(q => q.status === 'completed' || q.status === 'failed' || q.status === 'cancelled').length} / {uploadQueue.length} done)
             </button>
-          ) : uploadQueue.some(q => q.status === 'completed' || q.status === 'failed') ? (
+          ) : uploadQueue.some(q => q.status === 'completed' || q.status === 'failed' || q.status === 'cancelled') ? (
             <button
               type="button"
               onClick={() => {
                 setUploadQueue([]);
+                setUploadMessage(null);
+                uploadStopRequestedRef.current = false;
                 setIsUploadModalOpen(false);
               }}
               className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-xl transition text-xs shadow flex items-center justify-center gap-1.5 font-sans"
@@ -744,25 +1326,35 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                     </button>
                   </div>
 
-                  <div className="space-y-3 pr-1">
+                  <div ref={uploadQueueListRef} className="space-y-3 pr-1">
                     {uploadQueue.map((item, idx) => {
                       const isPending = item.status === 'pending';
                       const isUploading = item.status === 'uploading';
 
                       return (
-                        <div key={item.id} className="bg-slate-900/40 border border-white/5 p-4 rounded-2xl space-y-3 transition hover:border-slate-800 shadow-lg">
+                        <div
+                          key={item.id}
+                          data-upload-item-id={item.id}
+                          className={`bg-slate-900/40 border p-4 rounded-2xl space-y-3 transition shadow-lg ${
+                            isUploading
+                              ? 'border-rose-500/40'
+                              : 'border-white/5 hover:border-slate-800'
+                          }`}
+                        >
                           {/* Queue Item Header */}
                           <div className="flex justify-between items-start gap-4">
                             <div className="min-w-0">
                               <span className="text-[9px] text-slate-550 font-bold uppercase tracking-wider block">File {idx + 1}</span>
                               <span className="text-xs font-bold text-slate-200 block truncate" title={item.file.name}>{item.file.name}</span>
                               <span className="text-[9px] text-slate-500 font-semibold font-sans">{(item.file.size / (1024 * 1024)).toFixed(2)} MB</span>
-                              {item.message && (
+                              {item.message && item.status !== 'pending' && (
                                 <span className={`text-[9px] font-extrabold uppercase font-sans ml-2.5 px-1.5 py-0.5 rounded border ${
                                   item.status === 'completed'
                                     ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-450'
                                     : item.status === 'failed'
                                     ? 'bg-rose-500/10 border-rose-500/20 text-rose-455'
+                                    : item.status === 'cancelled'
+                                    ? 'bg-slate-500/10 border-slate-500/20 text-slate-400'
                                     : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
                                 }`}>
                                   {item.message}
@@ -814,11 +1406,11 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                                 <div className="w-8 h-8 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400" title="Upload Failed">
                                   <AlertTriangle className="w-4 h-4" />
                                 </div>
-                              ) : (
-                                <span className="px-2.5 py-0.5 rounded-full text-[9px] font-extrabold uppercase border bg-slate-950 border-white/5 text-slate-500">
-                                  Pending
-                                </span>
-                              )}
+                              ) : item.status === 'cancelled' ? (
+                                <div className="w-8 h-8 rounded-full bg-slate-500/10 border border-slate-500/20 flex items-center justify-center text-slate-400" title="Cancelled">
+                                  <Ban className="w-4 h-4" />
+                                </div>
+                              ) : null}
                               
                               {isPending && (
                                 <button 
@@ -831,134 +1423,6 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                               )}
                             </div>
                           </div>
-
-                          {/* Editable Form */}
-                          {isPending && (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-1">
-                              <div className="space-y-0.5">
-                                <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">Track Title (Auto-detected)</label>
-                                <input 
-                                  type="text"
-                                  value={item.title}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, title: val } : q));
-                                  }}
-                                  className="w-full bg-slate-950 border border-white/5 p-2 rounded-lg text-[11px] outline-none focus:border-rose-500 text-slate-355 font-sans"
-                                  required
-                                />
-                              </div>
-                              <div className="space-y-0.5">
-                                <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">Artist Override (optional)</label>
-                                <input 
-                                  type="text"
-                                  value={item.artist || ''}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, artist: val } : q));
-                                  }}
-                                  list="artists-suggestions"
-                                  className="w-full bg-slate-950 border border-white/5 p-2 rounded-lg text-[11px] outline-none focus:border-rose-500 text-slate-355 font-sans"
-                                  placeholder="Artist Override"
-                                />
-                              </div>
-                              <div className="space-y-0.5">
-                                <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">Album / Movie (optional)</label>
-                                <input 
-                                  type="text"
-                                  value={item.album || ''}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, album: val } : q));
-                                  }}
-                                  list="albums-suggestions"
-                                  className="w-full bg-slate-950 border border-white/5 p-2 rounded-lg text-[11px] outline-none focus:border-rose-500 text-slate-355 font-sans"
-                                  placeholder="Album / Movie"
-                                />
-                              </div>
-                              <div className="space-y-0.5">
-                                <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">Track Language (optional)</label>
-                                <input 
-                                  type="text"
-                                  value={item.language || ''}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, language: val } : q));
-                                  }}
-                                  list="languages-suggestions"
-                                  className="w-full bg-slate-950 border border-white/5 p-2 rounded-lg text-[11px] outline-none focus:border-rose-500 text-slate-355 font-sans"
-                                  placeholder="e.g. English, Malayalam"
-                                />
-                              </div>
-                              <div className="space-y-0.5">
-                                <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">Genres (optional)</label>
-                                <input 
-                                  type="text"
-                                  value={item.genres || ''}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, genres: val } : q));
-                                  }}
-                                  className="w-full bg-slate-950 border border-white/5 p-2 rounded-lg text-[11px] outline-none focus:border-rose-500 text-slate-355 font-sans"
-                                  placeholder="e.g. Rock, Jazz"
-                                />
-                              </div>
-                              <div className="space-y-0.5">
-                                <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">Composer (optional)</label>
-                                <input 
-                                  type="text"
-                                  value={item.composer || ''}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, composer: val } : q));
-                                  }}
-                                  list="composers-suggestions"
-                                  className="w-full bg-slate-950 border border-white/5 p-2 rounded-lg text-[11px] outline-none focus:border-rose-500 text-slate-355 font-sans"
-                                  placeholder="Composer"
-                                />
-                              </div>
-                              <div className="space-y-0.5">
-                                <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">Lyricist (optional)</label>
-                                <input 
-                                  type="text"
-                                  value={item.lyricist || ''}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, lyricist: val } : q));
-                                  }}
-                                  list="lyricists-suggestions"
-                                  className="w-full bg-slate-950 border border-white/5 p-2 rounded-lg text-[11px] outline-none focus:border-rose-500 text-slate-355 font-sans"
-                                  placeholder="Lyricist"
-                                />
-                              </div>
-                              <div className="space-y-0.5">
-                                <label className="text-[9px] font-bold text-slate-400 uppercase tracking-wide">Year (optional)</label>
-                                <input 
-                                  type="number"
-                                  value={item.year || ''}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    setUploadQueue(prev => prev.map(q => q.id === item.id ? { ...q, year: val } : q));
-                                  }}
-                                  className="w-full bg-slate-950 border border-white/5 p-2 rounded-lg text-[11px] outline-none focus:border-rose-500 text-slate-355 font-sans"
-                                  placeholder="Year"
-                                />
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Progress Indicator */}
-                          {isUploading && (
-                            <div className="space-y-1">
-                              <div className="flex justify-between text-[10px] text-slate-400 font-semibold font-sans">
-                                <span>Uploading audio master bytes...</span>
-                                <span>{item.progress}%</span>
-                              </div>
-                              <div className="h-1.5 bg-slate-950 border border-white/3 rounded-full overflow-hidden">
-                                <div className="h-full bg-rose-600 transition-all duration-300" style={{ width: `${item.progress}%` }} />
-                              </div>
-                            </div>
-                          )}
                         </div>
                       );
                     })}
@@ -967,19 +1431,64 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
               )}
       </AppModal>
 
-      {message && (
-        <div className={`p-4 rounded-xl text-xs flex items-center gap-2 font-semibold font-sans ${
-          message.type === 'success' 
-            ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-450' 
-            : 'bg-rose-500/10 border border-rose-500/20 text-rose-455'
-        }`}>
-          {message.text}
-        </div>
-      )}
+      <div className="flex flex-col xl:flex-row gap-6 items-start">
+        <div className="flex-1 min-w-0 space-y-4 w-full">
+          <div className="flex justify-between items-center gap-3">
+            <div className="hidden md:block">
+              <h2 className="text-3xl font-extrabold tracking-tight text-white flex items-center gap-2">
+                <Music className="w-8 h-8 text-rose-400 animate-pulse" /> Manage Tracks
+              </h2>
+            </div>
+            <div className="flex items-center gap-2 ml-auto">
+              {selectedTrackIds.length > 0 && (
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={isBulkDeleting}
+                  className="flex items-center gap-2 px-4 py-2 bg-rose-600/15 hover:bg-rose-600/25 border border-rose-500/30 rounded-xl text-xs font-bold text-rose-400 transition disabled:opacity-50"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Delete Selected ({selectedTrackIds.length})
+                </button>
+              )}
+              <button
+                onClick={() => setIsUploadModalOpen(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-500 rounded-xl text-xs font-bold text-white shadow-lg transition"
+              >
+                <UploadCloud className="w-3.5 h-3.5" />
+                Upload New Track
+              </button>
+            </div>
+          </div>
 
-      <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
+          <div className="flex flex-col sm:flex-row gap-4 items-center justify-end">
+            <ListSearchInput
+              value={searchQuery}
+              onChange={setSearchQuery}
+              placeholder={
+                isPlatformAdmin
+                  ? 'Search by title, owner, or album...'
+                  : 'Search by title, artist, or album...'
+              }
+            />
+            <div className="flex gap-2 items-center w-full sm:w-auto justify-end">
+              <span className="text-slate-400 font-bold uppercase tracking-wider text-[10px]">Filter Status:</span>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as TrackStatusFilter)}
+                className="bg-slate-950 border border-white/5 rounded-xl p-2.5 outline-none focus:border-rose-500 text-slate-200 transition text-xs min-w-[140px]"
+              >
+                <option value="all">All Tracks</option>
+                <option value="analyzing">Analyzing</option>
+                <option value="transcoding">Transcoding</option>
+                <option value="ready">Ready</option>
+                <option value="rejected">Rejected</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="hidden md:block overflow-x-auto rounded-3xl border border-white/5 bg-slate-900/10 backdrop-blur-md">
         {isLoading && tracks.length === 0 ? (
-          <p className="p-8 text-xs text-slate-500 text-center">Loading audio catalog files...</p>
+          <TableSkeleton rows={8} variant="tracks-admin" />
         ) : tracks.length === 0 ? (
           <div className="p-16 text-center space-y-3">
             <Music className="w-10 h-10 text-slate-600 mx-auto" />
@@ -999,7 +1508,8 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                   />
                 </th>
                 <th className="p-5">Track Details</th>
-                {currentUser?.role === 'admin' && <th className="p-5">Artist</th>}
+                {isPlatformAdmin && <th className="p-5">Owner</th>}
+                {isStudioAdmin && <th className="p-5">Artist</th>}
                 <th className="p-5">Acoustic Specs</th>
                 <th className="p-5">Score</th>
                 <th className="p-5">Live Status</th>
@@ -1011,7 +1521,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
               {tracks.map((t) => {
                 const status = getStatusDetails(t);
                 return (
-                  <tr key={t.id} className="hover:bg-slate-900/20 transition">
+                  <tr key={t.id} className={`hover:bg-slate-900/20 transition ${selectedTrackIds.includes(t.id) ? 'bg-rose-600/5' : ''}`}>
                     <td className="p-5">
                       <input
                         type="checkbox"
@@ -1025,7 +1535,15 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                       <div className="font-bold text-slate-200">{t.title}</div>
                       {t.album_title && <div className="text-[10px] text-slate-455 mt-0.5">Album: {t.album_title}</div>}
                     </td>
-                    {currentUser?.role === 'admin' && (
+                    {isPlatformAdmin && (
+                      <td className="p-5">
+                        <div className="font-semibold text-slate-350">{formatTrackOwnerName(t)}</div>
+                        {t.owner_email && (
+                          <div className="text-[10px] text-slate-500 mt-0.5">{t.owner_email}</div>
+                        )}
+                      </td>
+                    )}
+                    {isStudioAdmin && (
                       <td className="p-5 font-semibold text-slate-350">
                         {t.artist_name || 'Unknown Artist'}
                       </td>
@@ -1044,6 +1562,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                       {t.quality_score !== null ? (
                         <button
                           onClick={() => onViewReport?.(t)}
+                          data-track-quality-score={t.id}
                           className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition hover:underline cursor-pointer ${
                             t.quality_score >= 86 
                               ? 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20' 
@@ -1061,22 +1580,30 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                     </td>
                     <td className="p-5">
                       <div className="space-y-1">
-                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}>
+                        <span
+                          data-track-status-label={t.id}
+                          className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}
+                        >
                           {status.label}
                         </span>
-                        <div className="text-[9px] text-slate-500 leading-normal">{status.desc}</div>
+                        <div
+                          data-track-status-desc={t.id}
+                          className="text-[9px] text-slate-500 leading-normal"
+                        >
+                          {status.desc}
+                        </div>
                       </div>
                     </td>
                     <td className="p-5 text-center">
                       <button
                         onClick={() => playTrack(t)}
-                        disabled={
-                          currentUser?.role === 'studio_admin'
-                            ? !trackHasPlayableStream(t)
-                            : !t.approved || !t.hls_playlist_path
+                        disabled={!trackHasPlayableStream(t)}
+                        title={
+                          trackHasPlayableStream(t)
+                            ? 'Preview original (any status)'
+                            : 'Original file not available yet'
                         }
                         className="p-2 bg-slate-900 border border-white/5 rounded-xl text-slate-400 hover:text-rose-400 hover:border-rose-500/30 disabled:opacity-30 disabled:cursor-not-allowed transition"
-                        title="Preview Audio"
                       >
                         <Play className="w-3.5 h-3.5 fill-current" />
                       </button>
@@ -1129,11 +1656,16 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
             </tbody>
           </table>
         )}
+        <LazyListSentinel
+          hasMore={tracksList.hasMore}
+          loading={tracksList.loadingMore}
+          onLoadMore={tracksList.loadMore}
+        />
       </div>
 
       <div className="md:hidden space-y-3">
         {isLoading && tracks.length === 0 ? (
-          <p className="p-8 text-xs text-slate-500 text-center">Loading audio catalog files...</p>
+          <TrackCardSkeleton count={4} withCheckbox />
         ) : tracks.length === 0 ? (
           <div className="p-12 text-center space-y-3 rounded-2xl border border-white/5 bg-slate-900/10">
             <Music className="w-10 h-10 text-slate-600 mx-auto" />
@@ -1143,10 +1675,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
           tracks.map((t) => {
             const status = getStatusDetails(t);
             const isSelected = selectedTrackIds.includes(t.id);
-            const canPlay =
-              currentUser?.role === 'studio_admin'
-                ? trackHasPlayableStream(t)
-                : !!(t.approved && t.hls_playlist_path);
+            const canPlay = trackHasPlayableStream(t);
 
             return (
               <div
@@ -1170,7 +1699,13 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                     {t.album_title && (
                       <div className="text-[10px] text-slate-455 truncate mt-0.5">Album: {t.album_title}</div>
                     )}
-                    {currentUser?.role === 'admin' && (
+                    {isPlatformAdmin && (
+                      <div className="text-[10px] text-slate-350 truncate mt-0.5">
+                        {formatTrackOwnerName(t)}
+                        {t.owner_email ? ` · ${t.owner_email}` : ''}
+                      </div>
+                    )}
+                    {isStudioAdmin && (
                       <div className="text-[10px] text-slate-350 truncate mt-0.5">
                         {t.artist_name || 'Unknown Artist'}
                       </div>
@@ -1200,6 +1735,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                     <button
                       type="button"
                       onClick={() => onViewReport?.(t)}
+                      data-track-quality-score={t.id}
                       className={`px-2 py-0.5 rounded text-[10px] font-extrabold transition ${
                         t.quality_score >= 86
                           ? 'bg-emerald-500/10 text-emerald-400'
@@ -1214,12 +1750,15 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                   ) : (
                     <span className="text-[10px] text-slate-600">Score: —</span>
                   )}
-                  <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}>
+                  <span
+                    data-track-status-label={t.id}
+                    className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase border ${status.style}`}
+                  >
                     {status.label}
                   </span>
                 </div>
 
-                <p className="text-[9px] text-slate-500 leading-normal">{status.desc}</p>
+                <p data-track-status-desc={t.id} className="text-[9px] text-slate-500 leading-normal">{status.desc}</p>
 
                 <div className="flex items-center justify-end gap-2 pt-1 border-t border-white/5">
                   <button
@@ -1276,293 +1815,342 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
             );
           })
         )}
+        <LazyListSentinel
+          hasMore={tracksList.hasMore}
+          loading={tracksList.loadingMore}
+          onLoadMore={tracksList.loadMore}
+        />
       </div>
+        </div>
 
-      {editingTrack && (
-      <AppModal
-        open
-        onClose={() => setEditingTrack(null)}
-        maxWidth="3xl"
-        align="start"
-        showGradient={false}
-        hideHeaderSection
-        panelClassName="glass-card max-h-[90vh] flex flex-col overflow-hidden bg-gradient-to-br from-slate-950 to-slate-900"
-        bodyClassName="flex-1 flex flex-col overflow-hidden p-0 min-h-0"
-      >
-            <form onSubmit={handleEditSubmit} className="flex-1 flex flex-col overflow-hidden">
-              <div className="p-6 pb-4 border-b border-white/5 relative flex-shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setEditingTrack(null)}
-                  className="absolute top-6 right-6 p-2 text-slate-400 hover:text-white rounded-xl hover:bg-white/5 transition"
-                  title="Close"
-                >
-                  <X className="w-4.5 h-4.5" />
-                </button>
-
-                <div>
-                  <h3 className="text-xl font-extrabold text-white">Edit Track Details</h3>
-                  <p className="text-xs text-slate-400">Update track information, upload custom artwork, or edit lyrics transcription.</p>
+        <aside className="w-full xl:w-[400px] xl:sticky xl:top-4 shrink-0 rounded-3xl border border-white/5 bg-slate-900/40 max-md:bg-slate-950 max-md:backdrop-blur-none md:backdrop-blur-md overflow-hidden max-h-[calc(100vh-6rem)] flex flex-col">
+          <form onSubmit={handleEditSubmit} className="flex-1 flex flex-col min-h-0">
+            {!hasEditorTarget ? (
+              <div className="flex-1 flex items-center justify-center p-8 text-center">
+                <div className="space-y-2">
+                  <Music className="w-8 h-8 text-slate-700 mx-auto" />
+                  <p className="text-xs text-slate-500 font-sans">
+                    Check one or more tracks to edit tags here.
+                  </p>
                 </div>
               </div>
-
-              <div className="absolute -top-24 -right-24 w-48 h-48 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
-
-              <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                {editError && (
-                  <div className="p-3 bg-rose-500/10 border border-rose-500/25 text-rose-455 rounded-xl text-[11px] font-semibold text-center">
-                    {editError}
-                  </div>
-                )}
-                
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
-                  {/* Left Column: Form Inputs */}
-                  <div className="space-y-4 pr-1">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-1 col-span-2">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Track Title</label>
-                        <input 
-                          type="text"
-                          value={editTitle}
-                          onChange={(e) => setEditTitle(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 p-3 rounded-xl text-xs outline-none focus:border-rose-500 text-slate-200"
-                          required
-                        />
-                      </div>
-                      
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Artist</label>
-                        <input 
-                          type="text"
-                          value={editArtist}
-                          onChange={(e) => setEditArtist(e.target.value)}
-                          list="artists-suggestions"
-                          className="w-full bg-slate-950 border border-white/5 p-3 rounded-xl text-xs outline-none focus:border-rose-500 text-slate-200"
-                          required
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Album / Movie</label>
-                        <input 
-                          type="text"
-                          value={editAlbum}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setEditAlbum(val);
-                            if (suggestions.albums[val]) {
-                              setEditCoverPreview(suggestions.albums[val]);
-                              setEditCoverFile(null);
-                            }
-                          }}
-                          list="albums-suggestions"
-                          className="w-full bg-slate-950 border border-white/5 p-3 rounded-xl text-xs outline-none focus:border-rose-500 text-slate-200"
-                          placeholder="e.g. Singles Collection"
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Composer</label>
-                        <input 
-                          type="text"
-                          value={editComposer}
-                          onChange={(e) => setEditComposer(e.target.value)}
-                          list="composers-suggestions"
-                          className="w-full bg-slate-950 border border-white/5 p-3 rounded-xl text-xs outline-none focus:border-rose-500 text-slate-200"
-                          placeholder="Composer name"
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Lyricist</label>
-                        <input 
-                          type="text"
-                          value={editLyricist}
-                          onChange={(e) => setEditLyricist(e.target.value)}
-                          list="lyricists-suggestions"
-                          className="w-full bg-slate-950 border border-white/5 p-3 rounded-xl text-xs outline-none focus:border-rose-500 text-slate-200"
-                          placeholder="Lyricist name"
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Release Year</label>
-                        <input 
-                          type="number"
-                          value={editYear}
-                          onChange={(e) => setEditYear(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 p-3 rounded-xl text-xs outline-none focus:border-rose-500 text-slate-200"
-                          placeholder="YYYY"
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Track Language</label>
-                        <input 
-                          type="text"
-                          value={editLanguage}
-                          onChange={(e) => setEditLanguage(e.target.value)}
-                          list="languages-suggestions"
-                          className="w-full bg-slate-950 border border-white/5 p-3 rounded-xl text-xs outline-none focus:border-rose-500 text-slate-200"
-                          placeholder="e.g. English, Malayalam"
-                        />
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Genres (comma separated)</label>
-                        <input 
-                          type="text"
-                          value={editGenres}
-                          onChange={(e) => setEditGenres(e.target.value)}
-                          className="w-full bg-slate-950 border border-white/5 p-3 rounded-xl text-xs outline-none focus:border-rose-500 text-slate-200"
-                          placeholder="e.g. Ambient, Downtempo"
-                        />
-                      </div>
+            ) : (
+              <>
+                <div className="flex-1 overflow-y-auto p-5 space-y-4 min-h-0">
+                  {editError && (
+                    <div className="p-3 bg-rose-500/10 border border-rose-500/25 text-rose-455 rounded-xl text-[11px] font-semibold text-center">
+                      {editError}
                     </div>
+                  )}
 
+                  <BulkTagField
+                    label="Track Title"
+                    value={editTitle}
+                    onChange={setEditTitle}
+                    options={isMultiEdit ? multiOptions.title : [editTitle]}
+                    required={isSingleEdit}
+                  />
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <BulkTagField
+                      label="Artist"
+                      value={editArtist}
+                      onChange={setEditArtist}
+                      options={isMultiEdit ? multiOptions.artist : [editArtist]}
+                      required={isSingleEdit}
+                    />
+                    <BulkTagField
+                      label="Album / Movie"
+                      value={editAlbum}
+                      onChange={(val) => {
+                        setEditAlbum(val);
+                        if (!isMultiEdit && val !== KEEP_SAME && suggestions.albums[val]) {
+                          setEditCoverPreview(suggestions.albums[val]);
+                          setEditCoverFile(null);
+                        }
+                      }}
+                      options={isMultiEdit ? multiOptions.album : [editAlbum]}
+                      placeholder="e.g. Singles Collection"
+                    />
+                    <BulkTagField
+                      label="Album Artist"
+                      value={editAlbumArtist}
+                      onChange={setEditAlbumArtist}
+                      options={isMultiEdit ? multiOptions.albumArtist : [editAlbumArtist]}
+                      placeholder="Album artist"
+                    />
+                    <BulkTagField
+                      label="Composer"
+                      value={editComposer}
+                      onChange={setEditComposer}
+                      options={isMultiEdit ? multiOptions.composer : [editComposer]}
+                      placeholder="Composer"
+                    />
+                    <BulkTagField
+                      label="Year"
+                      value={editYear}
+                      onChange={setEditYear}
+                      options={isMultiEdit ? multiOptions.year : [editYear]}
+                      type="number"
+                      placeholder="YYYY"
+                    />
+                    <BulkTagField
+                      label="Track Number"
+                      value={editTrackNumber}
+                      onChange={setEditTrackNumber}
+                      options={isMultiEdit ? multiOptions.trackNumber : [editTrackNumber]}
+                      type="number"
+                      placeholder="e.g. 3"
+                      min={1}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <BulkTagField
+                      label="Language"
+                      value={editLanguage}
+                      onChange={setEditLanguage}
+                      options={isMultiEdit ? multiOptions.language : [editLanguage]}
+                      list="languages-suggestions"
+                      placeholder="e.g. Malayalam"
+                    />
+                    <BulkTagField
+                      label="Genres"
+                      value={editGenres}
+                      onChange={setEditGenres}
+                      options={isMultiEdit ? multiOptions.genres : [editGenres]}
+                      placeholder="Ambient, Downtempo"
+                    />
+                  </div>
+
+                  <div className="space-y-3">
+                    <BulkTagField
+                      label="Lyricist"
+                      value={editLyricist}
+                      onChange={setEditLyricist}
+                      options={isMultiEdit ? multiOptions.lyricist : [editLyricist]}
+                      placeholder="Lyricist"
+                    />
                     <div className="space-y-1">
-                      <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2">
                         <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Lyrics</label>
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={handleTranscribeAI}
-                            disabled={isTranscribing}
-                            className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 disabled:bg-rose-600/30 text-[10px] text-white font-bold rounded-lg transition"
-                          >
-                            {isTranscribing ? 'Transcribing...' : 'AI Transcribe'}
-                          </button>
-                        </div>
                       </div>
-                      <textarea 
+                      <BulkTagField
+                        label="Lyrics"
+                        hideLabel
                         value={editLyrics}
-                        onChange={(e) => setEditLyrics(e.target.value)}
+                        onChange={setEditLyrics}
+                        options={isMultiEdit ? multiOptions.lyrics : [editLyrics === KEEP_SAME ? '' : editLyrics]}
+                        multiline
                         rows={4}
-                        className="w-full bg-slate-950 border border-white/5 p-3 rounded-xl text-xs outline-none focus:border-rose-500 text-slate-200 font-sans leading-relaxed"
-                        placeholder="Write or paste lyrics here..."
+                        placeholder="Write or paste lyrics..."
+                        onExpand={openLyricsModal}
                       />
                     </div>
                   </div>
 
-                  {/* Right Column: Cover Artwork & Read-only Specs */}
-                  <div className="space-y-5">
-                    <div className="space-y-2">
-                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Cover Photo</label>
-                      <div className="flex gap-4 items-center bg-slate-950/40 p-3 border border-white/5 rounded-2xl">
-                        <div className="w-16 h-16 bg-slate-950 border border-white/5 rounded-2xl overflow-hidden shadow-inner flex-shrink-0 flex items-center justify-center">
-                          {editCoverPreview ? (
-                            <img src={editCoverPreview} alt="Preview" className="w-full h-full object-cover" />
-                          ) : (
-                            <Music className="w-6 h-6 text-slate-700" />
+                  <div className="space-y-3">
+                    <BulkTagField
+                      label="Comment"
+                      value={editComment}
+                      onChange={setEditComment}
+                      options={isMultiEdit ? multiOptions.comment : [editComment]}
+                      placeholder="File tag comment"
+                    />
+                    <BulkTagField
+                      label="Copyright"
+                      value={editCopyright}
+                      onChange={setEditCopyright}
+                      options={isMultiEdit ? multiOptions.copyright : [editCopyright]}
+                      placeholder="Copyright notice"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Cover Art</label>
+                    <div className="group relative w-full aspect-[4/3] rounded-2xl bg-slate-950 border border-white/5 overflow-hidden shadow-md">
+                      {editCoverPreview ? (
+                        <img src={editCoverPreview} alt="Cover preview" className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center">
+                          <Music className="w-10 h-10 text-slate-700" />
+                          {isMultiEdit && multiOptions.cover.length > 1 && !editCoverFile && (
+                            <span className="absolute bottom-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                              &lt;Keep Same&gt;
+                            </span>
                           )}
                         </div>
-                        <div className="flex-1 space-y-1">
-                          <input 
-                            type="file"
-                            accept=".jpg,.jpeg,.png,.webp"
-                            onChange={(e) => {
-                              const file = e.target.files?.[0];
-                              if (file) {
-                                setEditCoverFile(file);
-                                setEditCoverPreview(URL.createObjectURL(file));
-                              }
-                            }}
-                            className="text-xs text-slate-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-[10px] file:font-bold file:bg-white/5 file:text-slate-300 hover:file:bg-white/10 file:cursor-pointer cursor-pointer"
-                          />
-                          <p className="text-[9px] text-slate-500">Supports JPG, PNG, or WEBP.</p>
-                        </div>
-                      </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => editCoverInputRef.current?.click()}
+                        aria-label={editCoverPreview ? 'Change cover art' : 'Add cover art'}
+                        className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/55 text-white opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-60 transition-opacity cursor-pointer"
+                      >
+                        <Camera className="w-7 h-7" />
+                        <span className="text-[10px] font-bold uppercase tracking-wider">
+                          {editCoverPreview || editCoverFile ? 'Change' : 'Add'}
+                        </span>
+                      </button>
+                      <input
+                        ref={editCoverInputRef}
+                        type="file"
+                        accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            setEditCoverFile(file);
+                            setEditCoverPreview(URL.createObjectURL(file));
+                          }
+                          if (editCoverInputRef.current) editCoverInputRef.current.value = '';
+                        }}
+                      />
                     </div>
-
-                    {/* Technical metadata card */}
-                    <div className="p-4 bg-slate-950/50 border border-white/5 rounded-2xl space-y-3">
-                      <h4 className="text-[10px] font-black text-rose-400 uppercase tracking-widest font-sans flex items-center gap-1.5 border-b border-white/5 pb-1.5">
-                        <ShieldCheck className="w-3.5 h-3.5" />
-                        Acoustic Check Metadata
-                      </h4>
-                      <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 text-[11px] font-sans">
-                        <div className="flex justify-between border-b border-white/5 pb-1">
-                          <span className="text-slate-500">File Format:</span>
-                          <span className="font-bold text-slate-300">{editingTrack.file_format || 'N/A'}</span>
-                        </div>
-                        <div className="flex justify-between border-b border-white/5 pb-1">
-                          <span className="text-slate-500">Channels:</span>
-                          <span className="font-bold text-slate-300">{editingTrack.channels ? (editingTrack.channels === 2 ? 'Stereo' : 'Mono') : 'Stereo'}</span>
-                        </div>
-                        <div className="flex justify-between border-b border-white/5 pb-1">
-                          <span className="text-slate-500">Sample Rate:</span>
-                          <span className="font-bold text-slate-300">{editingTrack.sample_rate ? `${editingTrack.sample_rate.toLocaleString()} Hz` : 'N/A'}</span>
-                        </div>
-                        <div className="flex justify-between border-b border-white/5 pb-1">
-                          <span className="text-slate-500">Bit Depth:</span>
-                          <span className="font-bold text-slate-300">{editingTrack.bit_depth ? `${editingTrack.bit_depth}-bit` : 'N/A'}</span>
-                        </div>
-                        <div className="flex justify-between border-b border-white/5 pb-1">
-                          <span className="text-slate-500">Bitrate:</span>
-                          <span className="font-bold text-slate-300">{editingTrack.bitrate ? `${(editingTrack.bitrate / 1000).toFixed(0)} kbps` : 'N/A'}</span>
-                        </div>
-                        <div className="flex justify-between border-b border-white/5 pb-1">
-                          <span className="text-slate-500">Duration:</span>
-                          <span className="font-bold text-slate-300">{editingTrack.duration ? `${Math.floor(editingTrack.duration / 60)}:${String(Math.floor(editingTrack.duration % 60)).padStart(2, '0')}` : '0:00'}</span>
-                        </div>
-                        <div className="flex justify-between col-span-2">
-                          <span className="text-slate-500">Quality Score:</span>
-                          <span className={`font-black ${
-                            editingTrack.quality_score && editingTrack.quality_score >= 86 ? 'text-emerald-400' :
-                            editingTrack.quality_score && editingTrack.quality_score >= 71 ? 'text-cyan-400' : 'text-rose-455'
-                          }`}>
-                            {editingTrack.quality_score !== null ? `${editingTrack.quality_score}% (${editingTrack.quality_level || 'N/A'})` : 'N/A'}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
+                    {isMultiEdit && (
+                      <p className="text-[10px] text-slate-500 font-sans">
+                        Upload a new cover to apply it to all selected tracks. Leave unchanged to keep each track’s current cover.
+                      </p>
+                    )}
                   </div>
+
+                  {isSingleEdit && editingTrack && (
+                    <div className="p-3 bg-slate-950/50 border border-white/5 rounded-2xl space-y-2">
+                      <h4 className="text-[10px] font-black text-rose-400 uppercase tracking-widest font-sans">
+                        Acoustic Specs
+                      </h4>
+                      <div className="grid grid-cols-2 gap-2 text-[10px] font-sans text-slate-400">
+                        <span>Format: <strong className="text-slate-300">{editingTrack.file_format || 'N/A'}</strong></span>
+                        <span>Sample: <strong className="text-slate-300">{editingTrack.sample_rate ? `${editingTrack.sample_rate} Hz` : 'N/A'}</strong></span>
+                        <span>Depth: <strong className="text-slate-300">{editingTrack.bit_depth ? `${editingTrack.bit_depth}-bit` : 'N/A'}</strong></span>
+                        <span>Score: <strong className="text-slate-300">{editingTrack.quality_score != null ? `${editingTrack.quality_score}%` : 'N/A'}</strong></span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-4 border-t border-white/5 bg-slate-950/30 flex gap-2 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTrackIds([])}
+                    disabled={isSavingEdit}
+                    className="flex-1 px-3 py-2.5 bg-slate-900 border border-white/5 hover:border-slate-800 rounded-xl text-xs font-bold text-slate-300 transition"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSavingEdit}
+                    className="flex-[1.4] px-3 py-2.5 bg-rose-600 hover:bg-rose-500 rounded-xl text-xs font-bold text-white transition shadow-md shadow-rose-600/20"
+                  >
+                    {isSavingEdit
+                      ? 'Saving...'
+                      : isMultiEdit
+                        ? `Apply to ${selectedTrackIds.length}`
+                        : 'Save Tags'}
+                  </button>
+                </div>
+              </>
+            )}
+          </form>
+        </aside>
+      </div>
+
+      <AppModal
+        open={isLyricsModalOpen}
+        onClose={() => setIsLyricsModalOpen(false)}
+        maxWidth="3xl"
+        align="start"
+        showGradient={false}
+        panelClassName="bg-slate-900 max-h-[90vh] flex flex-col overflow-hidden"
+        bodyClassName="flex-1 overflow-hidden p-0 min-h-0 flex flex-col"
+        header={(
+          <div className="pr-8">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <Edit3 className="w-5 h-5 text-rose-400" />
+              Edit Lyrics
+            </h3>
+            {editingTrack?.title && (
+              <p className="text-xs text-slate-400 mt-0.5 font-sans truncate">{editingTrack.title}</p>
+            )}
+          </div>
+        )}
+        footer={(
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setIsLyricsModalOpen(false)}
+              className="px-4 py-2.5 bg-slate-900 border border-white/5 hover:border-slate-800 rounded-xl text-xs font-bold text-slate-300 transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={applyLyricsDraft}
+              className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 rounded-xl text-xs font-bold text-white transition"
+            >
+              Done
+            </button>
+          </div>
+        )}
+      >
+        {lyricsExtractionEnabled && isSingleEdit && editingTrack && (
+          <div className="p-4 border-t border-white/5 bg-slate-900/70 space-y-2">
+            <div className="flex items-end justify-end gap-2">
+              <select
+                aria-label="Lyrics format"
+                value={lyricsScriptMode}
+                onChange={(e) => setLyricsScriptMode(e.target.value as LyricsScriptMode)}
+                disabled={isGeneratingLyrics}
+                className="w-36 bg-slate-950 border border-white/10 px-2 py-1 rounded-lg text-[10px] font-semibold text-slate-200 outline-none focus:border-violet-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <option value="native">Native language</option>
+                <option value="latin">A–Z (Romanized)</option>
+              </select>
+              <button
+                type="button"
+                onClick={handleGenerateLyrics}
+                disabled={isGeneratingLyrics || isSavingEdit}
+                className="inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-violet-600/20 text-violet-300 border border-violet-500/30 hover:bg-violet-600/30 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
+                <Sparkles className="w-3 h-3" />
+                {isGeneratingLyrics
+                  ? 'Generating...'
+                  : lyricsDraft.trim()
+                    ? 'Generate timestamps'
+                    : 'Generate lyrics'}
+              </button>
+            </div>
+            {lyricsExtractionProgress && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[10px] text-violet-300/90 font-sans leading-snug">
+                    {lyricsExtractionProgress.message}
+                  </p>
+                  <span className="text-[10px] font-bold text-violet-200 tabular-nums shrink-0">
+                    {lyricsExtractionProgress.progress}%
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-slate-800 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-violet-600 to-fuchsia-500 transition-all duration-500 ease-out"
+                    style={{ width: `${lyricsExtractionProgress.progress}%` }}
+                  />
                 </div>
               </div>
-
-              {/* Form Buttons Footer */}
-              <div className="p-6 pt-4 border-t border-white/5 bg-slate-950/20 flex justify-end gap-2.5 flex-shrink-0">
-                <button 
-                  type="button"
-                  onClick={() => setEditingTrack(null)}
-                  disabled={isSavingEdit}
-                  className="px-4 py-2.5 bg-slate-900 border border-white/5 hover:border-slate-800 rounded-xl text-xs font-bold text-slate-300 transition"
-                >
-                  Cancel
-                </button>
-                <button 
-                  type="submit"
-                  disabled={isSavingEdit}
-                  className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 rounded-xl text-xs font-bold text-white transition flex items-center gap-1 shadow-md shadow-rose-600/20"
-                >
-                  {isSavingEdit ? 'Saving...' : 'Save Changes'}
-                </button>
-              </div>
-            </form>
+            )}
+          </div>
+        )}
+        <textarea
+          value={lyricsDraft}
+          onChange={(e) => setLyricsDraft(e.target.value)}
+          autoFocus
+          className="flex-1 w-full min-h-[55vh] bg-slate-950 border-0 border-t border-white/5 p-5 text-sm outline-none focus:ring-0 text-slate-200 font-sans leading-relaxed resize-none"
+          placeholder="Write or paste lyrics here..."
+        />
       </AppModal>
-      )}
 
       {/* Autocomplete Suggestions Datalists */}
-      <datalist id="artists-suggestions">
-        {suggestions.artists.map(name => (
-          <option key={name} value={name} />
-        ))}
-      </datalist>
-      <datalist id="albums-suggestions">
-        {Object.keys(suggestions.albums).map(title => (
-          <option key={title} value={title} />
-        ))}
-      </datalist>
-      <datalist id="composers-suggestions">
-        {suggestions.composers.map(name => (
-          <option key={name} value={name} />
-        ))}
-      </datalist>
-      <datalist id="lyricists-suggestions">
-        {suggestions.lyricists.map(name => (
-          <option key={name} value={name} />
-        ))}
-      </datalist>
       <datalist id="languages-suggestions">
         {suggestions.languages.map(lang => (
           <option key={lang} value={lang} />

@@ -6,12 +6,15 @@ from fastapi import Request, APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session, joinedload
-from typing import List, Optional, Tuple
+from sqlalchemy import or_
+from typing import List, Literal, Optional, Tuple
 from jose import jwt, JWTError
+from pydantic import BaseModel
 
 from app.db.session import get_db, SessionLocal
-from app.models import Track, Artist, Album, Genre, AudioAnalysisReport, ListeningHistory, StreamingLog
-from app.schemas import TrackResponse, AudioAnalysisReportResponse, QualityReportDetailResponse, ScoreBreakdownItem, QualityScoreTier
+from app.models import Track, Artist, Album, Genre, AudioAnalysisReport, ListeningHistory, StreamingLog, TrackComment, User
+from app.schemas import TrackResponse, AudioAnalysisReportResponse, QualityReportDetailResponse, ScoreBreakdownItem, QualityScoreTier, TrackCommentCreate, TrackCommentResponse, TrackEngagementResponse, PaginatedCommentListResponse, ListeningHistoryEntryResponse, PaginatedTrackListResponse
+from app.services.engagement import engagement_counts_for_tracks, load_paginated_comments_for_track
 from app.api.auth import get_current_user, get_current_studio_admin, get_current_admin, get_optional_current_user
 from app.services.storage import (
     generate_presigned_url,
@@ -23,14 +26,13 @@ from app.services.storage import (
     open_object_stream,
 )
 from app.services.audio import build_score_breakdown, QUALITY_SCORE_TIERS, calculate_quality_score
-from app.tasks.tasks import analyze_audio_task
+from app.tasks.tasks import analyze_audio_task, extract_lyrics_task
 from app.core.premium import user_has_premium
 from app.core.config import settings
 from app.core.security import ALGORITHM, create_stream_ticket, validate_stream_ticket
 from app.core.upload_validation import validate_audio_upload, validate_cover_upload
-from app.core.ws_auth import extract_ws_token, resolve_ws_user
+from app.core.ws_auth import accept_authenticated_websocket, extract_ws_token, resolve_ws_user
 from app.models import User
-
 router = APIRouter(prefix="/music", tags=["music"])
 stream_auth = HTTPBearer(auto_error=False)
 
@@ -41,6 +43,38 @@ def normalize_optional_string(val: Optional[str]) -> Optional[str]:
     if stripped == "" or stripped.lower() in ("null", "none"):
         return None
     return stripped
+
+
+def attach_genres_to_track(db: Session, track: Track, genre_names: list[str]) -> None:
+    if not genre_names:
+        return
+    for genre_name in genre_names:
+        g_model = db.query(Genre).filter(Genre.name == genre_name).first()
+        if not g_model:
+            g_model = Genre(name=genre_name)
+            db.add(g_model)
+            db.commit()
+            db.refresh(g_model)
+        track.genres.append(g_model)
+    db.commit()
+
+
+def _metadata_response_from_extract(meta: dict, filename: str) -> dict:
+    return {
+        "title": meta.get("title") or os.path.splitext(filename)[0],
+        "artist": meta.get("artist") or "",
+        "album": meta.get("album") or "",
+        "composer": meta.get("composer") or "",
+        "lyricist": meta.get("lyricist") or "",
+        "year": meta.get("year") or "",
+        "lyrics": meta.get("lyrics") or "",
+        "track_number": meta.get("track_number"),
+        "genres": meta.get("genres") or [],
+        "genre": meta.get("genre") or "",
+        "comment": meta.get("comment") or "",
+        "album_artist": meta.get("album_artist") or "",
+        "copyright": meta.get("copyright") or "",
+    }
 
 def _user_can_manage_track(user: User, track: Track, db: Session) -> bool:
     if user.role == "admin":
@@ -80,6 +114,14 @@ def _radio_admin_blocked_from_music(user) -> bool:
     return real_role == "radio_admin" and user.role == "radio_admin"
 
 
+def _public_ready_track_filters():
+    """Public feeds: approved + HLS ready (streamable)."""
+    return (
+        Track.approved == True,
+        Track.hls_playlist_path.isnot(None),
+    )
+
+
 def _resolve_quality_score(
     track: Track,
     db: Session,
@@ -101,6 +143,10 @@ def _resolve_quality_score(
     spectral = {
         "cutoff_frequency": report.cutoff_frequency,
         "max_frequency": report.max_frequency or 0,
+        "is_fake_upscaled": report.is_fake_upscaled,
+        "spectral_entropy_high_band": report.spectral_entropy_high_band,
+        "authenticity_score": report.authenticity_score,
+        "true_quality_tier": report.true_quality_tier,
     }
     quality = calculate_quality_score(metadata, spectral)
     score = quality["quality_score"]
@@ -147,12 +193,16 @@ def _resolve_stream_user(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token") from exc
 
 # Helper to serialize Track into response with pre-signed URLs
-def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) -> dict:
+def serialize_track(track: Track, db: Session, viewer: Optional[User] = None, *, include_engagement: bool = False) -> dict:
     artist_name = track.artist_name_override if track.artist_name_override else (track.artist.stage_name if track.artist else "Unknown Artist")
     album_title = track.album.title if track.album else None
     
     # Pre-sign storage URLs
     hls_url = generate_presigned_url(track.hls_playlist_path) if track.hls_playlist_path else None
+    hls_normal_url = generate_presigned_url(track.hls_normal_path) if track.hls_normal_path else None
+    hls_high_url = generate_presigned_url(track.hls_high_path) if track.hls_high_path else None
+    hls_lossless_url = generate_presigned_url(track.hls_lossless_path) if track.hls_lossless_path else None
+    hls_hires_url = generate_presigned_url(track.hls_hires_path) if track.hls_hires_path else None
     mp3_url = generate_presigned_url(track.mp3_320_path) if track.mp3_320_path else None
     aac_256_url = generate_presigned_url(track.aac_256_path) if track.aac_256_path else None
     aac_128_url = generate_presigned_url(track.aac_128_path) if track.aac_128_path else None
@@ -178,10 +228,14 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
         mp3_url = None
         aac_256_url = None
         hls_url = None
+        hls_high_url = None
+        hls_lossless_url = None
+        hls_hires_url = None
+        # Free tier keeps normal HLS (+ legacy AAC 128 in track payload for migration fallback)
 
     quality_score, quality_level = _resolve_quality_score(track, db)
 
-    return {
+    payload = {
         "id": track.id,
         "title": track.title,
         "artist_id": track.artist_id,
@@ -200,62 +254,46 @@ def serialize_track(track: Track, db: Session, viewer: Optional[User] = None) ->
         "approved": track.approved,
         "original_file_path": original_url,
         "hls_playlist_path": hls_url,
+        "hls_normal_path": hls_normal_url,
+        "hls_high_path": hls_high_url,
+        "hls_lossless_path": hls_lossless_url,
+        "hls_hires_path": hls_hires_url,
         "mp3_320_path": mp3_url,
         "aac_256_path": aac_256_url,
         "aac_128_path": aac_128_url,
         "cover_art_url": cover_art_url,
         "lyrics": track.lyrics,
+        "lyrics_timed": track.lyrics_timed,
+        "lyrics_language": track.lyrics_language,
+        "lyrics_language_probability": track.lyrics_language_probability,
         "composer": track.composer,
         "lyricist": track.lyricist,
         "year": track.year,
+        "track_number": track.track_number,
+        "album_artist": track.album_artist,
+        "comment": track.comment,
+        "copyright": track.copyright_text,
         "language": track.language,
         "genres": [g.name for g in track.genres] if track.genres else [],
-        "created_at": track.created_at
+        "created_at": track.created_at,
     }
 
-def transcribe_audio(file_path: str, language: Optional[str] = None, track_title: str = "Unknown", artist_name: str = "Unknown") -> str:
-    """
-    Simulates speech recognition or calls OpenAI API if key exists.
-    Supports multi-language output. If language is not specified, AI detects it automatically.
-    """
-    import os
-    import httpx
-    
-    # Check if OPENAI_API_KEY environment variable is present
-    api_key = os.getenv("OPENAI_API_KEY")
-    if api_key:
-        try:
-            # Call OpenAI Whisper API using standard HTTP request to avoid needing `openai` SDK
-            headers = {"Authorization": f"Bearer {api_key}"}
-            url = "https://api.openai.com/v1/audio/transcriptions"
-            files = {"file": open(file_path, "rb")}
-            data = {"model": "whisper-1"}
-            if language:
-                # Map full names or codes to ISO 639-1 code if needed, otherwise pass it
-                lang_lower = language.lower()
-                if "span" in lang_lower or "esp" in lang_lower or lang_lower == "es":
-                    data["language"] = "es"
-                elif "fren" in lang_lower or "fran" in lang_lower or lang_lower == "fr":
-                    data["language"] = "fr"
-                elif "germ" in lang_lower or "deut" in lang_lower or lang_lower == "de":
-                    data["language"] = "de"
-                elif "hind" in lang_lower or lang_lower == "hi":
-                    data["language"] = "hi"
-                elif "chin" in lang_lower or "zh" in lang_lower or "mand" in lang_lower:
-                    data["language"] = "zh"
-                else:
-                    data["language"] = language
-            response = httpx.post(url, headers=headers, files=files, data=data, timeout=60.0)
-            if response.status_code == 200:
-                res_data = response.json()
-                return res_data.get("text", "")
-            else:
-                print(f"OpenAI transcription failed with status code {response.status_code}: {response.text}")
-        except Exception as ex:
-            print(f"Failed to transcribe via OpenAI Whisper API: {ex}")
-            
-    # Mock AI transcription disabled — return empty when Whisper API is unavailable
-    return ""
+    if viewer and viewer.role == "admin" and track.artist:
+        owner = track.artist.user
+        if owner is None and track.artist.user_id:
+            owner = db.query(User).filter(User.id == track.artist.user_id).first()
+        if owner:
+            payload["owner_name"] = owner.full_name or owner.email.split("@")[0]
+            payload["owner_email"] = owner.email
+
+    if include_engagement:
+        counts = engagement_counts_for_tracks(db, [track.id]).get(track.id, {})
+        payload["like_count"] = counts.get("like_count", 0)
+        payload["dislike_count"] = counts.get("dislike_count", 0)
+        payload["comment_count"] = counts.get("comment_count", 0)
+
+    return payload
+
 
 @router.post("/parse-metadata")
 async def parse_metadata(
@@ -277,33 +315,17 @@ async def parse_metadata(
         from app.services.audio import extract_metadata
         meta = extract_metadata(temp_file_path)
         
-        return {
-            "title": meta.get("title") or os.path.splitext(filename)[0],
-            "artist": meta.get("artist") or "",
-            "album": meta.get("album") or "",
-            "composer": meta.get("composer") or "",
-            "lyricist": meta.get("lyricist") or "",
-            "year": meta.get("year") or "",
-            "lyrics": meta.get("lyrics") or ""
-        }
+        return _metadata_response_from_extract(meta, filename)
     except Exception as e:
         print(f"Error parsing metadata: {e}")
-        # Fallback to filename-based title
-        return {
-            "title": os.path.splitext(filename)[0],
-            "artist": "",
-            "album": "",
-            "composer": "",
-            "lyricist": "",
-            "year": "",
-            "lyrics": ""
-        }
+        return _metadata_response_from_extract({}, filename)
     finally:
         if os.path.exists(temp_file_path):
             try:
                 os.remove(temp_file_path)
             except Exception:
                 pass
+
 
 @router.post("/upload", status_code=status.HTTP_202_ACCEPTED)
 async def upload_music(
@@ -337,9 +359,15 @@ async def upload_music(
             detail=f"Unsupported format. Allowed lossless: {allowed_exts}, restricted (accepted only for analysis): {restricted_exts}"
         )
         
-    # Get or create artist profile for current user
+    # Get or create artist profile for studio admins only (not platform admin).
     artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
     if not artist:
+        real_role = getattr(current_user, "_real_role", None) or current_user.role
+        if real_role == "admin":
+            raise HTTPException(
+                status_code=400,
+                detail="Platform admins cannot upload tracks under their own account. Use a studio admin account or assign the track to a studio.",
+            )
         artist = Artist(user_id=current_user.id, stage_name=current_user.full_name or "Unknown Artist")
         db.add(artist)
         db.commit()
@@ -362,6 +390,11 @@ async def upload_music(
     extracted_lyricist = None
     extracted_year = None
     extracted_lyrics = None
+    extracted_track_number = None
+    extracted_album_artist = None
+    extracted_comment = None
+    extracted_copyright = None
+    extracted_genres: list[str] = []
     try:
         from app.services.audio import extract_metadata
         meta = extract_metadata(temp_file_path)
@@ -373,6 +406,11 @@ async def upload_music(
         extracted_lyricist = meta.get("lyricist")
         extracted_year = meta.get("year")
         extracted_lyrics = meta.get("lyrics")
+        extracted_track_number = meta.get("track_number")
+        extracted_album_artist = meta.get("album_artist")
+        extracted_comment = meta.get("comment")
+        extracted_copyright = meta.get("copyright")
+        extracted_genres = meta.get("genres") or []
     except Exception as e:
         print(f"Error extracting metadata tags: {e}")
         
@@ -403,25 +441,19 @@ async def upload_music(
         lyricist=lyricist if lyricist else (extracted_lyricist if extracted_lyricist else None),
         year=year if year is not None else (extracted_year if extracted_year is not None else None),
         lyrics=lyrics if lyrics else (extracted_lyrics if extracted_lyrics else None),
-        language=language
+        language=language,
+        track_number=extracted_track_number,
+        album_artist=extracted_album_artist,
+        comment=extracted_comment,
+        copyright_text=extracted_copyright,
     )
     db.add(track)
     db.commit()
     db.refresh(track)
     
-    # Process genres
-    if genres:
-        genre_list = [g.strip() for g in genres.split(",") if g.strip()]
-        for genre_name in genre_list:
-            g_model = db.query(Genre).filter(Genre.name == genre_name).first()
-            if not g_model:
-                g_model = Genre(name=genre_name)
-                db.add(g_model)
-                db.commit()
-                db.refresh(g_model)
-            track.genres.append(g_model)
-        db.commit()
-        
+    genre_names = [g.strip() for g in genres.split(",") if g.strip()] if genres else extracted_genres
+    attach_genres_to_track(db, track, genre_names)
+    
     # Try to extract embedded cover image from audio track
     try:
         from app.services.audio import extract_embedded_cover
@@ -453,64 +485,6 @@ async def upload_music(
     analyze_audio_task.delay(track.id, temp_file_path)
     
     return {"message": "Track uploaded and analysis scheduled", "track_id": track.id}
-
-@router.post("/{track_id}/transcribe")
-async def transcribe_track_lyrics(
-    track_id: int,
-    language: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user = Depends(get_current_studio_admin)
-):
-    """
-    Manually trigger AI transcription for a track's audio file.
-    Supports multiple languages.
-    """
-    track = db.query(Track).filter(Track.id == track_id).first()
-    if not track:
-        raise HTTPException(status_code=404, detail="Track not found")
-        
-    # Check if the user is the owner/artist or admin
-    artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
-    if not artist or (track.artist_id != artist.id and current_user.role != "admin"):
-        raise HTTPException(status_code=403, detail="Not authorized to edit this track")
-        
-    if not track.original_file_path:
-        raise HTTPException(status_code=400, detail="Original audio file not found for this track")
-        
-    # Download file to temp path
-    from app.services.storage import s3_client, settings
-    import tempfile
-    import os
-    
-    ext = os.path.splitext(track.original_file_path)[1].lower() or ".wav"
-    fd, temp_file_path = tempfile.mkstemp(suffix=ext)
-    os.close(fd)
-    
-    try:
-        s3_client.download_file(
-            Bucket=settings.S3_BUCKET_NAME,
-            Key=track.original_file_path,
-            Filename=temp_file_path
-        )
-        
-        artist_name = track.artist_name_override if track.artist_name_override else (track.artist.stage_name if track.artist else "Unknown Artist")
-        # Fallback to configured track language if none explicitly passed in manual request
-        req_lang = language if language else track.language
-        lyrics_text = transcribe_audio(temp_file_path, language=req_lang, track_title=track.title, artist_name=artist_name)
-        
-        track.lyrics = lyrics_text
-        db.commit()
-        db.refresh(track)
-        
-        return {"message": "Transcription completed", "lyrics": lyrics_text}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
-    finally:
-        if os.path.exists(temp_file_path):
-            try:
-                os.remove(temp_file_path)
-            except Exception:
-                pass
 
 @router.get("/autocomplete-suggestions")
 def get_autocomplete_suggestions(
@@ -579,7 +553,10 @@ def list_tracks(
     query = db.query(Track)
     
     if approved_only:
-        query = query.join(Artist, Track.artist_id == Artist.id).filter(Track.approved == True, Artist.is_active == True)
+        query = query.join(Artist, Track.artist_id == Artist.id).filter(
+            *_public_ready_track_filters(),
+            Artist.is_active == True,
+        )
         
     if search:
         search_pattern = f"%{search}%"
@@ -589,8 +566,9 @@ def list_tracks(
             
         query = query.outerjoin(Album, Track.album_id == Album.id)\
                      .filter(
-                         (Track.title.ilike(search_pattern)) | 
-                         (Artist.stage_name.ilike(search_pattern)) | 
+                         (Track.title.ilike(search_pattern)) |
+                         (Track.artist_name_override.ilike(search_pattern)) |
+                         (Artist.stage_name.ilike(search_pattern)) |
                          (Album.title.ilike(search_pattern))
                      )
                      
@@ -598,9 +576,63 @@ def list_tracks(
     return [serialize_track(t, db, viewer=current_user) for t in tracks]
 
 
-@router.get("/manage", response_model=List[TrackResponse])
+from app.services.track_management import apply_manage_track_search as _apply_manage_track_search
+
+
+ManageTrackStatus = Literal["analyzing", "transcoding", "ready", "rejected"]
+
+
+class MusicCapabilitiesResponse(BaseModel):
+    lyrics_extraction_enabled: bool
+
+
+@router.get("/capabilities", response_model=MusicCapabilitiesResponse)
+def get_music_capabilities(
+    current_user=Depends(get_current_studio_admin),
+):
+    return MusicCapabilitiesResponse(
+        lyrics_extraction_enabled=settings.LYRICS_EXTRACTION_ENABLED,
+    )
+
+
+def _apply_manage_track_status(query, status_filter: Optional[ManageTrackStatus]):
+    """Filter by Live Status labels used on the manage tracks screen."""
+    if not status_filter:
+        return query
+    if status_filter == "analyzing":
+        return query.filter(Track.quality_score.is_(None))
+    if status_filter == "transcoding":
+        return query.filter(
+            Track.approved == True,
+            Track.quality_score.isnot(None),
+            Track.hls_playlist_path.is_(None),
+        )
+    if status_filter == "ready":
+        return query.filter(
+            Track.approved == True,
+            Track.hls_playlist_path.isnot(None),
+        )
+    if status_filter == "rejected":
+        return query.filter(
+            Track.approved == False,
+            Track.quality_score.isnot(None),
+        )
+    raise HTTPException(
+        status_code=400,
+        detail="Invalid status. Use analyzing, transcoding, ready, or rejected.",
+    )
+
+
+@router.get("/manage", response_model=PaginatedTrackListResponse)
 def manage_tracks(
     approved_only: bool = False,
+    search: Optional[str] = None,
+    status: Optional[ManageTrackStatus] = Query(
+        None,
+        description="Live status filter: analyzing | transcoding | ready | rejected",
+    ),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     current_user = Depends(get_current_studio_admin)
 ):
@@ -610,11 +642,14 @@ def manage_tracks(
     Studio admin sees their own tracks; use approved_only=true for the tracks list tab.
     """
     if current_user.role == "admin":
-        query = db.query(Track).options(joinedload(Track.analysis_report))
+        query = db.query(Track).options(
+            joinedload(Track.analysis_report),
+            joinedload(Track.artist).joinedload(Artist.user),
+        )
     else:
         artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
         if not artist:
-            return []
+            return PaginatedTrackListResponse(items=[], total=0, has_more=False)
         query = (
             db.query(Track)
             .options(joinedload(Track.analysis_report))
@@ -623,13 +658,110 @@ def manage_tracks(
         if approved_only:
             query = query.filter(Track.approved == True)
 
-    tracks = query.order_by(Track.created_at.desc()).all()
+    query = _apply_manage_track_search(query, search, include_owner=current_user.role == "admin")
+    query = _apply_manage_track_status(query, status)
+
+    total = query.count()
+    tracks = query.order_by(Track.created_at.desc()).offset(offset).limit(limit).all()
 
     for t in tracks:
         _resolve_quality_score(t, db, persist=True)
     db.commit()
 
-    return [serialize_track(t, db, viewer=current_user) for t in tracks]
+    include_engagement = approved_only or current_user.role == "admin"
+    items = [
+        serialize_track(t, db, viewer=current_user, include_engagement=include_engagement)
+        for t in tracks
+    ]
+    return PaginatedTrackListResponse(
+        items=items,
+        total=total,
+        has_more=offset + len(tracks) < total,
+    )
+
+
+def _serialize_comment(comment: TrackComment, db: Session, viewer: Optional[User] = None) -> dict:
+    from app.services.engagement import serialize_comment
+    return serialize_comment(comment, db, viewer)
+
+
+@router.get("/manage/{track_id}/engagement", response_model=TrackEngagementResponse)
+def get_track_engagement(
+    track_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_studio_admin),
+):
+    track = (
+        db.query(Track)
+        .options(joinedload(Track.artist))
+        .filter(Track.id == track_id)
+        .first()
+    )
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+    if not _user_can_manage_track(current_user, track, db):
+        raise HTTPException(status_code=403, detail="Not authorized to view engagement for this track")
+
+    counts = engagement_counts_for_tracks(db, [track.id]).get(track.id, {})
+    artist_name = track.artist_name_override or (track.artist.stage_name if track.artist else None)
+
+    return TrackEngagementResponse(
+        track_id=track.id,
+        title=track.title,
+        artist_name=artist_name,
+        like_count=counts.get("like_count", 0),
+        dislike_count=counts.get("dislike_count", 0),
+        comment_count=counts.get("comment_count", 0),
+    )
+
+
+@router.get("/listening-history", response_model=List[ListeningHistoryEntryResponse])
+def get_listening_history(
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    scan_limit = max((offset + limit) * 3, 50)
+    rows = (
+        db.query(ListeningHistory)
+        .options(
+            joinedload(ListeningHistory.track)
+            .joinedload(Track.artist),
+            joinedload(ListeningHistory.track)
+            .joinedload(Track.album),
+            joinedload(ListeningHistory.track)
+            .joinedload(Track.genres),
+        )
+        .filter(ListeningHistory.user_id == current_user.id)
+        .order_by(ListeningHistory.played_at.desc())
+        .limit(min(scan_limit, 300))
+        .all()
+    )
+
+    seen_track_ids: set[int] = set()
+    entries = []
+    skipped = 0
+    for row in rows:
+        if row.track_id in seen_track_ids:
+            continue
+        seen_track_ids.add(row.track_id)
+        if not row.track or not row.track.approved or not row.track.hls_playlist_path:
+            continue
+        if skipped < offset:
+            skipped += 1
+            continue
+        entries.append(
+            {
+                "id": row.id,
+                "played_at": row.played_at,
+                "track": serialize_track(row.track, db, viewer=current_user),
+            }
+        )
+        if len(entries) >= limit:
+            break
+    return entries
+
 
 @router.post("/{id}/stream/ticket")
 def issue_stream_ticket(
@@ -751,8 +883,9 @@ def get_track(
             artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
             is_owner_or_admin = bool(artist and track.artist_id == artist.id)
 
-    if not track.approved and not is_owner_or_admin:
-        raise HTTPException(status_code=404, detail="Track not found")
+    if not is_owner_or_admin:
+        if not track.approved or not track.hls_playlist_path:
+            raise HTTPException(status_code=404, detail="Track not found")
         
     if track.artist and not track.artist.is_active and (not current_user or current_user.role != "admin"):
         raise HTTPException(status_code=403, detail="Track is currently unavailable (Studio is disabled)")
@@ -784,10 +917,15 @@ def delete_track(
         delete_file(track.aac_256_path)
     if track.aac_128_path:
         delete_file(track.aac_128_path)
-    # Note: deleting the entire HLS folder structure key prefixes
-    if track.hls_playlist_path:
+    # Delete entire HLS folder (all quality tiers) when any HLS path exists
+    if (
+        track.hls_playlist_path
+        or track.hls_normal_path
+        or track.hls_high_path
+        or track.hls_lossless_path
+        or track.hls_hires_path
+    ):
         delete_prefix(f"hls/{track.id}/")
-        delete_file(track.hls_playlist_path)
         
     db.delete(track)
     db.commit()
@@ -821,6 +959,10 @@ def get_quality_report(
     spectral = {
         "cutoff_frequency": report.cutoff_frequency or 0,
         "max_frequency": report.max_frequency or 0,
+        "is_fake_upscaled": report.is_fake_upscaled,
+        "spectral_entropy_high_band": report.spectral_entropy_high_band,
+        "authenticity_score": report.authenticity_score,
+        "true_quality_tier": report.true_quality_tier,
     }
     breakdown, computed_score = build_score_breakdown(metadata, spectral)
     quality = calculate_quality_score(metadata, spectral)
@@ -835,6 +977,10 @@ def get_quality_report(
         max_frequency=report.max_frequency,
         cutoff_frequency=report.cutoff_frequency,
         high_frequency_energy=report.high_frequency_energy,
+        is_fake_upscaled=report.is_fake_upscaled,
+        spectral_entropy_high_band=report.spectral_entropy_high_band,
+        authenticity_score=report.authenticity_score,
+        true_quality_tier=report.true_quality_tier,
         spectrogram_path=spectrogram_path,
         created_at=report.created_at,
         base_score=100,
@@ -863,11 +1009,146 @@ def manually_approve_track(
     db.commit()
     db.refresh(track)
     
-    if approved and not track.hls_playlist_path:
+    if approved and (
+        not track.hls_playlist_path
+        or not track.hls_normal_path
+        or not track.hls_high_path
+        or not track.hls_lossless_path
+        or not track.hls_hires_path
+    ):
         from app.tasks.tasks import transcode_audio_task
         transcode_audio_task.delay(track.id, None)
         
-    return serialize_track(track, db)
+    return serialize_track(track, db, viewer=current_user)
+
+
+class LyricsExtractionResponse(BaseModel):
+    status: str
+    track_id: int
+    message: str
+    task_id: str
+
+
+class LyricsExtractionStatusResponse(BaseModel):
+    status: Literal["pending", "progress", "success", "error"]
+    track_id: Optional[int] = None
+    source: Optional[str] = None
+    error: Optional[str] = None
+    stage: Optional[str] = None
+    progress: Optional[int] = None
+    message: Optional[str] = None
+
+
+LyricsScriptMode = Literal["native", "latin"]
+
+
+@router.post("/{track_id}/extract-lyrics", response_model=LyricsExtractionResponse)
+def queue_lyrics_extraction(
+    track_id: int,
+    script_mode: LyricsScriptMode = Query(
+        "native",
+        description="Lyrics output script: native or latin transliteration",
+    ),
+    lyrics_text: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Manually queue hybrid lyrics extraction for a track (studio owner or admin).
+    When lyrics_text is provided, timestamps are generated for the pasted lines only.
+    """
+    from app.services.lyrics_pipeline import (
+        LyricsPipelineError,
+        validate_pipeline_config,
+        validate_sync_pipeline_config,
+    )
+
+    sync_mode = bool(lyrics_text and lyrics_text.strip())
+
+    try:
+        validate_pipeline_config(settings)
+        if sync_mode:
+            validate_sync_pipeline_config(
+                google_project_id=settings.GOOGLE_CLOUD_PROJECT_ID,
+            )
+    except LyricsPipelineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    track = db.query(Track).filter(Track.id == track_id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    is_admin = current_user.role == "admin"
+    artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+    is_owner = artist and track.artist_id == artist.id
+    if not is_admin and not is_owner:
+        raise HTTPException(status_code=403, detail="You do not have permission to extract lyrics for this track")
+
+    if not track.original_file_path:
+        raise HTTPException(status_code=400, detail="Original audio file not found for this track")
+
+    task = extract_lyrics_task.delay(
+        track_id,
+        script_mode,
+        lyrics_text=lyrics_text.strip() if sync_mode else None,
+    )
+    return LyricsExtractionResponse(
+        status="queued",
+        track_id=track_id,
+        message=(
+            "Lyrics timestamp sync queued. This may take several minutes."
+            if sync_mode
+            else "Lyrics extraction queued. This may take several minutes."
+        ),
+        task_id=task.id,
+    )
+
+
+@router.get("/extract-lyrics/status/{task_id}", response_model=LyricsExtractionStatusResponse)
+def get_lyrics_extraction_status(
+    task_id: str,
+    current_user=Depends(get_current_user),
+):
+    from celery.result import AsyncResult
+    from celery_worker import celery_app
+
+    result = AsyncResult(task_id, app=celery_app)
+    if result.state == "PROGRESS":
+        meta = result.info if isinstance(result.info, dict) else {}
+        return LyricsExtractionStatusResponse(
+            status="progress",
+            stage=meta.get("stage"),
+            progress=meta.get("progress"),
+            message=meta.get("message"),
+        )
+
+    if result.state in ("PENDING", "RECEIVED", "STARTED", "RETRY"):
+        return LyricsExtractionStatusResponse(
+            status="pending",
+            progress=0,
+            message="Queued — waiting for worker...",
+        )
+
+    if result.state == "SUCCESS":
+        payload = result.result if isinstance(result.result, dict) else {}
+        if payload.get("status") == "success":
+            return LyricsExtractionStatusResponse(
+                status="success",
+                track_id=payload.get("track_id"),
+                source=payload.get("source"),
+            )
+        return LyricsExtractionStatusResponse(
+            status="error",
+            track_id=payload.get("track_id"),
+            error=payload.get("error") or "Lyrics extraction failed.",
+        )
+
+    if result.state == "FAILURE":
+        error = str(result.result) if result.result else "Lyrics extraction failed."
+        return LyricsExtractionStatusResponse(status="error", error=error)
+
+    return LyricsExtractionStatusResponse(status="pending")
+
 
 @router.post("/{id}/play", status_code=status.HTTP_200_OK)
 def log_track_play(
@@ -883,8 +1164,18 @@ def log_track_play(
     if not track:
         raise HTTPException(status_code=404, detail="Track not found")
 
-    if not track.approved:
+    is_owner_or_admin = False
+    if current_user.role == "admin":
+        is_owner_or_admin = True
+    else:
+        artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+        is_owner_or_admin = bool(artist and track.artist_id == artist.id)
+
+    ready = bool(track.approved and track.hls_playlist_path)
+    if not ready and not is_owner_or_admin:
         raise HTTPException(status_code=403, detail="Track is not approved for playback")
+    if not ready:
+        return {"message": "Preview play (not ready for public logging)"}
         
     # 1. Log play history
     history = ListeningHistory(user_id=current_user.id, track_id=track.id)
@@ -903,6 +1194,52 @@ def log_track_play(
     return {"message": "Play logged successfully"}
 
 
+class ListenProgressRequest(BaseModel):
+    listened_seconds: float
+
+
+class ListenProgressResponse(BaseModel):
+    credited: bool
+    credit_paise: Optional[int] = None
+
+
+@router.post("/{id}/listen-progress", response_model=ListenProgressResponse)
+def report_listen_progress(
+    id: int,
+    body: ListenProgressRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    track = db.query(Track).filter(Track.id == id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    is_owner_or_admin = False
+    if current_user.role == "admin":
+        is_owner_or_admin = True
+    else:
+        artist = db.query(Artist).filter(Artist.user_id == current_user.id).first()
+        is_owner_or_admin = bool(artist and track.artist_id == artist.id)
+
+    ready = bool(track.approved and track.hls_playlist_path)
+    if not ready and not is_owner_or_admin:
+        raise HTTPException(status_code=403, detail="Track is not approved for playback")
+    if not ready:
+        return ListenProgressResponse(credited=False, credit_paise=None)
+
+    from app.services.wallet_service import process_track_listen_progress
+
+    credit = process_track_listen_progress(
+        db,
+        listener=current_user,
+        track=track,
+        listened_seconds=body.listened_seconds,
+    )
+    # Realtime wallet credit removed; qualifying listens settle daily.
+    recorded = credit is not None
+    return ListenProgressResponse(credited=False, credit_paise=0 if recorded else None)
+
+
 @router.websocket("/ws/tracks/status")
 async def websocket_tracks_status(
     websocket: WebSocket,
@@ -918,8 +1255,8 @@ async def websocket_tracks_status(
         await websocket.close(code=1008, reason="Forbidden")
         return
 
-    await websocket.accept()
-        
+    await accept_authenticated_websocket(websocket)
+
     monitored_ids = set()
     last_states = {} # track_id -> status
     
@@ -966,7 +1303,8 @@ async def websocket_tracks_status(
                             "quality_score": t.quality_score,
                             "quality_level": t.quality_level,
                             "approved": t.approved,
-                            "title": t.title
+                            "has_hls": t.hls_playlist_path is not None,
+                            "title": t.title,
                         }
                         
                         prev_status = last_states.get(t.id)
@@ -1011,7 +1349,7 @@ async def websocket_analysis(websocket: WebSocket, track_id: int, token: Optiona
     finally:
         db.close()
 
-    await websocket.accept()
+    await accept_authenticated_websocket(websocket)
 
     try:
         while True:
@@ -1074,6 +1412,10 @@ async def update_track(
     composer: Optional[str] = Form(None),
     lyricist: Optional[str] = Form(None),
     year: Optional[str] = Form(None),
+    track_number: Optional[str] = Form(None),
+    album_artist: Optional[str] = Form(None),
+    comment: Optional[str] = Form(None),
+    copyright: Optional[str] = Form(None),
     language: Optional[str] = Form(None),
     genres: Optional[str] = Form(None),
     lyrics: Optional[str] = Form(None),
@@ -1126,6 +1468,25 @@ async def update_track(
                 track.year = int(year_norm)
             except ValueError:
                 raise HTTPException(status_code=400, detail="Invalid year format. Must be an integer.")
+
+    if "track_number" in form_data:
+        track_number_norm = normalize_optional_string(track_number)
+        if track_number_norm is None:
+            track.track_number = None
+        else:
+            try:
+                track.track_number = int(track_number_norm)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid track number format. Must be an integer.")
+
+    if "album_artist" in form_data:
+        track.album_artist = normalize_optional_string(album_artist)
+
+    if "comment" in form_data:
+        track.comment = normalize_optional_string(comment)
+
+    if "copyright" in form_data:
+        track.copyright_text = normalize_optional_string(copyright)
                 
     if "language" in form_data:
         track.language = normalize_optional_string(language)
@@ -1147,14 +1508,7 @@ async def update_track(
         track.genres = []
         if genres is not None:
             genre_list = [g.strip() for g in genres.split(",") if g.strip()]
-            for genre_name in genre_list:
-                g_model = db.query(Genre).filter(Genre.name == genre_name).first()
-                if not g_model:
-                    g_model = Genre(name=genre_name)
-                    db.add(g_model)
-                    db.commit()
-                    db.refresh(g_model)
-                track.genres.append(g_model)
+            attach_genres_to_track(db, track, genre_list)
             
     if cover_image is not None and cover_image.filename:
         ext = await validate_cover_upload(cover_image)
@@ -1171,4 +1525,84 @@ async def update_track(
         
     db.commit()
     db.refresh(track)
-    return serialize_track(track, db)
+    return serialize_track(track, db, viewer=current_user)
+
+
+@router.get("/{track_id}/comments", response_model=PaginatedCommentListResponse)
+def list_track_comments(
+    track_id: int,
+    limit: int = Query(10, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    parent_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_current_user),
+):
+    track = db.query(Track).filter(Track.id == track_id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    if parent_id is not None:
+        parent = (
+            db.query(TrackComment)
+            .filter(TrackComment.id == parent_id, TrackComment.track_id == track_id)
+            .first()
+        )
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent comment not found")
+
+    items, total, has_more = load_paginated_comments_for_track(
+        db,
+        track_id,
+        current_user,
+        limit=limit,
+        offset=offset,
+        parent_id=parent_id,
+    )
+    return PaginatedCommentListResponse(items=items, total=total, has_more=has_more)
+
+
+@router.post("/{track_id}/comments", response_model=TrackCommentResponse, status_code=status.HTTP_201_CREATED)
+def create_track_comment(
+    track_id: int,
+    comment_in: TrackCommentCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    track = db.query(Track).filter(Track.id == track_id).first()
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+    if not track.approved:
+        raise HTTPException(status_code=403, detail="Comments are only available on approved tracks")
+    body = comment_in.body.strip()
+    if not body:
+        raise HTTPException(status_code=400, detail="Comment cannot be empty")
+    if len(body) > 2000:
+        raise HTTPException(status_code=400, detail="Comment is too long (max 2000 characters)")
+
+    parent_id = comment_in.parent_id
+    if parent_id is not None:
+        parent = (
+            db.query(TrackComment)
+            .filter(TrackComment.id == parent_id, TrackComment.track_id == track_id)
+            .first()
+        )
+        if not parent:
+            raise HTTPException(status_code=400, detail="Parent comment not found on this track")
+        if parent.parent_id is not None:
+            raise HTTPException(status_code=400, detail="Replies can only be made to top-level comments")
+
+    comment = TrackComment(
+        track_id=track_id,
+        user_id=current_user.id,
+        body=body,
+        parent_id=parent_id,
+    )
+    db.add(comment)
+    db.commit()
+    db.refresh(comment)
+    comment.user = current_user
+    from app.services.engagement import serialize_comment
+    reply_count = 0
+    if parent_id is None:
+        reply_count = 0
+    return serialize_comment(comment, db, current_user, reply_count=reply_count)
