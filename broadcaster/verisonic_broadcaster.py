@@ -67,6 +67,26 @@ if sys.platform == "darwin":
 else:
     HAS_MACOS_MIC_API = False
 
+
+def open_platform_audio_privacy_settings() -> None:
+    """Open OS audio input / privacy settings (best-effort per platform)."""
+    if sys.platform == "darwin" and HAS_MACOS_MIC_API:
+        open_microphone_privacy_settings()
+        return
+    if sys.platform == "win32":
+        try:
+            from installer.windows.audio_permission import open_microphone_privacy_settings as open_settings
+            open_settings()
+        except ImportError:
+            pass
+        return
+    if sys.platform == "linux":
+        try:
+            from installer.linux.audio_permission import open_microphone_privacy_settings as open_settings
+            open_settings()
+        except ImportError:
+            pass
+
 # Define fixed server stream URL (with env override)
 DEFAULT_SERVER_URL = os.environ.get("VERISONIC_SERVER_URL", "ws://54.66.243.141:3000/api/radio/stream/ws")
 
@@ -424,6 +444,7 @@ class PyQtBroadcasterApp(QMainWindow):
         # System Tray State
         self.quit_from_tray = False
         self._mac_audio_probe_done = False
+        self._audio_guidance_shown = False
         self._audio_io_lock = threading.Lock()
         
         # Session parameters and settings
@@ -504,6 +525,38 @@ class PyQtBroadcasterApp(QMainWindow):
         if sys.platform == "darwin" and not self._mac_audio_probe_done:
             self._mac_audio_probe_done = True
             QTimer.singleShot(800, self.request_macos_audio_access)
+        elif sys.platform in ("win32", "linux") and not self._audio_guidance_shown:
+            self._audio_guidance_shown = True
+            QTimer.singleShot(800, self._prompt_audio_input_guidance)
+
+    def _prompt_audio_input_guidance(self):
+        """First-run guidance for Windows/Linux (no macOS TCC API)."""
+        if sys.platform == "win32":
+            body = (
+                "VeriSonic Broadcaster captures live audio from the input you choose "
+                "(microphone, line-in, USB interface, or loopback).\n\n"
+                "Allow desktop apps under Settings → Privacy & security → Microphone, "
+                "then verify your capture device under Settings → System → Sound → Input."
+            )
+        elif sys.platform == "linux":
+            body = (
+                "VeriSonic Broadcaster captures live audio from the input you choose "
+                "(microphone, line-in, USB interface, or loopback).\n\n"
+                "Ensure your user is in the audio group (sudo usermod -aG audio $USER, "
+                "then log out and back in). Allow capture when PipeWire/PulseAudio prompts."
+            )
+        else:
+            return
+
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Information)
+        msg.setWindowTitle("Audio Input Permissions")
+        msg.setText(body)
+        settings_btn = msg.addButton("Open Audio Settings", QMessageBox.ActionRole)
+        msg.addButton(QMessageBox.Ok)
+        msg.exec_()
+        if msg.clickedButton() == settings_btn:
+            open_platform_audio_privacy_settings()
 
     def request_macos_audio_access(self):
         """Request microphone permission (macOS)."""
@@ -570,17 +623,33 @@ class PyQtBroadcasterApp(QMainWindow):
         msg = QMessageBox(self)
         msg.setIcon(QMessageBox.Warning)
         msg.setWindowTitle("Microphone Access Required")
-        msg.setText(
-            "VeriSonic Broadcaster needs access to your selected audio input "
-            "(microphone, line-in, USB interface, or loopback).\n\n"
-            "Open System Settings → Privacy & Security → Microphone, "
-            "enable VeriSonic Broadcaster, then restart the app."
-        )
-        settings_btn = msg.addButton("Open System Settings", QMessageBox.ActionRole)
+        if sys.platform == "win32":
+            text = (
+                "VeriSonic Broadcaster needs access to your selected audio input "
+                "(microphone, line-in, USB interface, or loopback).\n\n"
+                "Open Settings → Privacy & security → Microphone and allow desktop apps, "
+                "then check Settings → System → Sound → Input."
+            )
+        elif sys.platform == "linux":
+            text = (
+                "VeriSonic Broadcaster needs access to your selected audio input "
+                "(microphone, line-in, USB interface, or loopback).\n\n"
+                "Add your user to the audio group (sudo usermod -aG audio $USER, then re-login) "
+                "and allow capture when PipeWire/PulseAudio prompts."
+            )
+        else:
+            text = (
+                "VeriSonic Broadcaster needs access to your selected audio input "
+                "(microphone, line-in, USB interface, or loopback).\n\n"
+                "Open System Settings → Privacy & Security → Microphone, "
+                "enable VeriSonic Broadcaster, then restart the app."
+            )
+        msg.setText(text)
+        settings_btn = msg.addButton("Open Audio Settings", QMessageBox.ActionRole)
         msg.addButton(QMessageBox.Ok)
         msg.exec_()
-        if msg.clickedButton() == settings_btn and HAS_MACOS_MIC_API:
-            open_microphone_privacy_settings()
+        if msg.clickedButton() == settings_btn:
+            open_platform_audio_privacy_settings()
 
     @staticmethod
     def _is_loopback_device_name(name):
@@ -1928,7 +1997,7 @@ if __name__ == "__main__":
             msg.addButton("Continue Anyway", QMessageBox.RejectRole)
             msg.exec_()
             if msg.clickedButton() == settings_btn:
-                open_microphone_privacy_settings()
+                open_platform_audio_privacy_settings()
 
     window = PyQtBroadcasterApp()
 

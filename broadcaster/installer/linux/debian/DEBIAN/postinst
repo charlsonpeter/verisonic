@@ -13,6 +13,9 @@ case "$1" in
     echo "Grant audio input (capture/record) access for microphones, line-in, USB interfaces,"
     echo "and loopback devices. See: $PERMISSIONS_DOC"
     echo ""
+    echo "Login auto-start is installed but disabled by default (enable in your desktop"
+    echo "Startup Applications list if desired — same policy as macOS)."
+    echo ""
     echo "If input devices are unavailable, add your user to the audio group and re-login:"
     echo "  sudo usermod -aG audio \$USER"
     ;;

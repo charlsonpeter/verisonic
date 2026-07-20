@@ -77,7 +77,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: broadcaster/dist/VeriSonic_Broadcaster_Setup.exe
+          path: broadcaster/dist/VeriSonic Broadcaster Setup.exe
 
       - name: Upload macOS Installer
         if: matrix.platform == 'macos'

@@ -21,7 +21,7 @@ PyInstaller **does not support cross-compilation**. Build on each target OS, or 
 
 | Platform | Artifact name | File |
 |----------|---------------|------|
-| Windows | `verisonic-broadcaster-windows-installer` | `VeriSonic_Broadcaster_Setup.exe` |
+| Windows | `verisonic-broadcaster-windows-installer` | `VeriSonic Broadcaster Setup.exe` |
 | macOS | `verisonic-broadcaster-macos-installer` | `VeriSonic Broadcaster.pkg` |
 | Linux | `verisonic-broadcaster-linux-installer` | `verisonic-broadcaster_1.0.0_amd64.deb` |
 
@@ -108,7 +108,7 @@ python broadcaster/generate_icons.py
 powershell -ExecutionPolicy Bypass -File broadcaster/installer/windows/build_windows_setup.ps1
 ```
 
-**Output:** `broadcaster/dist/VeriSonic_Broadcaster_Setup.exe`
+**Output:** `broadcaster/dist/VeriSonic Broadcaster Setup.exe`
 
 **Build the `.exe` alone** (without installer — for development):
 
@@ -131,9 +131,10 @@ powershell -ExecutionPolicy Bypass -File broadcaster/installer/windows/build_app
 - Admin install to `Program Files`
 - Wizard page explaining **all audio input sources** (mic, line-in, USB, loopback)
 - Optional desktop shortcut
-- **Task Scheduler** job at user logon (background tray service)
-- Opens **Microphone privacy** and **Sound → Input** settings after install (optional task)
+- **Task Scheduler** login auto-start task (optional — **unchecked by default**, like macOS)
+- Opens **Microphone privacy** and **Sound → Input** settings after install (optional task, checked by default)
 - Bundled `audio-permissions.txt` reference guide
+- First-run in-app **Open Audio Settings** guidance
 - Uninstall removes the scheduled task
 
 **Audio input on Windows:** Allow desktop apps under **Settings → Privacy & security → Microphone**, and enable your capture device under **Settings → System → Sound → Input**. For system audio, enable **Stereo Mix** or a virtual cable — Connect Live matches loopback input when your output device name aligns (see **Connect Live (all platforms)** above).
@@ -278,10 +279,10 @@ VERISONIC_DEB_VERSION=1.0.0 broadcaster/installer/linux/build_deb.sh
 **Installer configures:**
 
 - Binary at `/usr/bin/verisonic-broadcaster`
-- Application menu entry
-- **XDG autostart** for login background launch
-- **systemd user unit** at `/usr/lib/systemd/user/verisonic-broadcaster.service`
+- Application menu entry (`/usr/share/applications/verisonic-broadcaster.desktop`)
+- **XDG autostart** entry installed but **disabled by default** (enable in Startup Applications if desired — same policy as macOS)
 - Audio permissions guide at `/usr/share/doc/verisonic-broadcaster/audio-permissions.txt`
+- First-run in-app **Open Audio Settings** guidance (GNOME Settings / PulseAudio control when available)
 - Recommends PipeWire/PulseAudio for input capture
 
 **Audio input on Linux:** Ensure your user can access capture devices (`sudo usermod -aG audio $USER`, then re-login). Allow input access when PipeWire/PulseAudio prompts on first launch.
@@ -301,9 +302,9 @@ The broadcaster runs as a **user-session background tray app** (not a headless O
 
 | Platform | Auto-start mechanism |
 |----------|---------------------|
-| Windows | Task Scheduler (`ONLOGON`) |
-| macOS | `LaunchAgent` in `~/Library/LaunchAgents/` |
-| Linux | XDG autostart + optional systemd user service |
+| Windows | Task Scheduler (`ONLOGON`) — optional at install, off by default |
+| macOS | `LaunchAgent` in `~/Library/LaunchAgents/` — installed, not auto-started at login |
+| Linux | XDG autostart in `/etc/xdg/autostart/` — installed, disabled by default |
 
 The app minimizes to the system tray on close (`setQuitOnLastWindowClosed(False)`).
 
@@ -314,7 +315,7 @@ The app minimizes to the system tray on close (`setQuitOnLastWindowClosed(False)
 `frontend/src/config/broadcasterDownloads.ts` defaults to:
 
 ```
-/downloads/broadcaster/VeriSonic_Broadcaster_Setup.exe
+/downloads/broadcaster/VeriSonic Broadcaster Setup.exe
 /downloads/broadcaster/VeriSonic Broadcaster.pkg
 /downloads/broadcaster/verisonic-broadcaster_1.0.0_amd64.deb
 ```

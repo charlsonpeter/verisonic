@@ -5,7 +5,12 @@
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "VeriSonic"
 #define MyAppExeName "VeriSonic Broadcaster.exe"
+#ifndef MyAppSourceDir
 #define MyAppSourceDir "..\..\dist"
+#endif
+#ifndef MyAppOutputDir
+#define MyAppOutputDir {#MyAppSourceDir}
+#endif
 #define MyAppId "{{A7B3C9D1-4E2F-5A6B-8C9D-0E1F2A3B4C5D}"
 
 [Setup]
@@ -17,8 +22,8 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=dialog
-OutputDir={#MyAppSourceDir}
-OutputBaseFilename=VeriSonic_Broadcaster_Setup
+OutputDir={#MyAppOutputDir}
+OutputBaseFilename=VeriSonic Broadcaster Setup
 SetupIconFile=..\..\assets\icon.ico
 Compression=lzma2
 SolidCompression=yes
@@ -31,7 +36,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "autostart"; Description: "Start {#MyAppName} automatically when you sign in to Windows (background tray service)"; GroupDescription: "Background service:"
+Name: "autostart"; Description: "Start {#MyAppName} automatically when you sign in to Windows (background tray service)"; GroupDescription: "Background service:"; Flags: unchecked
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
 Name: "openaudioprivacy"; Description: "Open Windows audio input privacy settings after installation (recommended)"; GroupDescription: "Audio capture permissions:"
 

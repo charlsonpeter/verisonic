@@ -34,6 +34,7 @@ New-Item -ItemType Directory -Force -Path $DistDir, $BuildDir | Out-Null
     --specpath $BuildDir `
     --icon="$IconPath" `
     --paths $BroadcasterDir `
+    --hidden-import=installer.windows.audio_permission `
     --hidden-import=PyQt5.QtNetwork `
     --hidden-import=_sounddevice `
     --hidden-import=sounddevice `
