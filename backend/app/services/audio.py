@@ -350,6 +350,9 @@ def build_score_breakdown(metadata: dict, spectral: dict) -> tuple[list[dict], i
         )
 
     final_score = sum(item["points_achieved"] for item in breakdown)
+    # Fake upscales must land in Poor (≤50), not Average from remaining checklist points.
+    if is_fake_upscaled:
+        final_score = min(final_score, 50)
     return breakdown, final_score
 
 
