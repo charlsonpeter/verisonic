@@ -29,10 +29,10 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.10'
           cache: 'pip'
@@ -76,21 +76,21 @@ jobs:
 
       - name: Upload Windows Installer
         if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}
           path: broadcaster/dist/VeriSonic Broadcaster Setup.exe
 
       - name: Upload macOS Installer
         if: matrix.platform == 'macos'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}
           path: broadcaster/dist/VeriSonic Broadcaster.pkg
 
       - name: Upload Linux Installer
         if: matrix.platform == 'linux'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}
           path: broadcaster/dist/verisonic-broadcaster_1.0.0_amd64.deb
