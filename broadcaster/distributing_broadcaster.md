@@ -294,6 +294,8 @@ sudo dpkg -i broadcaster/dist/verisonic-broadcaster_1.0.0_amd64.deb
 sudo apt-get install -f
 ```
 
+**Run after install:** open **Applications** and search **VeriSonic Broadcaster**, or run `verisonic-broadcaster` in a terminal. The app runs in the system tray.
+
 ---
 
 ## Background Service Behavior

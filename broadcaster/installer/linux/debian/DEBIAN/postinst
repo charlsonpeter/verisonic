@@ -10,6 +10,7 @@ case "$1" in
     fi
 
     echo "VeriSonic Broadcaster installed."
+    echo "Launch from Applications (search: VeriSonic Broadcaster) or run: verisonic-broadcaster"
     echo "Grant audio input (capture/record) access for microphones, line-in, USB interfaces,"
     echo "and loopback devices. See: $PERMISSIONS_DOC"
     echo ""
