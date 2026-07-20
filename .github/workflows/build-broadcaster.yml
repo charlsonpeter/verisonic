@@ -2,6 +2,8 @@ name: Build Broadcaster
 
 on:
   push:
+    branches:
+      - master
     paths:
       - 'broadcaster/**'
       - '.github/workflows/build-broadcaster.yml'

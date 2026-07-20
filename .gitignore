@@ -38,7 +38,6 @@ MANIFEST
 # PyInstaller & Compilation Output
 *.spec
 .build-venv-macos/
-broadcaster/dist/
 broadcaster/dist-user/
 broadcaster/build/
 broadcaster/assets/icon.png
