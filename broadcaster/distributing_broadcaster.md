@@ -38,9 +38,9 @@ broadcaster/
   generate_icons.py
   assets/                      # icon.png, .ico, .icns
   installer/
-    macos/                     # .pkg, PyInstaller, entitlements, mic permission helper
-    linux/                     # .deb
-    windows/                   # Inno Setup
+    macos/                     # build_macos_pkg.sh, build_app.sh, entitlements, mic permission helper
+    linux/                     # build_linux_deb.sh, build_app.sh, .deb
+    windows/                   # build_windows_setup.ps1, build_app.ps1, Inno Setup
     assets/                    # Shared install docs
 ```
 
@@ -91,25 +91,40 @@ You can still change input on the **live** screen while broadcasting. Silent-inp
 
 ### Windows
 
-**1. Build executable**
+**Prerequisites:** Python 3.10+, [Inno Setup 6](https://jrsoftware.org/isinfo.php) (or `choco install innosetup -y`).
 
-```cmd
-pyinstaller --noconsole --onefile --windowed ^
-  --distpath broadcaster/dist ^
-  --workpath broadcaster/build/pyinstaller ^
-  --specpath broadcaster/build ^
-  --icon="broadcaster/assets/icon.ico" ^
-  --name="VeriSonic Broadcaster" ^
-  broadcaster/verisonic_broadcaster.py
+From the repo root, install build dependencies once:
+
+```powershell
+python -m pip install --upgrade pip
+pip install pyinstaller
+pip install -r broadcaster/requirements.txt
+python broadcaster/generate_icons.py
 ```
 
-**2. Build installer** (requires [Inno Setup 6](https://jrsoftware.org/isinfo.php))
+**Build the installer** (PyInstaller `.exe` + Inno Setup — one command):
 
-```cmd
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" broadcaster/installer/windows/setup.iss
+```powershell
+powershell -ExecutionPolicy Bypass -File broadcaster/installer/windows/build_windows_setup.ps1
 ```
 
 **Output:** `broadcaster/dist/VeriSonic_Broadcaster_Setup.exe`
+
+**Build the `.exe` alone** (without installer — for development):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File broadcaster/installer/windows/build_app.ps1
+```
+
+<details>
+<summary>Advanced: build .exe and installer separately</summary>
+
+```powershell
+powershell -ExecutionPolicy Bypass -File broadcaster/installer/windows/build_app.ps1
+& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" broadcaster/installer/windows/setup.iss
+```
+
+</details>
 
 **Installer configures:**
 
@@ -219,26 +234,46 @@ codesign --deep --force --sign "Developer ID Application: Your Name (TeamID)" "b
 
 ### Linux
 
-**1. Build executable**
+**Prerequisites (Ubuntu/Debian):**
 
 ```bash
-pyinstaller --noconsole --onefile \
-  --distpath broadcaster/dist \
-  --workpath broadcaster/build/pyinstaller \
-  --specpath broadcaster/build \
-  --icon="broadcaster/assets/icon.png" \
-  --name="verisonic-broadcaster" \
-  broadcaster/verisonic_broadcaster.py
+sudo apt-get update
+sudo apt-get install -y python3 python3-pip libportaudio2 libasound2-dev libegl1 libxkbcommon-x11-0
 ```
 
-**2. Build `.deb` installer**
+From the repo root, install build dependencies once:
 
 ```bash
-chmod +x broadcaster/installer/linux/build_deb.sh
-broadcaster/installer/linux/build_deb.sh
+python3 -m pip install --upgrade pip
+pip3 install pyinstaller
+pip3 install -r broadcaster/requirements.txt
+python3 broadcaster/generate_icons.py
+```
+
+**Build the `.deb` installer** (PyInstaller binary + dpkg-deb — one command):
+
+```bash
+chmod +x broadcaster/installer/linux/*.sh
+VERISONIC_DEB_VERSION=1.0.0 broadcaster/installer/linux/build_linux_deb.sh
 ```
 
 **Output:** `broadcaster/dist/verisonic-broadcaster_1.0.0_amd64.deb`
+
+**Build the binary alone** (without `.deb` — for development):
+
+```bash
+broadcaster/installer/linux/build_app.sh
+```
+
+<details>
+<summary>Advanced: build binary and .deb separately</summary>
+
+```bash
+broadcaster/installer/linux/build_app.sh
+VERISONIC_DEB_VERSION=1.0.0 broadcaster/installer/linux/build_deb.sh
+```
+
+</details>
 
 **Installer configures:**
 

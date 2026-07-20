@@ -51,36 +51,26 @@ jobs:
         run: |
           python broadcaster/generate_icons.py
 
-      - name: Build Executable (Windows)
-        if: matrix.platform == 'windows'
-        run: |
-          pyinstaller --noconsole --onefile --windowed --distpath broadcaster/dist --workpath broadcaster/build/pyinstaller --specpath broadcaster/build --icon="broadcaster/assets/icon.ico" --name="VeriSonic Broadcaster" broadcaster/verisonic_broadcaster.py
-
-      - name: Build Executable (Linux)
-        if: matrix.platform == 'linux'
-        run: |
-          pyinstaller --noconsole --onefile --distpath broadcaster/dist --workpath broadcaster/build/pyinstaller --specpath broadcaster/build --icon="broadcaster/assets/icon.png" --name="verisonic-broadcaster" broadcaster/verisonic_broadcaster.py
-
-      - name: Build macOS Installer
-        if: matrix.platform == 'macos'
-        run: |
-          chmod +x broadcaster/installer/macos/build_macos_pkg.sh
-          VERISONIC_PKG_VERSION=1.0.0 broadcaster/installer/macos/build_macos_pkg.sh
-
       - name: Install Inno Setup (Windows)
         if: matrix.platform == 'windows'
         run: choco install innosetup -y --no-progress
 
       - name: Build Windows Installer
         if: matrix.platform == 'windows'
-        run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" broadcaster/installer/windows/setup.iss
+        shell: pwsh
+        run: broadcaster/installer/windows/build_windows_setup.ps1
 
       - name: Build Linux Installer
         if: matrix.platform == 'linux'
         run: |
-          chmod +x broadcaster/installer/linux/build_deb.sh
-          broadcaster/installer/linux/build_deb.sh
+          chmod +x broadcaster/installer/linux/*.sh
+          VERISONIC_DEB_VERSION=1.0.0 broadcaster/installer/linux/build_linux_deb.sh
+
+      - name: Build macOS Installer
+        if: matrix.platform == 'macos'
+        run: |
+          chmod +x broadcaster/installer/macos/*.sh broadcaster/installer/macos/scripts/*
+          VERISONIC_PKG_VERSION=1.0.0 broadcaster/installer/macos/build_macos_pkg.sh
 
       - name: Upload Windows Installer
         if: matrix.platform == 'windows'

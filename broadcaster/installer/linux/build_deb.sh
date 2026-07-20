@@ -4,11 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 BROADCASTER_DIR="$ROOT_DIR/broadcaster"
-DIST_DIR="$BROADCASTER_DIR/dist"
+DIST_DIR="${VERISONIC_DIST_DIR:-$BROADCASTER_DIR/dist}"
 BUILD_DIR="$BROADCASTER_DIR/build"
 BINARY="$DIST_DIR/verisonic-broadcaster"
 STAGING="$BUILD_DIR/deb-staging"
-OUTPUT="$DIST_DIR/verisonic-broadcaster_1.0.0_amd64.deb"
+DEB_VERSION="${VERISONIC_DEB_VERSION:-1.0.0}"
+OUTPUT="$DIST_DIR/verisonic-broadcaster_${DEB_VERSION}_amd64.deb"
 TEMPLATE="$SCRIPT_DIR/debian"
 
 if [ ! -f "$BINARY" ]; then
@@ -19,6 +20,7 @@ fi
 rm -rf "$STAGING"
 mkdir -p "$STAGING"
 cp -R "$TEMPLATE/." "$STAGING/"
+sed -i "s/^Version: .*/Version: $DEB_VERSION/" "$STAGING/DEBIAN/control"
 
 mkdir -p "$STAGING/usr/bin" "$STAGING/usr/share/doc/verisonic-broadcaster"
 cp "$BINARY" "$STAGING/usr/bin/verisonic-broadcaster"
@@ -30,4 +32,4 @@ find "$STAGING/etc" "$STAGING/usr" -type f -exec chmod 644 {} \;
 chmod 755 "$STAGING/etc/xdg/autostart"
 
 dpkg-deb --build --root-owner-group "$STAGING" "$OUTPUT"
-echo "Created installer: $OUTPUT"
+echo "Created installer: $OUTPUT (version $DEB_VERSION)"
