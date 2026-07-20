@@ -25,8 +25,7 @@ Windows
 macOS
 -----
 1. System Settings → Privacy & Security → Microphone → enable VeriSonic Broadcaster
-2. For desktop/system audio via loopback, also check Screen & System Audio Recording
-   if prompted, and install/configure BlackHole or a multi-output device
+2. For desktop/system audio via loopback, install/configure BlackHole or a multi-output device
 3. System Settings → Sound → Input → confirm the selected device is active
 
 Linux

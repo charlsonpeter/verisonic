@@ -13,7 +13,7 @@ log() {
 log "postinstall start"
 
 if [ ! -f "$APP_BIN" ]; then
-  log "WARNING: app binary missing at $APP_BIN"
+  log "ERROR: app binary missing at $APP_BIN (pkg may have relocated — reinstall after removing broadcaster/dist/*.app)"
   exit 0
 fi
 

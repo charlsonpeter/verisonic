@@ -39,6 +39,7 @@ MANIFEST
 *.spec
 .build-venv-macos/
 broadcaster/dist/
+broadcaster/dist-user/
 broadcaster/build/
 broadcaster/assets/icon.png
 broadcaster/assets/icon.ico

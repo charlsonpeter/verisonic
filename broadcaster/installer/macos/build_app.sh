@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 BROADCASTER_DIR="$ROOT_DIR/broadcaster"
-DIST_DIR="$BROADCASTER_DIR/dist"
+DIST_DIR="${VERISONIC_DIST_DIR:-$BROADCASTER_DIR/dist}"
 BUILD_DIR="$BROADCASTER_DIR/build"
 BUILD_VENV="$ROOT_DIR/.build-venv-macos"
 APP_NAME="VeriSonic Broadcaster"
@@ -121,10 +121,16 @@ mkdir -p "$DIST_DIR" "$BUILD_DIR"
   --distpath "$DIST_DIR" \
   --specpath "$BUILD_DIR" \
   --icon="$BROADCASTER_DIR/assets/icon.icns" \
+  --paths "$BROADCASTER_DIR" \
   --hidden-import=AVFoundation \
-  --hidden-import=CoreMedia \
-  --hidden-import=macos_audio_permission \
+  --hidden-import=installer.macos.audio_permission \
   --hidden-import=PyQt5.QtNetwork \
+  --hidden-import=_sounddevice \
+  --hidden-import=sounddevice \
+  --hidden-import=lameenc \
+  --hidden-import=websockets \
+  --hidden-import=websockets.legacy.client \
+  --collect-all sounddevice \
   --osx-bundle-identifier com.verisonic.broadcaster \
   --osx-entitlements-file="broadcaster/installer/macos/entitlements.plist" \
   --name="$APP_NAME" \

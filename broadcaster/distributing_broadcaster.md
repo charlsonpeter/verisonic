@@ -29,6 +29,25 @@ Host these files at `/downloads/broadcaster/` on your web server (or set `VITE_B
 
 ---
 
+## Project layout
+
+```
+broadcaster/
+  verisonic_broadcaster.py   # Entry point (PyQt5 app)
+  requirements.txt
+  generate_icons.py
+  assets/                      # icon.png, .ico, .icns
+  installer/
+    macos/                     # .pkg, PyInstaller, entitlements, mic permission helper
+    linux/                     # .deb
+    windows/                   # Inno Setup
+    assets/                    # Shared install docs
+```
+
+Shared streaming logic lives in `verisonic_broadcaster.py`. macOS microphone permission helpers live under `installer/macos/` alongside the macOS packaging scripts.
+
+---
+
 ## Icon Asset Generation
 
 ```bash
@@ -53,6 +72,20 @@ pip install pyinstaller
 pip install -r broadcaster/requirements.txt
 python broadcaster/generate_icons.py
 ```
+
+### Connect Live (all platforms)
+
+The Connect Live page has **no input dropdown**. When you click **Connect Live**, the app reads your system **default sound output** and picks a matching **input** automatically:
+
+| System output | Input chosen |
+|---------------|--------------|
+| Loopback/virtual (BlackHole, VB-Cable, etc.) | Matching loopback input |
+| Linux monitor route | `Monitor of …` when names align |
+| Speakers / headphones / default playback | Default microphone (non-loopback) |
+
+You can still change input on the **live** screen while broadcasting. Silent-input notices do not stop the stream.
+
+**Installed app logs (macOS `.pkg` / PyInstaller):** `~/Library/Logs/VeriSonic/broadcaster.log` — use this when Connect Live crashes and Terminal shows no output.
 
 ---
 
@@ -88,13 +121,13 @@ pyinstaller --noconsole --onefile --windowed ^
 - Bundled `audio-permissions.txt` reference guide
 - Uninstall removes the scheduled task
 
-**Audio input on Windows:** Allow desktop apps under **Settings → Privacy & security → Microphone**, and enable your capture device under **Settings → System → Sound → Input**. For system audio, enable Stereo Mix or a virtual cable and select it in the app.
+**Audio input on Windows:** Allow desktop apps under **Settings → Privacy & security → Microphone**, and enable your capture device under **Settings → System → Sound → Input**. For system audio, enable **Stereo Mix** or a virtual cable — Connect Live matches loopback input when your output device name aligns (see **Connect Live (all platforms)** above).
 
 ---
 
 ### macOS
 
-**Build the `.pkg` installer** (builds the app internally, output is the pkg only):
+**Build the `.pkg` installer** (builds the app in a temp directory; only the `.pkg` is written to `dist/`):
 
 ```bash
 chmod +x broadcaster/installer/macos/build_macos_pkg.sh
@@ -107,13 +140,19 @@ Optional: set package version (recommended when reinstalling):
 VERISONIC_PKG_VERSION=1.0.6 broadcaster/installer/macos/build_macos_pkg.sh
 ```
 
-Keep the `.app` in `dist/` as well (default removes it after pkg is created):
+Optional: also copy the `.app` into `dist/` for local testing (not installed by default):
 
 ```bash
 KEEP_APP=1 broadcaster/installer/macos/build_macos_pkg.sh
 ```
 
-**Output:** `broadcaster/dist/VeriSonic Broadcaster.pkg`
+**Output:** `broadcaster/dist/VeriSonic Broadcaster.pkg` only (unless `KEEP_APP=1`).
+
+**Build the `.app` alone** (without pkg — for development):
+
+```bash
+broadcaster/installer/macos/build_app.sh
+```
 
 **Install** (no manual copy to `/Applications`):
 
@@ -146,6 +185,8 @@ launchctl bootout "gui/$(id -u)/com.verisonic.broadcaster" 2>/dev/null || true
 open "/Applications/VeriSonic Broadcaster.app"
 ```
 
+**Connect Live crashes with microphone while BlackHole is the system output:** macOS can crash when Sound → Output is set to **BlackHole only** but the broadcaster input is the **microphone**. For mic streaming, set Sound → Output to speakers/headphones. For system-audio streaming, keep BlackHole as output and select **BlackHole 2ch** as the input in the app (optionally via Multi-Output Device so you can still hear audio).
+
 Rebuild/reinstall with a current `.pkg` for the single-instance fix and updated LaunchAgent (no login auto-start).
 
 <details>
@@ -164,9 +205,8 @@ VERISONIC_PKG_VERSION=1.0.6 broadcaster/installer/macos/build_pkg.sh
 - **LaunchAgent** plist (`com.verisonic.broadcaster`) installed but **not** auto-started at login (avoids duplicate instances fighting for the microphone)
 - **Single-instance guard** — opening the app again focuses the existing copy instead of starting a second process
 - `NSMicrophoneUsageDescription` for all audio input devices (mic, line-in, USB, BlackHole loopback)
-- `NSScreenCaptureUsageDescription` when system/desktop audio capture is needed
 - `com.apple.security.device.audio-input` entitlement in the app bundle
-- Opens **Microphone** and **Screen & System Audio Recording** privacy panes after install
+- Opens **Microphone** privacy pane after install
 - Shared guide at `/Library/Application Support/VeriSonic/audio-permissions.txt`
 
 **Code signing (production):**

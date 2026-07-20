@@ -11,7 +11,16 @@ if [ ! -d "$APP_PATH" ]; then
   exit 1
 fi
 
-# Sign nested binaries/frameworks first, then the bundle (avoid --deep race conditions).
+# Sign nested binaries/libraries first, then the bundle (avoid --deep race conditions).
+for lib_root in "$APP_PATH/Contents/Frameworks" "$APP_PATH/Contents/Resources"; do
+  if [ -d "$lib_root" ]; then
+    find "$lib_root" -type f \( -name '*.dylib' -o -name '*.so' \) | while read -r lib; do
+      codesign --force --sign - --entitlements "$ENTITLEMENTS" "$lib" 2>/dev/null || \
+        codesign --force --sign - "$lib" 2>/dev/null || true
+    done
+  fi
+done
+
 find "$APP_PATH/Contents/MacOS" -type f -perm +111 2>/dev/null | while read -r bin; do
   codesign --force --sign - --entitlements "$ENTITLEMENTS" "$bin" 2>/dev/null || \
     codesign --force --sign - "$bin" 2>/dev/null || true

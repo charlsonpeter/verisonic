@@ -46,6 +46,7 @@ fi
 
 pkgbuild \
   --root "$PAYLOAD_DIR" \
+  --component-plist "$SCRIPT_DIR/component.plist" \
   --identifier com.verisonic.broadcaster \
   --version "$PKG_VERSION" \
   --install-location /Applications \

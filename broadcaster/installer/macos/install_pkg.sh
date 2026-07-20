@@ -11,8 +11,7 @@ APP="/Applications/VeriSonic Broadcaster.app"
 if [ ! -f "$PKG" ]; then
   echo "Missing installer: $PKG" >&2
   echo "Build first:" >&2
-  echo "  broadcaster/installer/macos/build_app.sh" >&2
-  echo "  VERISONIC_PKG_VERSION=1.0.5 broadcaster/installer/macos/build_pkg.sh" >&2
+  echo "  VERISONIC_PKG_VERSION=1.0.5 broadcaster/installer/macos/build_macos_pkg.sh" >&2
   exit 1
 fi
 
@@ -31,5 +30,10 @@ if [ ! -d "$APP" ]; then
 fi
 
 xattr -cr "$APP" 2>/dev/null || true
+
+echo "Resetting stale microphone permissions for this bundle id..."
+tccutil reset Microphone com.verisonic.broadcaster 2>/dev/null || true
+
 echo "Installed: $APP"
+echo "On first Connect Live, allow Microphone access when macOS prompts."
 open "$APP"

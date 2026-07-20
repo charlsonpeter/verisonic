@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 import os
 import sys
+
+_BROADCASTER_DIR = os.path.dirname(os.path.abspath(__file__))
+if _BROADCASTER_DIR not in sys.path:
+    sys.path.insert(0, _BROADCASTER_DIR)
+
 import time
 import threading
 import queue
@@ -9,27 +14,16 @@ import json
 import base64
 import urllib.request
 import urllib.error
-import fractions
 import asyncio
 
-# Try importing aiortc & av for WebRTC low latency streaming
-USE_WEBRTC = False
-try:
-    from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
-    from av import AudioFrame
-    USE_WEBRTC = True
-except ImportError:
-    pass
+# Dependency tracking
+MISSING_DEPS = []
 
 # Try importing websockets for async WebSocket ingest
 try:
     import websockets
-    HAS_WEBSOCKETS = True
 except ImportError:
-    HAS_WEBSOCKETS = False
-
-# Dependency tracking
-MISSING_DEPS = []
+    MISSING_DEPS.append("websockets")
 
 # Try importing PyQt5
 USE_PYQT = False
@@ -58,14 +52,10 @@ try:
     import lameenc
 except ImportError:
     MISSING_DEPS.append("lameenc")
-try:
-    import websocket
-except ImportError:
-    MISSING_DEPS.append("websocket-client")
 
 if sys.platform == "darwin":
     try:
-        from macos_audio_permission import (
+        from installer.macos.audio_permission import (
             ensure_microphone_access,
             get_microphone_authorization_status,
             open_microphone_privacy_settings,
@@ -79,6 +69,68 @@ else:
 
 # Define fixed server stream URL (with env override)
 DEFAULT_SERVER_URL = os.environ.get("VERISONIC_SERVER_URL", "ws://54.66.243.141:3000/api/radio/stream/ws")
+
+
+def _packaged_app() -> bool:
+    if getattr(sys, "frozen", False):
+        return True
+    if hasattr(sys, "_MEIPASS"):
+        return True
+    exe = getattr(sys, "executable", "") or ""
+    return ".app/Contents/MacOS" in exe
+
+
+def _log_boot_marker():
+    """Write a line to disk before stdout redirection (packaged app debugging)."""
+    try:
+        log_dir = os.path.expanduser("~/Library/Logs/VeriSonic")
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, "broadcaster.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(
+                f"\n--- boot {time.strftime('%Y-%m-%d %H:%M:%S')} pid={os.getpid()} "
+                f"exe={sys.executable!r} frozen={getattr(sys, 'frozen', None)} "
+                f"meipass={getattr(sys, '_MEIPASS', None)!r}\n"
+            )
+        return log_path
+    except Exception as exc:
+        try:
+            with open("/tmp/verisonic-broadcaster-boot.log", "a", encoding="utf-8") as f:
+                f.write(f"boot log failed: {exc}\n")
+        except Exception:
+            pass
+        return None
+
+
+def setup_app_logging():
+    """Route stdout/stderr to a log file for PyInstaller builds (--noconsole hides Terminal output)."""
+    if not _packaged_app():
+        return None
+    try:
+        log_dir = os.path.expanduser("~/Library/Logs/VeriSonic")
+        os.makedirs(log_dir, exist_ok=True)
+        log_path = os.path.join(log_dir, "broadcaster.log")
+        log_file = open(log_path, "a", encoding="utf-8", buffering=1)
+        sys.stdout = log_file
+        sys.stderr = log_file
+        try:
+            import faulthandler
+            faulthandler.enable(log_file)
+        except Exception:
+            pass
+        print(f"\n--- session start {time.strftime('%Y-%m-%d %H:%M:%S')} pid={os.getpid()} ---")
+        print(f"executable={sys.executable}")
+        return log_path
+    except Exception as exc:
+        try:
+            fallback = f"/tmp/verisonic-broadcaster-{os.getpid()}.log"
+            log_file = open(fallback, "a", encoding="utf-8", buffering=1)
+            sys.stdout = log_file
+            sys.stderr = log_file
+            print(f"Primary log failed ({exc}); using {fallback}")
+            return fallback
+        except Exception:
+            return None
 
 
 def _config_cipher_key() -> bytes:
@@ -109,38 +161,6 @@ def _decode_config_value(value: str) -> str:
         return plain.decode("utf-8")
     except Exception:
         return ""
-
-# AudioStreamTrack is only needed if we ever do full WebRTC ingest in future
-if USE_WEBRTC:
-    class AudioStreamTrack(MediaStreamTrack):
-        kind = "audio"
-
-        def __init__(self, webrtc_queue, channels=2, sample_rate=44100):
-            super().__init__()
-            self.webrtc_queue = webrtc_queue
-            self.channels = channels
-            self.sample_rate = sample_rate
-            self.pts = 0
-
-        async def recv(self):
-            # Simply wait for a pre-processed chunk from the VU loop
-            while True:
-                try:
-                    pcm_data = self.webrtc_queue.get_nowait()
-                    break
-                except queue.Empty:
-                    await asyncio.sleep(0.005)
-
-            frame = AudioFrame.from_ndarray(
-                pcm_data.T,
-                format='s16',
-                layout='stereo' if self.channels == 2 else 'mono'
-            )
-            frame.sample_rate = self.sample_rate
-            frame.time_base = fractions.Fraction(1, self.sample_rate)
-            frame.pts = self.pts
-            self.pts += frame.samples
-            return frame
 
 
 # =====================================================================
@@ -184,7 +204,7 @@ if not USE_PYQT or MISSING_DEPS:
             inst_lbl.pack(pady=5)
             
             # Command block
-            command = "pip install PyQt5 sounddevice numpy lameenc websocket-client"
+            command = "pip install PyQt5 sounddevice numpy lameenc websockets"
             cmd_box = tk.Text(card, height=3, font=("Courier New", 10), bg="#0d1321", fg="#10b981", bd=0, padx=10, pady=10)
             cmd_box.insert("1.0", command)
             cmd_box.configure(state="disabled")
@@ -361,6 +381,19 @@ class VUMeterWidget(QWidget):
 # =====================================================================
 # PYQT5 REDESIGNED BROADCASTER APPLICATION
 # =====================================================================
+_LOOPBACK_DEVICE_KEYWORDS = (
+    "blackhole",
+    "stereo mix",
+    "what u hear",
+    "wave out mix",
+    "cable output",
+    "vb-audio",
+    "virtual cable",
+    "loopback",
+    "monitor of",
+)
+
+
 class PyQtBroadcasterApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -391,7 +424,7 @@ class PyQtBroadcasterApp(QMainWindow):
         # System Tray State
         self.quit_from_tray = False
         self._mac_audio_probe_done = False
-        self._audio_silent_warned = False
+        self._audio_io_lock = threading.Lock()
         
         # Session parameters and settings
         self.load_config()
@@ -468,13 +501,13 @@ class PyQtBroadcasterApp(QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
-        if sys.platform == 'darwin' and not self._mac_audio_probe_done:
+        if sys.platform == "darwin" and not self._mac_audio_probe_done:
             self._mac_audio_probe_done = True
             QTimer.singleShot(800, self.request_macos_audio_access)
 
     def request_macos_audio_access(self):
-        """Request microphone access via AVFoundation, then verify capture works."""
-        if sys.platform != 'darwin':
+        """Request microphone permission (macOS)."""
+        if sys.platform != "darwin":
             return
 
         def on_permission_result(granted):
@@ -501,28 +534,32 @@ class PyQtBroadcasterApp(QMainWindow):
 
         def _probe():
             device_id = None
-            try:
-                default_in = sd.default.device[0]
-                if default_in is not None and int(default_in) >= 0:
-                    device_id = int(default_in)
-            except Exception:
-                pass
-
-            if device_id is None:
+            idx = self._resolve_connect_input_index()
+            if idx >= 0:
+                device_id = self.devices[idx]["id"]
+            elif getattr(self, "devices", None):
+                device_id = self.devices[0]["id"]
+            else:
                 devices = self.get_input_devices()
                 if not devices:
                     QTimer.singleShot(0, self._show_mic_permission_dialog)
                     return
                 device_id = devices[0]["id"]
 
+            channels, samplerate = self.get_device_capture_params(device_id)
+            stream_kwargs = {
+                "device": device_id,
+                "channels": channels,
+                "samplerate": samplerate,
+                "blocksize": 1024,
+            }
+            if sys.platform == "darwin":
+                stream_kwargs["latency"] = "high"
+
             try:
-                with sd.InputStream(
-                    device=device_id,
-                    channels=1,
-                    samplerate=44100,
-                    blocksize=1024,
-                ):
-                    sd.sleep(250)
+                stream = self._open_input_stream(stream_kwargs)
+                time.sleep(0.25)
+                self._close_input_stream(stream)
             except Exception as exc:
                 print("Microphone permission probe failed:", exc)
                 QTimer.singleShot(0, self._show_mic_permission_dialog)
@@ -545,29 +582,98 @@ class PyQtBroadcasterApp(QMainWindow):
         if msg.clickedButton() == settings_btn and HAS_MACOS_MIC_API:
             open_microphone_privacy_settings()
 
-    def refresh_input_devices(self):
-        """Reload PortAudio input devices into the connect-page dropdown."""
-        self.devices = self.get_input_devices()
-        if not hasattr(self, "device_combo"):
-            return
+    @staticmethod
+    def _is_loopback_device_name(name):
+        n = (name or "").lower()
+        return any(kw in n for kw in _LOOPBACK_DEVICE_KEYWORDS)
 
-        selected_id = None
-        idx = self.device_combo.currentIndex()
-        if 0 <= idx < len(self.devices):
-            selected_id = self.devices[idx]["id"]
+    @staticmethod
+    def _normalize_device_name(name):
+        return (name or "").lower().strip()
 
-        self.device_combo.blockSignals(True)
-        self.device_combo.clear()
-        if self.devices:
-            self.device_combo.addItems([dev["name"] for dev in self.devices])
-            if selected_id is not None:
+    def _system_default_output_name(self):
+        try:
+            out_id = sd.default.device[1]
+            if out_id is None or int(out_id) < 0:
+                return ""
+            info = sd.query_devices(int(out_id), "output")
+            return str(info.get("name", ""))
+        except Exception:
+            return ""
+
+    def _find_default_microphone_input_index(self):
+        """Prefer the system default input, otherwise the first non-loopback mic."""
+        if not self.devices:
+            return -1
+        try:
+            default_input_id = sd.default.device[0]
+            if default_input_id is not None and int(default_input_id) >= 0:
                 for i, dev in enumerate(self.devices):
-                    if dev["id"] == selected_id:
-                        self.device_combo.setCurrentIndex(i)
-                        break
-        else:
-            self.device_combo.addItems(["No Input Devices Found"])
-        self.device_combo.blockSignals(False)
+                    if dev["id"] == int(default_input_id):
+                        if not self._is_loopback_device_name(dev["name"]):
+                            return i
+        except Exception:
+            pass
+        for i, dev in enumerate(self.devices):
+            if not self._is_loopback_device_name(dev["name"]):
+                return i
+        return -1
+
+    def _default_input_device_index(self):
+        mic_idx = self._find_default_microphone_input_index()
+        if mic_idx >= 0:
+            return mic_idx
+        return 0 if self.devices else -1
+
+    def _resolve_connect_input_index(self):
+        """Pick the default microphone (or first available input) for Connect Live."""
+        self.devices = self.get_input_devices()
+        if not self.devices:
+            return -1
+        return self._default_input_device_index()
+
+    def _populate_input_device_combos(self, selected_id=None):
+        self.devices = self.get_input_devices()
+        names = [dev["name"] for dev in self.devices]
+        combo = getattr(self, "live_device_combo", None)
+        if combo is None:
+            return
+        combo.blockSignals(True)
+        combo.clear()
+        if names:
+            combo.addItems(names)
+        if selected_id is not None:
+            for i, dev in enumerate(self.devices):
+                if dev.get("id") == selected_id:
+                    combo.setCurrentIndex(i)
+                    break
+        combo.blockSignals(False)
+
+    def refresh_input_devices(self):
+        """Reload input devices for the Live screen dropdown."""
+        selected_id = getattr(self, "active_device_id", None)
+        self._populate_input_device_combos(selected_id=selected_id)
+
+    def _open_input_stream(self, stream_kwargs):
+        with self._audio_io_lock:
+            stream = sd.InputStream(**stream_kwargs)
+            stream.start()
+            return stream
+
+    def _close_input_stream(self, stream):
+        if stream is None:
+            return
+        with self._audio_io_lock:
+            try:
+                stream.stop()
+                stream.close()
+            except Exception:
+                pass
+
+    def _close_capture_source(self, capture_source):
+        if capture_source is None:
+            return
+        self._close_input_stream(capture_source)
 
     def load_config(self):
         self.config_path = os.path.expanduser("~/.verisonic_broadcaster.json")
@@ -841,6 +947,7 @@ class PyQtBroadcasterApp(QMainWindow):
         
         # Fetch station configurations
         self.populate_stations()
+        self.refresh_input_devices()
         self.stacked_widget.setCurrentIndex(1)
 
     # =====================================================================
@@ -919,39 +1026,6 @@ class PyQtBroadcasterApp(QMainWindow):
         cb_layout.addStretch()
         card_layout.addLayout(cb_layout)
         
-        # Device Selector
-        dev_header_layout = QHBoxLayout()
-        dev_lbl = QLabel("INITIAL AUDIO INPUT SOURCE")
-        dev_lbl.setFont(QFont("Helvetica Neue", 8, QFont.Bold))
-        dev_lbl.setStyleSheet("color: #94a3b8;")
-        dev_header_layout.addWidget(dev_lbl)
-        
-        dev_help_btn = QPushButton("Guide")
-        dev_help_btn.setFont(QFont("Helvetica Neue", 9))
-        dev_help_btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #38bdf8;
-                border: none;
-                text-decoration: underline;
-                padding: 0;
-            }
-            QPushButton:hover {
-                color: #7dd3fc;
-            }
-        """)
-        dev_help_btn.setCursor(Qt.PointingHandCursor)
-        dev_help_btn.clicked.connect(self.show_system_sound_help)
-        dev_header_layout.addStretch()
-        dev_header_layout.addWidget(dev_help_btn)
-        card_layout.addLayout(dev_header_layout)
-        
-        self.devices = self.get_input_devices()
-        device_names = [dev["name"] for dev in self.devices]
-        self.device_combo = QComboBox()
-        self.device_combo.addItems(device_names if device_names else ["No Input Devices Found"])
-        card_layout.addWidget(self.device_combo)
-        
         # Stream Quality / Bitrate Selector
         quality_lbl = QLabel("STREAM QUALITY / BITRATE")
         quality_lbl.setFont(QFont("Helvetica Neue", 8, QFont.Bold))
@@ -973,18 +1047,7 @@ class PyQtBroadcasterApp(QMainWindow):
         self.bitrate_combo.setCurrentIndex(default_index)
         
         card_layout.addWidget(self.bitrate_combo)
-        
-        # Set default input selection
-        try:
-            default_input_id = sd.default.device[0]
-            if default_input_id >= 0:
-                for idx, dev in enumerate(self.devices):
-                    if dev["id"] == default_input_id:
-                        self.device_combo.setCurrentIndex(idx)
-                        break
-        except Exception:
-            pass
-            
+
         # Connect Action
         self.connect_btn = QPushButton("Connect Live")
         self.connect_btn.setObjectName("actionBtn")
@@ -1106,14 +1169,83 @@ class PyQtBroadcasterApp(QMainWindow):
         self.active_device_id = device_id
         self._active_device_name = device_name
         print("Dynamic hot-swap request: Input device ID ->", device_id, device_name)
-        if "blackhole" in device_name.lower():
-            self.connection_status = "Switching to BlackHole — reconnecting audio..."
+        if self.is_broadcasting:
+            self.connection_status = "Switching input..."
+
+    def _open_portaudio_input_callback(self, device_id, channels, samplerate):
+        def audio_callback(indata, frames, time_info, status):
+            if status:
+                print("Audio input status:", status)
+            try:
+                self.audio_queue.put_nowait(indata.copy())
+            except queue.Full:
+                pass
+
+        stream_kwargs = {
+            "device": device_id,
+            "channels": channels,
+            "samplerate": samplerate,
+            "blocksize": 2048,
+            "callback": audio_callback,
+        }
+        if sys.platform == "darwin":
+            stream_kwargs["latency"] = "high"
+        return self._open_input_stream(stream_kwargs)
+
+    def _loopback_capture_error_message(self, device_name):
+        if sys.platform == "darwin":
+            return (
+                f"Could not open {device_name}.\n\n"
+                "For system audio via BlackHole:\n"
+                "1. Audio MIDI Setup → Create Multi-Output Device\n"
+                "2. Enable BlackHole 2ch + your speakers/headphones\n"
+                "3. System Settings → Sound → Output → Multi-Output Device\n"
+                "4. Play audio — input is matched from your sound output automatically"
+            )
+        if sys.platform == "win32":
+            return (
+                f"Could not open {device_name}.\n\n"
+                "For system audio on Windows:\n"
+                "1. Sound Settings → Recording → enable Stereo Mix (or install VB-Audio Cable)\n"
+                "2. Set your playback output as usual\n"
+                "3. Play audio — loopback input is matched automatically when possible"
+            )
+        return (
+            f"Could not open {device_name}.\n\n"
+            "For system audio on Linux, select a monitor/loopback capture device "
+            "(PulseAudio/PipeWire) or check your sound server loopback module."
+        )
+
+    def _microphone_capture_error_message(self):
+        if sys.platform == "darwin":
+            return (
+                "Could not open the selected audio input.\n\n"
+                "Open System Settings → Privacy & Security → Microphone "
+                "and enable VeriSonic Broadcaster, then try again."
+            )
+        if sys.platform == "win32":
+            return (
+                "Could not open the selected audio input.\n\n"
+                "Open Settings → Privacy & security → Microphone and allow desktop apps, "
+                "then check Settings → System → Sound → Input."
+            )
+        return (
+            "Could not open the selected audio input.\n\n"
+            "Check your system sound/privacy settings and confirm the input device is available."
+        )
 
     def handle_connect(self):
-        selected_idx = self.device_combo.currentIndex()
-        if selected_idx < 0 or not self.devices:
-            QMessageBox.critical(self, "Error", "Please select a valid audio source.")
+        selected_idx = self._resolve_connect_input_index()
+        if selected_idx < 0:
+            QMessageBox.critical(self, "Error", "No audio input devices found.")
             return
+
+        input_name = self.devices[selected_idx]["name"]
+        output_name = self._system_default_output_name()
+        print(
+            "Connect Live audio routing:",
+            f"system output={output_name!r} -> input={input_name!r}",
+        )
 
         if sys.platform == "darwin" and HAS_MACOS_MIC_API:
             status = get_microphone_authorization_status()
@@ -1123,14 +1255,14 @@ class PyQtBroadcasterApp(QMainWindow):
             if status in ("not_determined", "unavailable"):
                 request_microphone_access(
                     lambda granted: QTimer.singleShot(
-                        0, lambda g=granted: self._continue_connect_after_mic(g, selected_idx)
+                        0, lambda g=granted: self._continue_connect_after_mic(g)
                     )
                 )
                 return
 
         self._start_broadcast(selected_idx)
 
-    def _continue_connect_after_mic(self, granted, selected_idx):
+    def _continue_connect_after_mic(self, granted):
         if granted is False:
             self._show_mic_permission_dialog()
             return
@@ -1139,12 +1271,11 @@ class PyQtBroadcasterApp(QMainWindow):
             if status == "denied":
                 self._show_mic_permission_dialog()
                 return
-        self.refresh_input_devices()
-        if not self.devices:
+        selected_idx = self._resolve_connect_input_index()
+        if selected_idx < 0:
             self._show_mic_permission_dialog()
             return
-        if selected_idx >= len(self.devices):
-            selected_idx = 0
+
         self._start_broadcast(selected_idx)
 
     def _start_broadcast(self, selected_idx):
@@ -1210,12 +1341,10 @@ class PyQtBroadcasterApp(QMainWindow):
                     
         self.live_station_title.setText(station_name)
         
-        # Load and sync device selections to Page 2 active dropdown
-        self.live_device_combo.blockSignals(True)
-        self.live_device_combo.clear()
-        self.live_device_combo.addItems([dev["name"] for dev in self.devices])
-        self.live_device_combo.setCurrentIndex(selected_idx)
-        self.live_device_combo.blockSignals(False)
+        # Load and sync device selections to live dropdown
+        self._populate_input_device_combos(selected_id=device_id)
+        if selected_idx >= 0:
+            self.live_device_combo.setCurrentIndex(selected_idx)
         self._active_device_name = self.devices[selected_idx]["name"]
         self.active_device_id = device_id
         bitrate_index = self.bitrate_combo.currentIndex()
@@ -1227,7 +1356,6 @@ class PyQtBroadcasterApp(QMainWindow):
         self.is_broadcasting = True
         self.connection_status = "Connecting..."
         self.is_connected = False
-        self._audio_silent_warned = False
         
         self.bytes_sent = 0
         self.start_time = time.time()
@@ -1338,6 +1466,52 @@ class PyQtBroadcasterApp(QMainWindow):
                         except queue.Full:
                             pass
 
+        def open_capture_for_active_device():
+            """Open/replace PortAudio capture for active_device_id without touching the WebSocket."""
+            nonlocal audio_stream, encoder, current_stream_device_id, vu_task
+
+            if self.active_device_id == current_stream_device_id and audio_stream is not None:
+                return True
+
+            channels, samplerate = self.get_device_capture_params(self.active_device_id)
+            device_label = getattr(self, "_active_device_name", "")
+            print(
+                f"Opening audio input device {self.active_device_id} "
+                f"({device_label}): {channels}ch @ {samplerate}Hz"
+            )
+
+            if audio_stream:
+                self._close_capture_source(audio_stream)
+                audio_stream = None
+
+            self.audio_queue = queue.Queue(maxsize=100)
+            self.mp3_queue = queue.Queue(maxsize=200)
+
+            encoder = lameenc.Encoder()
+            encoder.set_bit_rate(bitrate)
+            encoder.set_in_sample_rate(samplerate)
+            encoder.set_channels(channels)
+            encoder.set_quality(0)
+
+            try:
+                audio_stream = self._open_portaudio_input_callback(
+                    self.active_device_id, channels, samplerate
+                )
+            except Exception as ae:
+                print("Failed to open audio capture:", ae)
+                device_hint = getattr(self, "_active_device_name", "the selected device")
+                if self._is_loopback_device_name(device_hint):
+                    self.broadcast_error = self._loopback_capture_error_message(device_hint)
+                else:
+                    self.broadcast_error = self._microphone_capture_error_message()
+                return False
+
+            current_stream_device_id = self.active_device_id
+
+            if vu_task is None or vu_task.done():
+                vu_task = asyncio.ensure_future(vu_loop())
+            return True
+
         while self.is_broadcasting:
             ws = None
             try:
@@ -1362,76 +1536,7 @@ class PyQtBroadcasterApp(QMainWindow):
 
                 self.connection_status = "Connecting to server..."
 
-                channels, samplerate = self.get_device_capture_params(self.active_device_id)
-                print(
-                    f"Opening audio input device {self.active_device_id} "
-                    f"({getattr(self, '_active_device_name', '')}): "
-                    f"{channels}ch @ {samplerate}Hz"
-                )
-
-                # Initialize audio input stream if not already done or device swapped
-                if audio_stream is None or self.active_device_id != current_stream_device_id:
-                    if audio_stream:
-                        try:
-                            audio_stream.stop()
-                            audio_stream.close()
-                        except Exception:
-                            pass
-
-                    self.audio_queue = queue.Queue(maxsize=100)
-                    self.mp3_queue = queue.Queue(maxsize=200)
-                    self._audio_silent_warned = False
-
-                    encoder = lameenc.Encoder()
-                    encoder.set_bit_rate(bitrate)
-                    encoder.set_in_sample_rate(samplerate)
-                    encoder.set_channels(channels)
-                    encoder.set_quality(0)
-
-                    def audio_callback(indata, frames, time_info, status):
-                        if status:
-                            print("Audio input status:", status)
-                        try:
-                            self.audio_queue.put_nowait(indata.copy())
-                        except queue.Full:
-                            pass
-
-                    try:
-                        audio_stream = sd.InputStream(
-                            device=self.active_device_id,
-                            channels=channels,
-                            samplerate=samplerate,
-                            blocksize=2048,
-                            callback=audio_callback
-                        )
-                        audio_stream.start()
-                    except Exception as ae:
-                        print("Failed to open audio input stream:", ae)
-                        device_hint = getattr(self, "_active_device_name", "the selected device")
-                        if "blackhole" in device_hint.lower():
-                            self.broadcast_error = (
-                                f"Could not open {device_hint}.\n\n"
-                                "For system audio via BlackHole:\n"
-                                "1. Audio MIDI Setup → Create Multi-Output Device\n"
-                                "2. Enable BlackHole 2ch + your speakers/headphones\n"
-                                "3. System Settings → Sound → Output → Multi-Output Device\n"
-                                "4. Play audio, then select BlackHole 2ch in this app"
-                            )
-                        else:
-                            self.broadcast_error = (
-                                "Could not open the selected audio input.\n\n"
-                                "On macOS, open System Settings → Privacy & Security → Microphone "
-                                "and enable VeriSonic Broadcaster, then try again."
-                            )
-                        self.is_broadcasting = False
-                        raise
-                    current_stream_device_id = self.active_device_id
-
-                    # Start the VU + encode loop immediately when mic starts
-                    if vu_task is None or vu_task.done():
-                        vu_task = asyncio.ensure_future(vu_loop())
-
-                # Open WebSocket connection
+                # Open WebSocket first so the UI can reach LIVE even if audio is slow to start.
                 ssl_ctx = None
                 if ws_url.startswith("wss://"):
                     import ssl
@@ -1452,11 +1557,18 @@ class PyQtBroadcasterApp(QMainWindow):
                     self.connection_status = "LIVE"
                     self.bytes_sent = 0
 
-                    # Drain mp3_queue and send chunks over WebSocket
+                    if not open_capture_for_active_device():
+                        self.is_broadcasting = False
+                        break
+
                     while self.is_broadcasting:
                         if self.active_device_id != current_stream_device_id:
-                            print("Input device changed — reopening audio stream")
-                            break
+                            print("Input device changed — swapping capture source (WebSocket stays open)")
+                            if not open_capture_for_active_device():
+                                self.is_broadcasting = False
+                                break
+                            self.connection_status = "LIVE"
+                            continue
 
                         try:
                             mp3_chunk = self.mp3_queue.get_nowait()
@@ -1502,13 +1614,9 @@ class PyQtBroadcasterApp(QMainWindow):
             except Exception:
                 pass
 
-        # Cleanup audio stream
+        # Cleanup audio capture
         if audio_stream:
-            try:
-                audio_stream.stop()
-                audio_stream.close()
-            except Exception:
-                pass
+            self._close_capture_source(audio_stream)
 
     def update_gui_loop(self):
         """Monitors stats and updates volume visuals on the main thread loop."""
@@ -1547,31 +1655,6 @@ class PyQtBroadcasterApp(QMainWindow):
                 time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
                 mb_sent = getattr(self, 'bytes_sent', 0) / (1024 * 1024)
                 self.stats_lbl.setText(f"Status: LIVE ({self.saved_bitrate} kbps)  |  Sent: {mb_sent:.2f} MB  |  Time: {time_str}")
-
-                if (
-                    not self._audio_silent_warned
-                    and elapsed_seconds >= 4
-                    and self.current_volume_db <= -55.0
-                    and all(level == 0 for level in self.current_frequency_levels)
-                ):
-                    self._audio_silent_warned = True
-                    device_name = getattr(self, "_active_device_name", "")
-                    if "blackhole" in device_name.lower():
-                        self.broadcast_error = (
-                            f"No audio detected on {device_name}.\n\n"
-                            "BlackHole only receives audio routed TO it:\n"
-                            "1. Open Audio MIDI Setup → Create Multi-Output Device\n"
-                            "2. Check BlackHole 2ch AND your speakers/headphones\n"
-                            "3. System Settings → Sound → Output → Multi-Output Device\n"
-                            "4. Play music/audio, then watch the VU meter here"
-                        )
-                    else:
-                        self.broadcast_error = (
-                            "No audio is being captured from the selected input.\n\n"
-                            "Check System Settings → Privacy & Security → Microphone, "
-                            "confirm the correct input device is selected, and test the "
-                            "level meter (speak into the mic or play audio into the device)."
-                        )
             else:
                 color = "#f59e0b" if (int(time.time() * 2) % 2 == 0) else "#78350f"
                 self.live_indicator.setStyleSheet(f"color: {color};")
@@ -1713,20 +1796,33 @@ class PyQtBroadcasterApp(QMainWindow):
             event.accept()
 
     def get_device_capture_params(self, device_id):
-        """Return (channels, samplerate) suited for the given PortAudio input device."""
+        """Return (channels, samplerate) suited for the given capture source."""
         channels = 1
-        samplerate = 44100
+        preferred_sr = 44100
         try:
             info = sd.query_devices(device_id, "input")
             max_channels = info.get("max_input_channels", 1)
             channels = min(2, max(1, int(max_channels)))
             default_sr = info.get("default_samplerate") or info.get("default_sample_rate") or 44100
-            samplerate = int(default_sr)
-            if samplerate <= 0:
-                samplerate = 44100
+            preferred_sr = int(default_sr)
+            if preferred_sr <= 0:
+                preferred_sr = 44100
         except Exception as exc:
             print("Failed to query device capture params:", exc)
-        return channels, samplerate
+            return channels, preferred_sr
+
+        candidates = []
+        for sr in (preferred_sr, 48000, 44100, 96000):
+            if sr not in candidates:
+                candidates.append(sr)
+
+        for sr in candidates:
+            try:
+                sd.check_input_settings(device=device_id, channels=channels, samplerate=sr)
+                return channels, sr
+            except Exception:
+                continue
+        return channels, preferred_sr
 
     def get_input_devices(self):
         devices = []
@@ -1750,17 +1846,21 @@ class PyQtBroadcasterApp(QMainWindow):
 
     def show_system_sound_help(self):
         help_text = (
-            "<h3>How to Stream System Sound / Music</h3>"
-            "<p>To stream your computer's playing audio (music, browser audio, etc.) instead of just your microphone, select your system loopback device from the dropdown.</p>"
+            "<h3>How to Stream System Audio</h3>"
+            "<p>Select your <b>microphone</b> for voice, or a <b>loopback device</b> "
+            "(BlackHole, Stereo Mix, etc.) to broadcast what is playing on your computer.</p>"
             "<hr/>"
-            "<h4>🍏 macOS Setup (BlackHole)</h4>"
+            "<h4>🍏 macOS Setup (microphone)</h4>"
             "<ol>"
-            "<li>Install <b>BlackHole 2ch</b> (free & open-source) via Homebrew:<br/>"
-            "<code>brew install blackhole-2ch</code></li>"
-            "<li>Open <b>Audio MIDI Setup</b> app on your Mac, click <b>+</b> (bottom-left) and choose <b>Create Multi-Output Device</b>.</li>"
-            "<li>Check both <b>BlackHole 2ch</b> and your physical speaker/headphones (so you can hear the music while streaming).</li>"
-            "<li>In Mac <b>System Settings > Sound</b>, change output to the new <b>Multi-Output Device</b>.</li>"
-            "<li>In this broadcaster app, restart or choose <b>BlackHole 2ch</b> as the source.</li>"
+            "<li>Select your microphone from the audio input dropdown.</li>"
+            "<li>Allow <b>Microphone</b> access when prompted.</li>"
+            "</ol>"
+            "<hr/>"
+            "<h4>🍏 macOS Setup (BlackHole loopback)</h4>"
+            "<ol>"
+            "<li>Install BlackHole if needed — it appears in the input list automatically.</li>"
+            "<li>Use Audio MIDI Setup → <b>Multi-Output Device</b> so you hear audio while streaming.</li>"
+            "<li>Select <b>BlackHole 2ch</b> from the dropdown.</li>"
             "</ol>"
             "<hr/>"
             "<h4>🪟 Windows Setup (Stereo Mix)</h4>"
@@ -1802,6 +1902,11 @@ def acquire_single_instance(app):
 
 
 if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()
+    _log_boot_marker()
+    setup_app_logging()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
