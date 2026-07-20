@@ -35,6 +35,7 @@ mkdir -p "$DIST_DIR" "$BUILD_DIR"
   --distpath "$DIST_DIR" \
   --specpath "$BUILD_DIR" \
   --icon="$BROADCASTER_DIR/assets/icon.png" \
+  --add-data "$BROADCASTER_DIR/assets/icon.png:assets" \
   --paths "$BROADCASTER_DIR" \
   --hidden-import=installer.linux.audio_permission \
   --hidden-import=PyQt5.QtNetwork \

@@ -3,11 +3,28 @@ set -e
 
 PERMISSIONS_DOC="/usr/share/doc/verisonic-broadcaster/audio-permissions.txt"
 
+_install_missing_runtime_deps() {
+  # Best-effort for users who installed with plain `dpkg -i` (skips Depends).
+  # Prefer: sudo apt install ./verisonic-broadcaster_*.deb
+  need=""
+  command -v wpctl >/dev/null 2>&1 || need="$need wireplumber"
+  command -v pw-dump >/dev/null 2>&1 || need="$need pipewire-bin"
+  if [ -n "$need" ] && command -v apt-get >/dev/null 2>&1; then
+    echo "Installing missing audio tooling:$need"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $need || true
+  fi
+}
+
 case "$1" in
   configure)
     if command -v update-desktop-database >/dev/null 2>&1; then
       update-desktop-database /usr/share/applications || true
     fi
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+      gtk-update-icon-cache -f -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
+    fi
+
+    _install_missing_runtime_deps
 
     echo "VeriSonic Broadcaster installed."
     echo "Launch from Applications (search: VeriSonic Broadcaster) or run: verisonic-broadcaster"

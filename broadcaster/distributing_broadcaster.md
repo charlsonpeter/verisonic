@@ -290,6 +290,11 @@ VERISONIC_DEB_VERSION=1.0.0 broadcaster/installer/linux/build_deb.sh
 **Install:**
 
 ```bash
+# Preferred — apt resolves and installs Depends automatically
+# (libportaudio2, wireplumber/wpctl, pipewire-bin, pipewire-pulse, …)
+sudo apt install ./broadcaster/dist/verisonic-broadcaster_1.0.0_amd64.deb
+
+# Or with dpkg, then fix missing Depends:
 sudo dpkg -i broadcaster/dist/verisonic-broadcaster_1.0.0_amd64.deb
 sudo apt-get install -f
 ```

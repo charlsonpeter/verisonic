@@ -34,4 +34,5 @@ Linux
      sudo usermod -aG audio $USER
    Then log out and back in.
 2. On PipeWire/PulseAudio desktops, allow microphone/input capture when prompted.
-3. Select the correct PortAudio input device in the broadcaster app.
+3. The .deb installer pulls in WirePlumber (wpctl) and PipeWire tools for listing
+   connected mics/headsets. Select the correct input in the broadcaster app.

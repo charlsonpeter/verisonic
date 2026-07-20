@@ -30,9 +30,10 @@ USE_PYQT = False
 try:
     from PyQt5.QtWidgets import (
         QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-        QLabel, QComboBox, QLineEdit, QPushButton, QCheckBox, QFrame, QProgressBar, QMessageBox, QStackedWidget
+        QLabel, QComboBox, QLineEdit, QPushButton, QCheckBox, QFrame, QProgressBar, QMessageBox, QStackedWidget,
+        QStyledItemDelegate,
     )
-    from PyQt5.QtCore import QTimer, Qt
+    from PyQt5.QtCore import QTimer, Qt, QEvent, QObject
     from PyQt5.QtGui import QFont, QPalette, QColor, QPainter, QBrush, QPen
     from PyQt5.QtNetwork import QLocalServer, QLocalSocket
     USE_PYQT = True
@@ -413,6 +414,38 @@ _LOOPBACK_DEVICE_KEYWORDS = (
     "monitor of",
 )
 
+# ALSA plugin / virtual nodes that clutter PortAudio device lists on Ubuntu.
+_LINUX_SKIP_INPUT_EXACT = frozenset({
+    "dmix",
+    "dsnoop",
+    "null",
+    "jack",
+    "oss",
+    "sysdefault",
+})
+_LINUX_SKIP_INPUT_PREFIXES = (
+    "dmix:",
+    "dsnoop:",
+    "null:",
+    "hw:",
+    "plughw:",
+    "sysdefault:",
+    "front:",
+    "rear:",
+    "center_lfe:",
+    "side:",
+    "surround",
+    "usbstream:",
+    "samplerate",
+    "speex",
+    "upmix",
+    "vdownmix",
+    "lavrate",
+    "a52:",
+    "hdmi:",
+)
+_LINUX_SOUND_SERVER_NAMES = frozenset({"default", "pulse", "pipewire"})
+
 
 class PyQtBroadcasterApp(QMainWindow):
     def __init__(self):
@@ -420,7 +453,7 @@ class PyQtBroadcasterApp(QMainWindow):
         self.setWindowTitle("VeriSonic Live Broadcaster")
         self.setFixedSize(500, 560)
         
-        icon = self.create_radio_icon()
+        icon = self.load_app_icon()
         self.setWindowIcon(icon)
         QApplication.setWindowIcon(icon)
         
@@ -436,6 +469,8 @@ class PyQtBroadcasterApp(QMainWindow):
         self.current_frequency_levels = [0] * 20
         self.broadcast_error = None
         self.active_device_id = None
+        self.active_pulse_source = None
+        self.active_wp_id = None
         self._active_device_name = ""
         self.selected_station_id = None
         self.user_stations = []
@@ -444,14 +479,13 @@ class PyQtBroadcasterApp(QMainWindow):
         # System Tray State
         self.quit_from_tray = False
         self._mac_audio_probe_done = False
-        self._audio_guidance_shown = False
         self._audio_io_lock = threading.Lock()
         
         # Session parameters and settings
         self.load_config()
         
         # Style sheet definition
-        self.setStyleSheet("""
+        stylesheet = """
             QMainWindow {
                 background-color: #0b0f19;
             }
@@ -504,9 +538,131 @@ class PyQtBroadcasterApp(QMainWindow):
                 background-color: #334155;
                 color: #64748b;
             }
-        """)
+        """
+        # Linux/Windows: system light palettes clash with inherited light text (dialogs + combo popups).
+        # macOS keeps native styling — leave it alone.
+        if sys.platform in ("linux", "win32"):
+            arrow_path = self._linux_combo_arrow_path().replace("\\", "/")
+            stylesheet += f"""
+                QMessageBox {{
+                    background-color: #151d30;
+                    color: #f8fafc;
+                }}
+                QMessageBox QLabel {{
+                    color: #f8fafc;
+                }}
+                QMessageBox QPushButton {{
+                    background-color: #1e293b;
+                    color: #f8fafc;
+                    border: 1px solid #334155;
+                    border-radius: 6px;
+                    padding: 6px 14px;
+                    min-width: 80px;
+                }}
+                QMessageBox QPushButton:hover {{
+                    background-color: #334155;
+                }}
+                QComboBox {{
+                    background-color: #0d1321;
+                    color: #f8fafc;
+                    border: 1px solid #1e293b;
+                    border-radius: 8px;
+                    padding: 8px 36px 8px 12px;
+                    font-size: 13px;
+                    min-height: 20px;
+                }}
+                QComboBox:hover {{
+                    border: 1px solid #475569;
+                }}
+                QComboBox:focus {{
+                    border: 1px solid #f43f5e;
+                }}
+                QComboBox:on {{
+                    border: 1px solid #f43f5e;
+                }}
+                QComboBox::drop-down {{
+                    subcontrol-origin: padding;
+                    subcontrol-position: top right;
+                    width: 32px;
+                    border: none;
+                    background: transparent;
+                }}
+                QComboBox::drop-down:hover {{
+                    background-color: #1e293b;
+                    border-top-right-radius: 8px;
+                    border-bottom-right-radius: 8px;
+                }}
+                QComboBox::down-arrow {{
+                    image: url({arrow_path});
+                    width: 12px;
+                    height: 12px;
+                }}
+                QComboBox QAbstractItemView {{
+                    background-color: #0d1321;
+                    color: #f8fafc;
+                    selection-background-color: #be123c;
+                    selection-color: #ffffff;
+                    border: 1px solid #1e293b;
+                    border-radius: 0px;
+                    padding: 0px;
+                    outline: 0;
+                    margin: 0px;
+                }}
+                QComboBox QAbstractItemView::item {{
+                    min-height: 30px;
+                    padding: 6px 12px;
+                    margin: 0px;
+                    border: none;
+                    color: #f8fafc;
+                    background-color: #0d1321;
+                }}
+                QComboBox QAbstractItemView::item:hover {{
+                    background-color: #334155;
+                    color: #f8fafc;
+                }}
+                QComboBox QAbstractItemView::item:selected {{
+                    background-color: #be123c;
+                    color: #ffffff;
+                }}
+                QComboBox QListView {{
+                    background-color: #0d1321;
+                    color: #f8fafc;
+                    border: 1px solid #1e293b;
+                    outline: 0;
+                    padding: 0px;
+                }}
+                QComboBox QListView::item:hover {{
+                    background-color: #334155;
+                    color: #f8fafc;
+                }}
+                QComboBox QListView::item:selected {{
+                    background-color: #be123c;
+                    color: #ffffff;
+                }}
+                QComboBox QScrollBar:vertical {{
+                    background: #0d1321;
+                    width: 10px;
+                    margin: 0px;
+                    border: none;
+                }}
+                QComboBox QScrollBar::handle:vertical {{
+                    background: #334155;
+                    min-height: 20px;
+                    border-radius: 4px;
+                }}
+                QComboBox QScrollBar::add-line:vertical,
+                QComboBox QScrollBar::sub-line:vertical {{
+                    height: 0px;
+                }}
+                QComboBox QScrollBar::add-page:vertical,
+                QComboBox QScrollBar::sub-page:vertical {{
+                    background: #0d1321;
+                }}
+            """
+        self.setStyleSheet(stylesheet)
         
         self.init_ui()
+        self._apply_combo_popup_palette()
         
         # Start GUI Refresh Timer (50ms)
         self.timer = QTimer()
@@ -525,38 +681,6 @@ class PyQtBroadcasterApp(QMainWindow):
         if sys.platform == "darwin" and not self._mac_audio_probe_done:
             self._mac_audio_probe_done = True
             QTimer.singleShot(800, self.request_macos_audio_access)
-        elif sys.platform in ("win32", "linux") and not self._audio_guidance_shown:
-            self._audio_guidance_shown = True
-            QTimer.singleShot(800, self._prompt_audio_input_guidance)
-
-    def _prompt_audio_input_guidance(self):
-        """First-run guidance for Windows/Linux (no macOS TCC API)."""
-        if sys.platform == "win32":
-            body = (
-                "VeriSonic Broadcaster captures live audio from the input you choose "
-                "(microphone, line-in, USB interface, or loopback).\n\n"
-                "Allow desktop apps under Settings → Privacy & security → Microphone, "
-                "then verify your capture device under Settings → System → Sound → Input."
-            )
-        elif sys.platform == "linux":
-            body = (
-                "VeriSonic Broadcaster captures live audio from the input you choose "
-                "(microphone, line-in, USB interface, or loopback).\n\n"
-                "Ensure your user is in the audio group (sudo usermod -aG audio $USER, "
-                "then log out and back in). Allow capture when PipeWire/PulseAudio prompts."
-            )
-        else:
-            return
-
-        msg = QMessageBox(self)
-        msg.setIcon(QMessageBox.Information)
-        msg.setWindowTitle("Audio Input Permissions")
-        msg.setText(body)
-        settings_btn = msg.addButton("Open Audio Settings", QMessageBox.ActionRole)
-        msg.addButton(QMessageBox.Ok)
-        msg.exec_()
-        if msg.clickedButton() == settings_btn:
-            open_platform_audio_privacy_settings()
 
     def request_macos_audio_access(self):
         """Request microphone permission (macOS)."""
@@ -651,10 +775,451 @@ class PyQtBroadcasterApp(QMainWindow):
         if msg.clickedButton() == settings_btn:
             open_platform_audio_privacy_settings()
 
+    def _apply_combo_popup_palette(self):
+        """Dark popup + painted hover highlight (CSS :hover is unreliable on Linux)."""
+        if sys.platform not in ("linux", "win32") or not USE_PYQT:
+            return
+
+        class _ComboHoverDelegate(QStyledItemDelegate):
+            def __init__(self, parent=None):
+                super().__init__(parent)
+                self.hover_row = -1
+
+            def set_hover_row(self, row, view):
+                if self.hover_row == row:
+                    return
+                old = self.hover_row
+                self.hover_row = row
+                model = view.model()
+                if model is None:
+                    return
+                if 0 <= old < model.rowCount():
+                    view.update(model.index(old, 0))
+                if 0 <= row < model.rowCount():
+                    view.update(model.index(row, 0))
+
+            def paint(self, painter, option, index):
+                painter.save()
+                rect = option.rect
+                hovered = index.row() == self.hover_row
+                painter.fillRect(rect, QColor("#334155" if hovered else "#0d1321"))
+                painter.setPen(QColor("#f8fafc"))
+                text = index.data(Qt.DisplayRole)
+                painter.drawText(
+                    rect.adjusted(12, 0, -12, 0),
+                    Qt.AlignVCenter | Qt.AlignLeft,
+                    "" if text is None else str(text),
+                )
+                painter.restore()
+
+            def sizeHint(self, option, index):
+                size = super().sizeHint(option, index)
+                if size.height() < 32:
+                    size.setHeight(32)
+                return size
+
+        class _ComboHoverFilter(QObject):
+            def __init__(self, view, delegate):
+                super().__init__(view)
+                self._view = view
+                self._delegate = delegate
+
+            def eventFilter(self, obj, event):
+                if self._view is None or self._delegate is None:
+                    return False
+                if event.type() == QEvent.MouseMove:
+                    index = self._view.indexAt(event.pos())
+                    row = index.row() if index.isValid() else -1
+                    self._delegate.set_hover_row(row, self._view)
+                elif event.type() in (QEvent.Leave, QEvent.HoverLeave):
+                    self._delegate.set_hover_row(-1, self._view)
+                return False
+
+        if not hasattr(self, "_combo_hover_filters"):
+            self._combo_hover_filters = []
+
+        base = QColor("#0d1321")
+        text = QColor("#f8fafc")
+        hover = QColor("#334155")
+
+        for combo in self.findChildren(QComboBox):
+            if combo.property("_verisonic_hover_styled"):
+                continue
+            combo.setProperty("_verisonic_hover_styled", True)
+
+            pal = combo.palette()
+            pal.setColor(QPalette.Base, base)
+            pal.setColor(QPalette.Text, text)
+            pal.setColor(QPalette.Button, base)
+            pal.setColor(QPalette.ButtonText, text)
+            pal.setColor(QPalette.Highlight, hover)
+            pal.setColor(QPalette.HighlightedText, text)
+            pal.setColor(QPalette.Window, base)
+            pal.setColor(QPalette.WindowText, text)
+            combo.setPalette(pal)
+
+            view = combo.view()
+            if view is None:
+                continue
+            view.setPalette(pal)
+            view.setAutoFillBackground(True)
+            view.setMouseTracking(True)
+            view.viewport().setMouseTracking(True)
+            view.viewport().setAttribute(Qt.WA_Hover, True)
+            view.setStyleSheet(
+                "background-color: #0d1321; color: #f8fafc; border: 1px solid #1e293b; "
+                "outline: 0; padding: 0px;"
+            )
+            delegate = _ComboHoverDelegate(view)
+            view.setItemDelegate(delegate)
+            hover_filter = _ComboHoverFilter(view, delegate)
+            view.viewport().installEventFilter(hover_filter)
+            self._combo_hover_filters.append(hover_filter)
+            frame = view.parentWidget()
+            if frame is not None:
+                frame.setStyleSheet("background-color: #0d1321; border: 1px solid #1e293b;")
+                frame.setAutoFillBackground(True)
+
+    @staticmethod
+    def _linux_combo_arrow_path():
+        """Cache a small chevron SVG for QComboBox::down-arrow (Qt stylesheet)."""
+        import tempfile
+
+        path = os.path.join(tempfile.gettempdir(), "verisonic_combo_arrow.svg")
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12">'
+            '<path fill="none" stroke="#94a3b8" stroke-width="1.4" '
+            'stroke-linecap="round" stroke-linejoin="round" d="M2.5 4.5L6 8l3.5-3.5"/>'
+            "</svg>"
+        )
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(svg)
+        except Exception:
+            pass
+        return path
+
     @staticmethod
     def _is_loopback_device_name(name):
         n = (name or "").lower()
         return any(kw in n for kw in _LOOPBACK_DEVICE_KEYWORDS)
+
+    @staticmethod
+    def _linux_is_sound_server_device(name):
+        n = (name or "").strip().lower()
+        return n in _LINUX_SOUND_SERVER_NAMES or n.startswith("pipewire")
+
+    @staticmethod
+    def _linux_should_skip_input_device(name):
+        n = (name or "").strip().lower()
+        if not n:
+            return True
+        if PyQtBroadcasterApp._linux_is_sound_server_device(n):
+            return False
+        if "(hw:" in n:
+            return True
+        if n in _LINUX_SKIP_INPUT_EXACT:
+            return True
+        return any(n.startswith(prefix) for prefix in _LINUX_SKIP_INPUT_PREFIXES)
+
+    @staticmethod
+    def _linux_run_cmd(args, timeout=4):
+        import subprocess
+
+        try:
+            return subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            return None
+
+    @staticmethod
+    def _linux_list_wpctl_sources():
+        """Parse `wpctl status` Sources section (works without pulseaudio-utils)."""
+        import re
+
+        proc = PyQtBroadcasterApp._linux_run_cmd(["wpctl", "status"], timeout=4)
+        if proc is None or proc.returncode != 0 or not (proc.stdout or "").strip():
+            return []
+
+        results = []
+        in_sources = False
+        source_re = re.compile(r"(\d+)\.\s+(.+?)(?:\s+\[vol:[^\]]*\])?\s*$")
+        for line in (proc.stdout or "").splitlines():
+            if re.search(r"Sources:\s*$", line):
+                in_sources = True
+                continue
+            if not in_sources:
+                continue
+            if re.search(r"[├└]─\s+\S+:\s*$", line) and "Sources:" not in line:
+                break
+            match = source_re.search(line)
+            if not match:
+                continue
+            wp_id = int(match.group(1))
+            label = match.group(2).strip()
+            if not label:
+                continue
+            lower = label.lower()
+            if any(tok in lower for tok in ("auto_null", "dummy", "midi", "virmidi")):
+                continue
+            is_monitor = "monitor" in lower
+            if is_monitor and not lower.startswith("system audio"):
+                label = f"System Audio (loopback) — {label}"
+            results.append({
+                "wp_id": wp_id,
+                "pulse_source": None,
+                "name": label,
+                "is_monitor": is_monitor,
+                "is_default": "*" in line[: match.start()],
+            })
+
+        results.sort(key=lambda item: (1 if item["is_monitor"] else 0, item["name"].lower()))
+        return results
+
+    @staticmethod
+    def _linux_list_pw_dump_sources():
+        """List Audio/Source nodes via pw-dump JSON."""
+        proc = PyQtBroadcasterApp._linux_run_cmd(["pw-dump"], timeout=6)
+        if proc is None or proc.returncode != 0 or not (proc.stdout or "").strip():
+            return []
+        try:
+            objects = json.loads(proc.stdout)
+        except Exception:
+            return []
+
+        results = []
+        for obj in objects:
+            if not isinstance(obj, dict):
+                continue
+            info = obj.get("info") or {}
+            props = info.get("props") or {}
+            if (props.get("media.class") or "") != "Audio/Source":
+                continue
+            node_id = obj.get("id")
+            if node_id is None:
+                continue
+            label = (
+                props.get("node.description")
+                or props.get("node.nick")
+                or props.get("device.description")
+                or props.get("node.name")
+                or f"Input {node_id}"
+            )
+            node_name = str(props.get("node.name") or "")
+            lower = f"{label} {node_name}".lower()
+            if any(tok in lower for tok in ("auto_null", "dummy", "midi", "virmidi")):
+                continue
+            is_monitor = node_name.endswith(".monitor") or "monitor" in lower
+            if is_monitor:
+                clean = label
+                if clean.lower().startswith("monitor of "):
+                    clean = clean[11:].strip()
+                label = f"System Audio (loopback) — {clean}"
+            results.append({
+                "wp_id": int(node_id),
+                "pulse_source": node_name or None,
+                "name": label,
+                "is_monitor": is_monitor,
+                "is_default": False,
+            })
+
+        results.sort(key=lambda item: (1 if item["is_monitor"] else 0, item["name"].lower()))
+        return results
+
+    @staticmethod
+    def _linux_list_pactl_sources():
+        """Optional pactl listing when pulseaudio-utils is installed."""
+        proc = PyQtBroadcasterApp._linux_run_cmd(["pactl", "list", "short", "sources"], timeout=3)
+        if proc is None or proc.returncode != 0:
+            return []
+
+        short_names = []
+        for line in (proc.stdout or "").splitlines():
+            parts = line.split("\t") if "\t" in line else line.split()
+            if len(parts) >= 2:
+                short_names.append(parts[1].strip())
+
+        detail = PyQtBroadcasterApp._linux_run_cmd(["pactl", "list", "sources"], timeout=4)
+        descriptions = {}
+        if detail is not None and detail.returncode == 0:
+            current_name = ""
+            for line in (detail.stdout or "").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("Name:"):
+                    current_name = stripped.split(":", 1)[-1].strip()
+                elif stripped.startswith("Description:") and current_name:
+                    descriptions[current_name] = stripped.split(":", 1)[-1].strip()
+
+        results = []
+        for pulse_name in short_names:
+            if not pulse_name:
+                continue
+            desc = descriptions.get(pulse_name) or pulse_name
+            lower = f"{pulse_name} {desc}".lower()
+            if any(tok in lower for tok in ("auto_null", "dummy", "midi", "virmidi")):
+                continue
+            is_monitor = pulse_name.endswith(".monitor") or desc.lower().startswith("monitor of ")
+            if is_monitor:
+                rest = desc[11:].strip() if desc.lower().startswith("monitor of ") else desc
+                label = f"System Audio (loopback) — {rest}"
+            else:
+                label = desc
+            results.append({
+                "wp_id": None,
+                "pulse_source": pulse_name,
+                "name": label,
+                "is_monitor": is_monitor,
+                "is_default": False,
+            })
+        results.sort(key=lambda item: (1 if item["is_monitor"] else 0, item["name"].lower()))
+        return results
+
+    @staticmethod
+    def _linux_list_capture_sources():
+        """Discover connected capture sources via wpctl, pw-dump, or pactl."""
+        for lister in (
+            PyQtBroadcasterApp._linux_list_wpctl_sources,
+            PyQtBroadcasterApp._linux_list_pw_dump_sources,
+            PyQtBroadcasterApp._linux_list_pactl_sources,
+        ):
+            try:
+                sources = lister()
+            except Exception:
+                sources = []
+            if sources:
+                return sources
+        return []
+
+    @staticmethod
+    def _linux_default_capture_keys():
+        """Return (wp_id, pulse_source) for the current default input, if known."""
+        for src in PyQtBroadcasterApp._linux_list_wpctl_sources():
+            if src.get("is_default"):
+                return src.get("wp_id"), src.get("pulse_source")
+
+        proc = PyQtBroadcasterApp._linux_run_cmd(["pactl", "get-default-source"], timeout=2)
+        if proc is not None and proc.returncode == 0:
+            name = (proc.stdout or "").strip()
+            if name:
+                return None, name
+        return None, None
+
+    @staticmethod
+    def _linux_apply_capture_source(pulse_source=None, wp_id=None):
+        """Route PipeWire/Pulse capture to the selected source."""
+        if wp_id is not None:
+            PyQtBroadcasterApp._linux_run_cmd(["wpctl", "set-default", str(wp_id)], timeout=2)
+        if pulse_source:
+            os.environ["PULSE_SOURCE"] = pulse_source
+            PyQtBroadcasterApp._linux_run_cmd(
+                ["pactl", "set-default-source", pulse_source],
+                timeout=2,
+            )
+
+    @staticmethod
+    def _friendly_linux_input_name(name):
+        raw = (name or "").strip() or "Unknown Device"
+        lower = raw.lower()
+        if lower == "default":
+            return "System Default Input"
+        if lower == "pulse":
+            return "System Default Input (PulseAudio)"
+        if lower == "pipewire" or lower.startswith("pipewire"):
+            return "System Default Input (PipeWire)"
+        if lower.startswith("monitor of "):
+            rest = raw[11:].strip()
+            return f"System Audio (loopback) — {rest}"
+        if lower.startswith("alsa_input."):
+            tail = raw.rsplit(".", 1)[-1].replace("-", " ").replace("_", " ").strip()
+            return tail.title() if tail else raw
+        if lower.startswith("alsa_output."):
+            tail = raw.rsplit(".", 1)[-1].replace("-", " ").replace("_", " ").strip()
+            label = tail.title() if tail else raw
+            return f"System Audio (loopback) — {label}"
+        if "(hw:" in lower:
+            card = raw.split(":", 1)[0].strip() or "Audio Device"
+            return f"{card} (direct)"
+        return raw
+
+    @staticmethod
+    def _linux_pick_sound_server_device(candidates):
+        """Prefer PipeWire, then PulseAudio, then PortAudio 'default'."""
+        ranked = []
+        for item in candidates:
+            n = (item.get("raw_name") or "").strip().lower()
+            if n == "pipewire" or n.startswith("pipewire"):
+                ranked.append((0, item))
+            elif n == "pulse":
+                ranked.append((1, item))
+            elif n == "default":
+                ranked.append((2, item))
+        if not ranked:
+            return None
+        ranked.sort(key=lambda pair: pair[0])
+        return ranked[0][1]
+
+    def _get_linux_input_devices(self, device_list):
+        """List connected PipeWire sources with clear names; hide ALSA hw clutter."""
+        sound_server = []
+        fallback = []
+        for idx, dev in enumerate(device_list):
+            if dev.get("max_input_channels", 0) <= 0:
+                continue
+            raw_name = dev.get("name", "Unknown Device") or "Unknown Device"
+            entry = {"id": idx, "raw_name": raw_name}
+            if self._linux_is_sound_server_device(raw_name):
+                sound_server.append(entry)
+            elif not self._linux_should_skip_input_device(raw_name):
+                fallback.append(entry)
+
+        chosen = self._linux_pick_sound_server_device(sound_server)
+        capture_sources = self._linux_list_capture_sources()
+        if chosen is not None and capture_sources:
+            return [{
+                "id": chosen["id"],
+                "name": src["name"],
+                "raw_name": chosen["raw_name"],
+                "pulse_source": src.get("pulse_source"),
+                "wp_id": src.get("wp_id"),
+                "is_default": bool(src.get("is_default")),
+            } for src in capture_sources]
+
+        if chosen is not None:
+            return [{
+                "id": chosen["id"],
+                "name": self._friendly_linux_input_name(chosen["raw_name"]),
+                "raw_name": chosen["raw_name"],
+                "pulse_source": None,
+                "wp_id": None,
+            }]
+
+        try:
+            default_input_id = sd.default.device[0]
+            if default_input_id is not None and int(default_input_id) >= 0:
+                info = sd.query_devices(int(default_input_id), "input")
+                raw_name = info.get("name", "Unknown Device") or "Unknown Device"
+                return [{
+                    "id": int(default_input_id),
+                    "name": self._friendly_linux_input_name(raw_name),
+                    "raw_name": raw_name,
+                    "pulse_source": None,
+                    "wp_id": None,
+                }]
+        except Exception:
+            pass
+
+        return [{
+            "id": entry["id"],
+            "name": self._friendly_linux_input_name(entry["raw_name"]),
+            "raw_name": entry["raw_name"],
+            "pulse_source": None,
+            "wp_id": None,
+        } for entry in fallback]
 
     @staticmethod
     def _normalize_device_name(name):
@@ -674,17 +1239,32 @@ class PyQtBroadcasterApp(QMainWindow):
         """Prefer the system default input, otherwise the first non-loopback mic."""
         if not self.devices:
             return -1
+        if sys.platform == "linux":
+            default_wp_id, default_src = self._linux_default_capture_keys()
+            if default_wp_id is not None:
+                for i, dev in enumerate(self.devices):
+                    if dev.get("wp_id") == default_wp_id:
+                        return i
+            if default_src:
+                for i, dev in enumerate(self.devices):
+                    if dev.get("pulse_source") == default_src:
+                        return i
+            for i, dev in enumerate(self.devices):
+                if dev.get("is_default"):
+                    return i
         try:
             default_input_id = sd.default.device[0]
             if default_input_id is not None and int(default_input_id) >= 0:
                 for i, dev in enumerate(self.devices):
                     if dev["id"] == int(default_input_id):
-                        if not self._is_loopback_device_name(dev["name"]):
+                        label = dev.get("raw_name") or dev["name"]
+                        if not self._is_loopback_device_name(label) and not self._is_loopback_device_name(dev["name"]):
                             return i
         except Exception:
             pass
         for i, dev in enumerate(self.devices):
-            if not self._is_loopback_device_name(dev["name"]):
+            label = dev.get("raw_name") or dev["name"]
+            if not self._is_loopback_device_name(label) and not self._is_loopback_device_name(dev["name"]):
                 return i
         return -1
 
@@ -701,7 +1281,7 @@ class PyQtBroadcasterApp(QMainWindow):
             return -1
         return self._default_input_device_index()
 
-    def _populate_input_device_combos(self, selected_id=None):
+    def _populate_input_device_combos(self, selected_id=None, selected_pulse_source=None, selected_wp_id=None):
         self.devices = self.get_input_devices()
         names = [dev["name"] for dev in self.devices]
         combo = getattr(self, "live_device_combo", None)
@@ -711,7 +1291,30 @@ class PyQtBroadcasterApp(QMainWindow):
         combo.clear()
         if names:
             combo.addItems(names)
-        if selected_id is not None:
+        pulse_source = (
+            selected_pulse_source
+            if selected_pulse_source is not None
+            else getattr(self, "active_pulse_source", None)
+        )
+        wp_id = (
+            selected_wp_id
+            if selected_wp_id is not None
+            else getattr(self, "active_wp_id", None)
+        )
+        selected = False
+        if wp_id is not None:
+            for i, dev in enumerate(self.devices):
+                if dev.get("wp_id") == wp_id:
+                    combo.setCurrentIndex(i)
+                    selected = True
+                    break
+        if not selected and pulse_source:
+            for i, dev in enumerate(self.devices):
+                if dev.get("pulse_source") == pulse_source:
+                    combo.setCurrentIndex(i)
+                    selected = True
+                    break
+        if not selected and selected_id is not None:
             for i, dev in enumerate(self.devices):
                 if dev.get("id") == selected_id:
                     combo.setCurrentIndex(i)
@@ -721,10 +1324,18 @@ class PyQtBroadcasterApp(QMainWindow):
     def refresh_input_devices(self):
         """Reload input devices for the Live screen dropdown."""
         selected_id = getattr(self, "active_device_id", None)
-        self._populate_input_device_combos(selected_id=selected_id)
+        selected_pulse = getattr(self, "active_pulse_source", None)
+        selected_wp = getattr(self, "active_wp_id", None)
+        self._populate_input_device_combos(
+            selected_id=selected_id,
+            selected_pulse_source=selected_pulse,
+            selected_wp_id=selected_wp,
+        )
 
-    def _open_input_stream(self, stream_kwargs):
+    def _open_input_stream(self, stream_kwargs, pulse_source=None, wp_id=None):
         with self._audio_io_lock:
+            if sys.platform == "linux" and (pulse_source or wp_id is not None):
+                self._linux_apply_capture_source(pulse_source=pulse_source, wp_id=wp_id)
             stream = sd.InputStream(**stream_kwargs)
             stream.start()
             return stream
@@ -1236,12 +1847,20 @@ class PyQtBroadcasterApp(QMainWindow):
         device_id = self.devices[index]["id"]
         device_name = self.devices[index]["name"]
         self.active_device_id = device_id
+        self.active_pulse_source = self.devices[index].get("pulse_source")
+        self.active_wp_id = self.devices[index].get("wp_id")
         self._active_device_name = device_name
-        print("Dynamic hot-swap request: Input device ID ->", device_id, device_name)
+        print(
+            "Dynamic hot-swap request: Input device ID ->",
+            device_id,
+            device_name,
+            self.active_pulse_source,
+            self.active_wp_id,
+        )
         if self.is_broadcasting:
             self.connection_status = "Switching input..."
 
-    def _open_portaudio_input_callback(self, device_id, channels, samplerate):
+    def _open_portaudio_input_callback(self, device_id, channels, samplerate, pulse_source=None, wp_id=None):
         def audio_callback(indata, frames, time_info, status):
             if status:
                 print("Audio input status:", status)
@@ -1259,7 +1878,11 @@ class PyQtBroadcasterApp(QMainWindow):
         }
         if sys.platform == "darwin":
             stream_kwargs["latency"] = "high"
-        return self._open_input_stream(stream_kwargs)
+        return self._open_input_stream(
+            stream_kwargs,
+            pulse_source=pulse_source,
+            wp_id=wp_id,
+        )
 
     def _loopback_capture_error_message(self, device_name):
         if sys.platform == "darwin":
@@ -1411,7 +2034,13 @@ class PyQtBroadcasterApp(QMainWindow):
         self.live_station_title.setText(station_name)
         
         # Load and sync device selections to live dropdown
-        self._populate_input_device_combos(selected_id=device_id)
+        self.active_pulse_source = self.devices[selected_idx].get("pulse_source")
+        self.active_wp_id = self.devices[selected_idx].get("wp_id")
+        self._populate_input_device_combos(
+            selected_id=device_id,
+            selected_pulse_source=self.active_pulse_source,
+            selected_wp_id=self.active_wp_id,
+        )
         if selected_idx >= 0:
             self.live_device_combo.setCurrentIndex(selected_idx)
         self._active_device_name = self.devices[selected_idx]["name"]
@@ -1478,6 +2107,8 @@ class PyQtBroadcasterApp(QMainWindow):
         max_attempts = 100
         self.active_device_id = device_id
         current_stream_device_id = None
+        current_pulse_source = None
+        current_wp_id = None
         audio_stream = None
         encoder = None
         vu_task = None
@@ -1537,16 +2168,23 @@ class PyQtBroadcasterApp(QMainWindow):
 
         def open_capture_for_active_device():
             """Open/replace PortAudio capture for active_device_id without touching the WebSocket."""
-            nonlocal audio_stream, encoder, current_stream_device_id, vu_task
+            nonlocal audio_stream, encoder, current_stream_device_id, current_pulse_source, current_wp_id, vu_task
 
-            if self.active_device_id == current_stream_device_id and audio_stream is not None:
+            pulse_source = getattr(self, "active_pulse_source", None)
+            wp_id = getattr(self, "active_wp_id", None)
+            if (
+                self.active_device_id == current_stream_device_id
+                and pulse_source == current_pulse_source
+                and wp_id == current_wp_id
+                and audio_stream is not None
+            ):
                 return True
 
             channels, samplerate = self.get_device_capture_params(self.active_device_id)
             device_label = getattr(self, "_active_device_name", "")
             print(
                 f"Opening audio input device {self.active_device_id} "
-                f"({device_label}): {channels}ch @ {samplerate}Hz"
+                f"({device_label}, pulse={pulse_source}, wp={wp_id}): {channels}ch @ {samplerate}Hz"
             )
 
             if audio_stream:
@@ -1564,7 +2202,11 @@ class PyQtBroadcasterApp(QMainWindow):
 
             try:
                 audio_stream = self._open_portaudio_input_callback(
-                    self.active_device_id, channels, samplerate
+                    self.active_device_id,
+                    channels,
+                    samplerate,
+                    pulse_source=pulse_source,
+                    wp_id=wp_id,
                 )
             except Exception as ae:
                 print("Failed to open audio capture:", ae)
@@ -1576,6 +2218,8 @@ class PyQtBroadcasterApp(QMainWindow):
                 return False
 
             current_stream_device_id = self.active_device_id
+            current_pulse_source = pulse_source
+            current_wp_id = wp_id
 
             if vu_task is None or vu_task.done():
                 vu_task = asyncio.ensure_future(vu_loop())
@@ -1631,7 +2275,11 @@ class PyQtBroadcasterApp(QMainWindow):
                         break
 
                     while self.is_broadcasting:
-                        if self.active_device_id != current_stream_device_id:
+                        if (
+                            self.active_device_id != current_stream_device_id
+                            or getattr(self, "active_pulse_source", None) != current_pulse_source
+                            or getattr(self, "active_wp_id", None) != current_wp_id
+                        ):
                             print("Input device changed — swapping capture source (WebSocket stays open)")
                             if not open_capture_for_active_device():
                                 self.is_broadcasting = False
@@ -1736,37 +2384,74 @@ class PyQtBroadcasterApp(QMainWindow):
     # =====================================================================
     # COMPONENT HELPERS & UTILITIES
     # =====================================================================
+    def _app_icon_paths(self):
+        """Candidate PNG paths for window/tray/desktop icon."""
+        paths = []
+        if getattr(sys, "frozen", False):
+            meipass = getattr(sys, "_MEIPASS", None)
+            if meipass:
+                paths.append(os.path.join(meipass, "assets", "icon.png"))
+            exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+            paths.append(os.path.join(exe_dir, "assets", "icon.png"))
+        paths.append(os.path.join(_BROADCASTER_DIR, "assets", "icon.png"))
+        paths.extend([
+            "/usr/share/icons/hicolor/256x256/apps/verisonic-broadcaster.png",
+            "/usr/share/icons/hicolor/128x128/apps/verisonic-broadcaster.png",
+            "/usr/share/icons/hicolor/512x512/apps/verisonic-broadcaster.png",
+            "/usr/share/pixmaps/verisonic-broadcaster.png",
+        ])
+        return paths
+
+    def load_app_icon(self):
+        """Load branded icon from assets/install paths; fall back to painted radio mark."""
+        from PyQt5.QtGui import QIcon, QPixmap
+
+        icon = QIcon()
+        for path in self._app_icon_paths():
+            if path and os.path.isfile(path):
+                pixmap = QPixmap(path)
+                if not pixmap.isNull():
+                    icon.addPixmap(pixmap)
+                    for size in (16, 24, 32, 48, 64, 128, 256):
+                        icon.addPixmap(pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                    return icon
+        return self.create_radio_icon()
+
     def create_radio_icon(self):
         from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QPen
-        pixmap = QPixmap(32, 32)
-        pixmap.fill(Qt.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        
-        # Center dot
-        painter.setBrush(QColor("#f43f5e"))
-        painter.setPen(Qt.NoPen)
-        painter.drawEllipse(13, 13, 6, 6)
-        
-        # Waves
-        painter.setBrush(Qt.NoBrush)
-        pen = QPen(QColor("#f43f5e"), 2)
-        pen.setCapStyle(Qt.RoundCap)
-        painter.setPen(pen)
-        
-        painter.drawArc(8, 8, 16, 16, -60 * 16, 120 * 16)
-        painter.drawArc(8, 8, 16, 16, 120 * 16, 120 * 16)
-        
-        painter.drawArc(3, 3, 26, 26, -50 * 16, 100 * 16)
-        painter.drawArc(3, 3, 26, 26, 130 * 16, 100 * 16)
-        
-        painter.end()
-        return QIcon(pixmap)
+
+        icon = QIcon()
+        for size in (16, 24, 32, 48, 64, 128):
+            pixmap = QPixmap(size, size)
+            pixmap.fill(Qt.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+
+            scale = size / 32.0
+            painter.scale(scale, scale)
+
+            painter.setBrush(QColor("#f43f5e"))
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(13, 13, 6, 6)
+
+            painter.setBrush(Qt.NoBrush)
+            pen = QPen(QColor("#f43f5e"), 2)
+            pen.setCapStyle(Qt.RoundCap)
+            painter.setPen(pen)
+
+            painter.drawArc(8, 8, 16, 16, -60 * 16, 120 * 16)
+            painter.drawArc(8, 8, 16, 16, 120 * 16, 120 * 16)
+            painter.drawArc(3, 3, 26, 26, -50 * 16, 100 * 16)
+            painter.drawArc(3, 3, 26, 26, 130 * 16, 100 * 16)
+
+            painter.end()
+            icon.addPixmap(pixmap)
+        return icon
 
     def setup_tray_icon(self):
         from PyQt5.QtWidgets import QSystemTrayIcon, QMenu, QAction
         self.tray_icon = QSystemTrayIcon(self)
-        self.tray_icon.setIcon(self.windowIcon())
+        self.tray_icon.setIcon(self.windowIcon() if not self.windowIcon().isNull() else self.load_app_icon())
         
         tray_menu = QMenu()
         
@@ -1854,10 +2539,11 @@ class PyQtBroadcasterApp(QMainWindow):
         if not self.quit_from_tray:
             self.hide()
             self.set_mac_dock_icon_visible(False)
+            # NoIcon: Information/Warning temporarily replaces the tray icon (blue "i" on Ubuntu).
             self.tray_icon.showMessage(
                 "VeriSonic Broadcaster",
                 "Broadcaster is running in the system tray.",
-                QSystemTrayIcon.Information,
+                QSystemTrayIcon.NoIcon,
                 2000
             )
             event.ignore()
@@ -1897,12 +2583,17 @@ class PyQtBroadcasterApp(QMainWindow):
         devices = []
         try:
             device_list = sd.query_devices()
+            if sys.platform == "linux":
+                return self._get_linux_input_devices(device_list)
             for idx, dev in enumerate(device_list):
-                if dev.get("max_input_channels", 0) > 0:
-                    devices.append({
-                        "id": idx,
-                        "name": dev.get("name", "Unknown Device")
-                    })
+                if dev.get("max_input_channels", 0) <= 0:
+                    continue
+                raw_name = dev.get("name", "Unknown Device") or "Unknown Device"
+                devices.append({
+                    "id": idx,
+                    "name": raw_name,
+                    "raw_name": raw_name,
+                })
         except Exception as e:
             print("Error querying devices:", e)
         return devices
@@ -1951,6 +2642,138 @@ class PyQtBroadcasterApp(QMainWindow):
 SINGLE_INSTANCE_KEY = "com.verisonic.broadcaster"
 
 
+def _resolve_app_icon_file():
+    """Absolute path to the best available PNG icon, or empty string."""
+    candidates = []
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(os.path.join(meipass, "assets", "icon.png"))
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "assets", "icon.png"))
+    candidates.append(os.path.join(_BROADCASTER_DIR, "assets", "icon.png"))
+    candidates.extend([
+        os.path.expanduser("~/.local/share/icons/hicolor/256x256/apps/verisonic-broadcaster.png"),
+        "/usr/share/icons/hicolor/256x256/apps/verisonic-broadcaster.png",
+        "/usr/share/icons/hicolor/128x128/apps/verisonic-broadcaster.png",
+        "/usr/share/icons/hicolor/512x512/apps/verisonic-broadcaster.png",
+        "/usr/share/pixmaps/verisonic-broadcaster.png",
+    ])
+    for path in candidates:
+        if path and os.path.isfile(path):
+            return os.path.abspath(path)
+    return ""
+
+
+def _install_linux_user_icon(source_png):
+    """Install icon into the user hicolor theme so Icon=verisonic-broadcaster resolves."""
+    if not source_png or not os.path.isfile(source_png):
+        return False
+    import shutil
+
+    base = os.path.expanduser("~/.local/share/icons/hicolor")
+    wrote = False
+    for size in (48, 128, 256, 512):
+        out_dir = os.path.join(base, f"{size}x{size}", "apps")
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            out_path = os.path.join(out_dir, "verisonic-broadcaster.png")
+            shutil.copy2(source_png, out_path)
+            wrote = True
+        except Exception:
+            continue
+
+    if wrote:
+        try:
+            import subprocess
+            subprocess.run(
+                ["gtk-update-icon-cache", "-f", "-t", base],
+                capture_output=True,
+                timeout=3,
+                check=False,
+            )
+        except Exception:
+            pass
+    return wrote
+
+
+def _ensure_linux_desktop_entry():
+    """
+    Register a user .desktop entry so GNOME/Ubuntu Dock can show the real icon.
+    Needed when running from source (or before a system .deb install); Wayland
+    matches windows to Icon= via desktop file name + StartupWMClass / app_id.
+    """
+    if sys.platform != "linux":
+        return
+    try:
+        import subprocess
+
+        apps_dir = os.path.expanduser("~/.local/share/applications")
+        os.makedirs(apps_dir, exist_ok=True)
+        desktop_path = os.path.join(apps_dir, "verisonic-broadcaster.desktop")
+
+        source_icon = _resolve_app_icon_file()
+        _install_linux_user_icon(source_icon)
+        icon_name = "verisonic-broadcaster"
+
+        if getattr(sys, "frozen", False):
+            exec_cmd = f'"{os.path.abspath(sys.executable)}"'
+        else:
+            script = os.path.abspath(os.path.join(_BROADCASTER_DIR, "verisonic_broadcaster.py"))
+            exec_cmd = f'"{os.path.abspath(sys.executable)}" "{script}"'
+
+        contents = (
+            "[Desktop Entry]\n"
+            "Type=Application\n"
+            "Version=1.0\n"
+            "Name=VeriSonic Broadcaster\n"
+            "GenericName=Live Audio Broadcaster\n"
+            "Comment=Secure RJ & Administrator live audio broadcaster for VeriSonic\n"
+            f"Exec={exec_cmd}\n"
+            f"Icon={icon_name}\n"
+            "Terminal=false\n"
+            "Categories=AudioVideo;Audio;Network;\n"
+            "StartupNotify=true\n"
+            "StartupWMClass=verisonic-broadcaster\n"
+            "Keywords=radio;broadcast;microphone;stream;\n"
+            "X-GNOME-UsesNotifications=true\n"
+        )
+        write = True
+        if os.path.isfile(desktop_path):
+            try:
+                with open(desktop_path, "r", encoding="utf-8") as f:
+                    write = f.read() != contents
+            except Exception:
+                write = True
+        if write:
+            with open(desktop_path, "w", encoding="utf-8") as f:
+                f.write(contents)
+        # GNOME requires desktop files to be executable / trusted to associate icons.
+        try:
+            os.chmod(desktop_path, 0o755)
+        except Exception:
+            pass
+        try:
+            subprocess.run(
+                ["gio", "set", desktop_path, "metadata::trusted", "true"],
+                capture_output=True,
+                timeout=3,
+                check=False,
+            )
+        except Exception:
+            pass
+        try:
+            subprocess.run(
+                ["update-desktop-database", apps_dir],
+                capture_output=True,
+                timeout=3,
+                check=False,
+            )
+        except Exception:
+            pass
+    except Exception as exc:
+        print("Failed to install Linux desktop entry:", exc)
+
+
 def acquire_single_instance(app):
     """Return a QLocalServer for the primary instance, or None if another copy is running."""
     socket = QLocalSocket()
@@ -1976,8 +2799,20 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()
     _log_boot_marker()
     setup_app_logging()
+    if sys.platform == "linux":
+        # Force WM_CLASS / Wayland app_id away from "python3" so Dock can match .desktop.
+        sys.argv[0] = "verisonic-broadcaster"
+        _ensure_linux_desktop_entry()
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
+    # Keep ApplicationName identical to desktop file / StartupWMClass for GNOME Dock.
+    app.setApplicationName("verisonic-broadcaster")
+    app.setApplicationDisplayName("VeriSonic Broadcaster")
+    app.setOrganizationName("VeriSonic")
+    try:
+        app.setDesktopFileName("verisonic-broadcaster")
+    except Exception:
+        pass
 
     instance_server = acquire_single_instance(app)
     if instance_server is None:

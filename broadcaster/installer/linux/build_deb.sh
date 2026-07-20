@@ -22,7 +22,14 @@ mkdir -p "$STAGING"
 cp -R "$TEMPLATE/." "$STAGING/"
 sed -i "s/^Version: .*/Version: $DEB_VERSION/" "$STAGING/DEBIAN/control"
 
-mkdir -p "$STAGING/usr/bin" "$STAGING/usr/share/doc/verisonic-broadcaster" "$STAGING/usr/share/pixmaps"
+mkdir -p "$STAGING/usr/bin" \
+  "$STAGING/usr/share/doc/verisonic-broadcaster" \
+  "$STAGING/usr/share/pixmaps" \
+  "$STAGING/usr/share/applications" \
+  "$STAGING/usr/share/icons/hicolor/48x48/apps" \
+  "$STAGING/usr/share/icons/hicolor/128x128/apps" \
+  "$STAGING/usr/share/icons/hicolor/256x256/apps" \
+  "$STAGING/usr/share/icons/hicolor/512x512/apps"
 cp "$BINARY" "$STAGING/usr/bin/verisonic-broadcaster"
 chmod 755 "$STAGING/usr/bin/verisonic-broadcaster"
 cp "$SCRIPT_DIR/../assets/audio-permissions.txt" "$STAGING/usr/share/doc/verisonic-broadcaster/audio-permissions.txt"
@@ -33,6 +40,38 @@ if [ ! -f "$ICON_SRC" ]; then
 fi
 if [ -f "$ICON_SRC" ]; then
   cp "$ICON_SRC" "$STAGING/usr/share/pixmaps/verisonic-broadcaster.png"
+  # GNOME/Ubuntu resolve Icon= name from the hicolor theme more reliably than pixmaps alone.
+  if command -v convert >/dev/null 2>&1; then
+    convert "$ICON_SRC" -resize 48x48 "$STAGING/usr/share/icons/hicolor/48x48/apps/verisonic-broadcaster.png"
+    convert "$ICON_SRC" -resize 128x128 "$STAGING/usr/share/icons/hicolor/128x128/apps/verisonic-broadcaster.png"
+    convert "$ICON_SRC" -resize 256x256 "$STAGING/usr/share/icons/hicolor/256x256/apps/verisonic-broadcaster.png"
+    convert "$ICON_SRC" -resize 512x512 "$STAGING/usr/share/icons/hicolor/512x512/apps/verisonic-broadcaster.png"
+  else
+    # Fallback without ImageMagick: install the source PNG at each size path.
+    cp "$ICON_SRC" "$STAGING/usr/share/icons/hicolor/48x48/apps/verisonic-broadcaster.png"
+    cp "$ICON_SRC" "$STAGING/usr/share/icons/hicolor/128x128/apps/verisonic-broadcaster.png"
+    cp "$ICON_SRC" "$STAGING/usr/share/icons/hicolor/256x256/apps/verisonic-broadcaster.png"
+    cp "$ICON_SRC" "$STAGING/usr/share/icons/hicolor/512x512/apps/verisonic-broadcaster.png"
+  fi
+fi
+
+# Ensure applications launcher entry exists (template may already include it).
+if [ ! -f "$STAGING/usr/share/applications/verisonic-broadcaster.desktop" ]; then
+  cat > "$STAGING/usr/share/applications/verisonic-broadcaster.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=VeriSonic Broadcaster
+GenericName=Live Audio Broadcaster
+Comment=Secure RJ & Administrator live audio broadcaster for VeriSonic
+Exec=/usr/bin/verisonic-broadcaster
+Icon=verisonic-broadcaster
+Terminal=false
+Categories=AudioVideo;Audio;Network;
+StartupNotify=true
+StartupWMClass=verisonic-broadcaster
+Keywords=radio;broadcast;microphone;stream;
+EOF
 fi
 
 chmod 755 "$STAGING/DEBIAN/postinst" "$STAGING/DEBIAN/prerm"

@@ -5,5 +5,7 @@ Comment=Start VeriSonic Broadcaster in the background at login
 Exec=/usr/bin/verisonic-broadcaster
 Icon=verisonic-broadcaster
 Terminal=false
+Categories=AudioVideo;Audio;Network;
+StartupWMClass=verisonic-broadcaster
 X-GNOME-Autostart-enabled=false
 Hidden=false
