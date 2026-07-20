@@ -31,9 +31,9 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "autostart"; Description: "Start {#MyAppName} automatically when you sign in to Windows (background tray service)"; GroupDescription: "Background service:"; Flags: checked
+Name: "autostart"; Description: "Start {#MyAppName} automatically when you sign in to Windows (background tray service)"; GroupDescription: "Background service:"
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
-Name: "openaudioprivacy"; Description: "Open Windows audio input privacy settings after installation (recommended)"; GroupDescription: "Audio capture permissions:"; Flags: checked
+Name: "openaudioprivacy"; Description: "Open Windows audio input privacy settings after installation (recommended)"; GroupDescription: "Audio capture permissions:"
 
 [Files]
 Source: "{#MyAppSourceDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
