@@ -18,10 +18,10 @@ jobs:
           - os: windows-latest
             platform: windows
             artifact_name: verisonic-broadcaster-windows-installer
-          - os: ubuntu-20.04
+          - os: ubuntu-22.04
             platform: linux
             artifact_name: verisonic-broadcaster-linux-installer
-          - os: macos-13
+          - os: macos-14
             platform: macos
             artifact_name: verisonic-broadcaster-macos-installer
 
