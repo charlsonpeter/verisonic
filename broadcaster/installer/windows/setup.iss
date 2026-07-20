@@ -37,7 +37,7 @@ Name: "openaudioprivacy"; Description: "Open Windows audio input privacy setting
 
 [Files]
 Source: "{#MyAppSourceDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\assets\audio-permissions.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\assets\audio-permissions.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
