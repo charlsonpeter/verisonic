@@ -23,7 +23,7 @@ PyInstaller **does not support cross-compilation**. Build on each target OS, or 
 |----------|---------------|------|
 | Windows | `verisonic-broadcaster-windows-installer` | `VeriSonic Broadcaster Setup.exe` |
 | macOS | `verisonic-broadcaster-macos-installer` | `VeriSonic Broadcaster.pkg` |
-| Linux | `verisonic-broadcaster-linux-installer` | `verisonic-broadcaster_1.0.0_amd64.deb` |
+| Linux | `verisonic-broadcaster-linux-installer` | `verisonic-broadcaster_amd64.deb` |
 
 Host these files at `/downloads/broadcaster/` on your web server (or set `VITE_BROADCASTER_DOWNLOAD_BASE` for the frontend download page).
 
@@ -258,7 +258,7 @@ chmod +x broadcaster/installer/linux/*.sh
 VERISONIC_DEB_VERSION=1.0.0 broadcaster/installer/linux/build_linux_deb.sh
 ```
 
-**Output:** `broadcaster/dist/verisonic-broadcaster_1.0.0_amd64.deb`
+**Output:** `broadcaster/dist/verisonic-broadcaster_amd64.deb`
 
 **Build the binary alone** (without `.deb` — for development):
 
@@ -292,10 +292,10 @@ VERISONIC_DEB_VERSION=1.0.0 broadcaster/installer/linux/build_deb.sh
 ```bash
 # Preferred — apt resolves and installs Depends automatically
 # (libportaudio2, wireplumber/wpctl, pipewire-bin, pipewire-pulse, …)
-sudo apt install ./broadcaster/dist/verisonic-broadcaster_1.0.0_amd64.deb
+sudo apt install ./broadcaster/dist/verisonic-broadcaster_amd64.deb
 
 # Or with dpkg, then fix missing Depends:
-sudo dpkg -i broadcaster/dist/verisonic-broadcaster_1.0.0_amd64.deb
+sudo dpkg -i broadcaster/dist/verisonic-broadcaster_amd64.deb
 sudo apt-get install -f
 ```
 
@@ -324,7 +324,7 @@ The app minimizes to the system tray on close (`setQuitOnLastWindowClosed(False)
 ```
 /downloads/broadcaster/VeriSonic Broadcaster Setup.exe
 /downloads/broadcaster/VeriSonic Broadcaster.pkg
-/downloads/broadcaster/verisonic-broadcaster_1.0.0_amd64.deb
+/downloads/broadcaster/verisonic-broadcaster_amd64.deb
 ```
 
 Override the base path when building the frontend:

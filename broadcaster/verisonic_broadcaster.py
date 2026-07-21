@@ -311,6 +311,22 @@ def api_request(path, method="GET", data=None, token=None):
         raise Exception(f"Network error: {e}")
 
 
+class RefreshOnOpenComboBox(QComboBox):
+    """QComboBox that refreshes its items immediately before the popup opens."""
+
+    def __init__(self, on_popup_open=None, parent=None):
+        super().__init__(parent)
+        self._on_popup_open = on_popup_open
+
+    def showPopup(self):
+        if callable(self._on_popup_open):
+            try:
+                self._on_popup_open()
+            except Exception as exc:
+                print("Input dropdown refresh failed:", exc)
+        super().showPopup()
+
+
 class VUMeterWidget(QWidget):
     """Custom spectrum analyzer widget displaying 20 frequency bands with peak decay (JetAudio style)."""
     def __init__(self, parent=None):
@@ -414,6 +430,14 @@ _LOOPBACK_DEVICE_KEYWORDS = (
     "monitor of",
 )
 
+# Sentinel entry for the live input dropdown (stay connected with no capture).
+_NO_INPUT_DEVICE = {
+    "id": None,
+    "name": "No input",
+    "raw_name": "No input",
+    "is_no_input": True,
+}
+
 # ALSA plugin / virtual nodes that clutter PortAudio device lists on Ubuntu.
 _LINUX_SKIP_INPUT_EXACT = frozenset({
     "dmix",
@@ -462,7 +486,7 @@ class PyQtBroadcasterApp(QMainWindow):
         self.is_connected = False
         self.connection_status = "Stopped"
         self.stream_thread = None
-        self.audio_queue = queue.Queue(maxsize=100)
+        self.audio_queue = queue.Queue(maxsize=16)
         self.bytes_sent = 0
         self.start_time = 0
         self.current_volume_db = -60.0
@@ -472,6 +496,14 @@ class PyQtBroadcasterApp(QMainWindow):
         self.active_pulse_source = None
         self.active_wp_id = None
         self._active_device_name = ""
+        self.devices = []
+        self._mic_selection = {"id": None, "pulse_source": None, "wp_id": None}
+        self._capture_mic = None
+        self._capture_sys = None
+        self._capture_sig = None
+        self._input_devices_fp = None
+        self._output_route_fp = None
+        self._last_input_device_poll = 0.0
         self.selected_station_id = None
         self.user_stations = []
         self.user_id = None
@@ -905,6 +937,92 @@ class PyQtBroadcasterApp(QMainWindow):
         return any(kw in n for kw in _LOOPBACK_DEVICE_KEYWORDS)
 
     @staticmethod
+    def _is_system_audio_device(device):
+        """True for loopback/monitor sources used to capture desktop/system audio."""
+        if not device or device.get("is_no_input"):
+            return False
+        if device.get("is_monitor"):
+            return True
+        return (
+            PyQtBroadcasterApp._is_loopback_device_name(device.get("name"))
+            or PyQtBroadcasterApp._is_loopback_device_name(device.get("raw_name"))
+        )
+
+    @staticmethod
+    def _system_audio_display_name(device):
+        name = (device.get("name") or "").strip()
+        prefix = "System Audio (loopback) — "
+        if name.startswith(prefix):
+            return name[len(prefix):].strip() or name
+        return name or "System Audio"
+
+    def _capture_system_audio_enabled(self):
+        cb = getattr(self, "capture_system_audio_cb", None)
+        return bool(cb is not None and cb.isChecked())
+
+    @staticmethod
+    def _linux_default_sink_name():
+        proc = PyQtBroadcasterApp._linux_run_cmd(["pactl", "get-default-sink"], timeout=2)
+        if proc is not None and proc.returncode == 0:
+            return (proc.stdout or "").strip()
+        return ""
+
+    def _current_output_route_fingerprint(self):
+        """Track the active playback route so default-output capture can hot-swap."""
+        if sys.platform == "linux":
+            return self._linux_default_sink_name()
+        return self._normalize_device_name(self._system_default_output_name())
+
+    def _resolve_default_system_audio_device(self, devices=None):
+        """Pick the monitor/loopback for the current system default output (what you hear)."""
+        devices = list(devices) if devices is not None else self.get_input_devices()
+        monitors = [dev for dev in devices if self._is_system_audio_device(dev)]
+        if not monitors:
+            return None
+
+        if sys.platform == "linux":
+            for dev in monitors:
+                if dev.get("is_default"):
+                    return dev
+            sink = self._linux_default_sink_name()
+            if sink:
+                mon_name = sink if sink.endswith(".monitor") else f"{sink}.monitor"
+                for dev in monitors:
+                    if dev.get("pulse_source") == mon_name:
+                        return dev
+                for dev in monitors:
+                    pulse = dev.get("pulse_source") or ""
+                    if pulse == sink or pulse.startswith(f"{sink}."):
+                        return dev
+            try:
+                for item in self._linux_list_wpctl_section("Sinks"):
+                    if not item.get("is_default"):
+                        continue
+                    for dev in monitors:
+                        if dev.get("wp_id") == item.get("wp_id"):
+                            return dev
+            except Exception:
+                pass
+
+        out_name = self._normalize_device_name(self._system_default_output_name())
+        if out_name:
+            for dev in monitors:
+                label = self._normalize_device_name(
+                    f"{dev.get('name') or ''} {dev.get('raw_name') or ''}"
+                )
+                if out_name in label or label in out_name:
+                    return dev
+        return monitors[0]
+
+    @staticmethod
+    def _selection_from_device(device):
+        return {
+            "id": device.get("id"),
+            "pulse_source": device.get("pulse_source"),
+            "wp_id": device.get("wp_id"),
+        }
+
+    @staticmethod
     def _linux_is_sound_server_device(name):
         n = (name or "").strip().lower()
         return n in _LINUX_SOUND_SERVER_NAMES or n.startswith("pipewire")
@@ -938,8 +1056,8 @@ class PyQtBroadcasterApp(QMainWindow):
             return None
 
     @staticmethod
-    def _linux_list_wpctl_sources():
-        """Parse `wpctl status` Sources section (works without pulseaudio-utils)."""
+    def _linux_list_wpctl_section(section_title):
+        """Parse a wpctl status Audio subsection (e.g. Sources / Sinks)."""
         import re
 
         proc = PyQtBroadcasterApp._linux_run_cmd(["wpctl", "status"], timeout=4)
@@ -947,17 +1065,20 @@ class PyQtBroadcasterApp(QMainWindow):
             return []
 
         results = []
-        in_sources = False
-        source_re = re.compile(r"(\d+)\.\s+(.+?)(?:\s+\[vol:[^\]]*\])?\s*$")
+        in_section = False
+        header_re = re.compile(rf"{re.escape(section_title)}:\s*$")
+        # Next top-level Audio subsection ends the current one.
+        next_section_re = re.compile(r"[├└]─\s+\S+:\s*$")
+        item_re = re.compile(r"(\d+)\.\s+(.+?)(?:\s+\[vol:[^\]]*\])?\s*$")
         for line in (proc.stdout or "").splitlines():
-            if re.search(r"Sources:\s*$", line):
-                in_sources = True
+            if header_re.search(line):
+                in_section = True
                 continue
-            if not in_sources:
+            if not in_section:
                 continue
-            if re.search(r"[├└]─\s+\S+:\s*$", line) and "Sources:" not in line:
+            if next_section_re.search(line) and section_title + ":" not in line:
                 break
-            match = source_re.search(line)
+            match = item_re.search(line)
             if not match:
                 continue
             wp_id = int(match.group(1))
@@ -967,23 +1088,57 @@ class PyQtBroadcasterApp(QMainWindow):
             lower = label.lower()
             if any(tok in lower for tok in ("auto_null", "dummy", "midi", "virmidi")):
                 continue
+            results.append({
+                "wp_id": wp_id,
+                "name": label,
+                "is_default": "*" in line[: match.start()],
+            })
+        return results
+
+    @staticmethod
+    def _linux_list_wpctl_sources():
+        """Parse `wpctl status` Sources section (works without pulseaudio-utils)."""
+        results = []
+        for item in PyQtBroadcasterApp._linux_list_wpctl_section("Sources"):
+            label = item["name"]
+            lower = label.lower()
             is_monitor = "monitor" in lower
             if is_monitor and not lower.startswith("system audio"):
                 label = f"System Audio (loopback) — {label}"
             results.append({
-                "wp_id": wp_id,
+                "wp_id": item["wp_id"],
                 "pulse_source": None,
                 "name": label,
                 "is_monitor": is_monitor,
-                "is_default": "*" in line[: match.start()],
+                "is_default": bool(item.get("is_default")),
             })
-
         results.sort(key=lambda item: (1 if item["is_monitor"] else 0, item["name"].lower()))
         return results
 
     @staticmethod
+    def _linux_list_wpctl_sink_monitors():
+        """
+        Build system-audio entries from wpctl Sinks.
+
+        PipeWire often omits sink monitors under Sources; the sink id still works
+        for loopback capture (pw-cat/parec via matching *.monitor pulse name).
+        """
+        results = []
+        for item in PyQtBroadcasterApp._linux_list_wpctl_section("Sinks"):
+            label = item["name"]
+            results.append({
+                "wp_id": item["wp_id"],
+                "pulse_source": None,
+                "name": f"System Audio (loopback) — {label}",
+                "is_monitor": True,
+                "is_default": bool(item.get("is_default")),
+            })
+        results.sort(key=lambda item: (0 if item.get("is_default") else 1, item["name"].lower()))
+        return results
+
+    @staticmethod
     def _linux_list_pw_dump_sources():
-        """List Audio/Source nodes via pw-dump JSON."""
+        """List Audio/Source nodes via pw-dump JSON (includes *.monitor when present)."""
         proc = PyQtBroadcasterApp._linux_run_cmd(["pw-dump"], timeout=6)
         if proc is None or proc.returncode != 0 or not (proc.stdout or "").strip():
             return []
@@ -998,38 +1153,197 @@ class PyQtBroadcasterApp(QMainWindow):
                 continue
             info = obj.get("info") or {}
             props = info.get("props") or {}
-            if (props.get("media.class") or "") != "Audio/Source":
-                continue
+            media_class = props.get("media.class") or ""
+            node_name = str(props.get("node.name") or "")
             node_id = obj.get("id")
             if node_id is None:
                 continue
-            label = (
-                props.get("node.description")
-                or props.get("node.nick")
-                or props.get("device.description")
-                or props.get("node.name")
-                or f"Input {node_id}"
-            )
-            node_name = str(props.get("node.name") or "")
-            lower = f"{label} {node_name}".lower()
-            if any(tok in lower for tok in ("auto_null", "dummy", "midi", "virmidi")):
+
+            # Normal capture sources.
+            if media_class == "Audio/Source":
+                label = (
+                    props.get("node.description")
+                    or props.get("node.nick")
+                    or props.get("device.description")
+                    or node_name
+                    or f"Input {node_id}"
+                )
+                lower = f"{label} {node_name}".lower()
+                if any(tok in lower for tok in ("auto_null", "dummy", "midi", "virmidi")):
+                    continue
+                is_monitor = node_name.endswith(".monitor") or "monitor" in lower
+                if is_monitor:
+                    clean = label
+                    if clean.lower().startswith("monitor of "):
+                        clean = clean[11:].strip()
+                    label = f"System Audio (loopback) — {clean}"
+                results.append({
+                    "wp_id": int(node_id),
+                    "pulse_source": node_name or None,
+                    "name": label,
+                    "is_monitor": is_monitor,
+                    "is_default": False,
+                })
                 continue
-            is_monitor = node_name.endswith(".monitor") or "monitor" in lower
-            if is_monitor:
-                clean = label
-                if clean.lower().startswith("monitor of "):
-                    clean = clean[11:].strip()
-                label = f"System Audio (loopback) — {clean}"
-            results.append({
-                "wp_id": int(node_id),
-                "pulse_source": node_name or None,
-                "name": label,
-                "is_monitor": is_monitor,
-                "is_default": False,
-            })
+
+            # Sink nodes → synthetic system-audio (what you hear) entries.
+            if media_class == "Audio/Sink":
+                label = (
+                    props.get("node.description")
+                    or props.get("node.nick")
+                    or props.get("device.description")
+                    or node_name
+                    or f"Output {node_id}"
+                )
+                lower = f"{label} {node_name}".lower()
+                if any(tok in lower for tok in ("auto_null", "dummy", "midi", "virmidi")):
+                    continue
+                pulse_monitor = None
+                if node_name:
+                    pulse_monitor = (
+                        node_name
+                        if node_name.endswith(".monitor")
+                        else f"{node_name}.monitor"
+                    )
+                results.append({
+                    "wp_id": int(node_id),
+                    "pulse_source": pulse_monitor,
+                    "name": f"System Audio (loopback) — {label}",
+                    "is_monitor": True,
+                    "is_default": False,
+                })
 
         results.sort(key=lambda item: (1 if item["is_monitor"] else 0, item["name"].lower()))
         return results
+    @staticmethod
+    def _linux_port_is_available(port_detail):
+        """Interpret pactl/PipeWire port availability text. None = unknown."""
+        lower = (port_detail or "").lower().strip()
+        if "not available" in lower or "availability: no" in lower:
+            return False
+        if "availability unknown" in lower or "availability: unknown" in lower:
+            # Built-in mics often report unknown; treat as present.
+            return True
+        if "availability: yes" in lower:
+            return True
+        trimmed = lower.rstrip(")").rstrip()
+        if trimmed.endswith("available"):
+            return True
+        return None
+
+    @staticmethod
+    def _linux_pactl_source_availability():
+        """Map Pulse/PipeWire sources to jack availability via `pactl list sources`."""
+        detail = PyQtBroadcasterApp._linux_run_cmd(["pactl", "list", "sources"], timeout=4)
+        if detail is None or detail.returncode != 0 or not (detail.stdout or "").strip():
+            return {"by_name": {}, "by_desc": {}}
+
+        by_name = {}
+        by_desc = {}
+        current = None
+
+        def finalize(cur):
+            if not cur or not cur.get("name"):
+                return
+            ports = cur.get("ports") or {}
+            active = cur.get("active_port")
+            if active and active in ports:
+                available = ports[active]
+            elif ports:
+                vals = list(ports.values())
+                if vals and all(v is False for v in vals):
+                    available = False
+                else:
+                    available = True
+            else:
+                available = True
+            by_name[cur["name"]] = available
+            desc = (cur.get("description") or "").strip()
+            if desc:
+                by_desc[desc.lower()] = available
+
+        for line in (detail.stdout or "").splitlines():
+            if line.startswith("Source #"):
+                finalize(current)
+                current = {
+                    "name": "",
+                    "description": "",
+                    "ports": {},
+                    "active_port": None,
+                    "in_ports": False,
+                }
+                continue
+            if current is None:
+                continue
+            stripped = line.strip()
+            if stripped.startswith("Name:"):
+                current["name"] = stripped.split(":", 1)[-1].strip()
+                current["in_ports"] = False
+            elif stripped.startswith("Description:"):
+                current["description"] = stripped.split(":", 1)[-1].strip()
+                current["in_ports"] = False
+            elif stripped.startswith("Ports:"):
+                current["in_ports"] = True
+            elif stripped.startswith("Active Port:"):
+                current["in_ports"] = False
+                current["active_port"] = stripped.split(":", 1)[-1].strip()
+            elif current.get("in_ports") and stripped.startswith("["):
+                if ":" not in stripped:
+                    continue
+                port_key, rest = stripped.split(":", 1)
+                parsed = PyQtBroadcasterApp._linux_port_is_available(rest)
+                current["ports"][port_key.strip()] = True if parsed is None else parsed
+        finalize(current)
+        return {"by_name": by_name, "by_desc": by_desc}
+
+    @staticmethod
+    def _linux_source_availability_lookup(src, availability):
+        """Return True/False/None for whether a listed capture source is plugged in."""
+        by_name = availability.get("by_name") or {}
+        by_desc = availability.get("by_desc") or {}
+        if not by_name and not by_desc:
+            return None
+
+        pulse = src.get("pulse_source")
+        if pulse and pulse in by_name:
+            return by_name[pulse]
+
+        label = (src.get("name") or "").strip()
+        candidates = []
+        if label:
+            candidates.append(label.lower())
+        if label.startswith("System Audio (loopback) — "):
+            rest = label.split("—", 1)[-1].strip()
+            if rest:
+                candidates.append(rest.lower())
+                candidates.append(f"monitor of {rest}".lower())
+
+        for key in candidates:
+            if key in by_desc:
+                return by_desc[key]
+
+        for key in candidates:
+            for desc, available in by_desc.items():
+                if key == desc or key.endswith(desc) or desc.endswith(key):
+                    return available
+        return None
+
+    @staticmethod
+    def _linux_filter_unavailable_sources(sources):
+        """Drop sources whose active pactl port is unplugged / not available."""
+        if not sources:
+            return sources
+        availability = PyQtBroadcasterApp._linux_pactl_source_availability()
+        if not availability.get("by_name") and not availability.get("by_desc"):
+            return sources
+
+        filtered = []
+        for src in sources:
+            available = PyQtBroadcasterApp._linux_source_availability_lookup(src, availability)
+            if available is False:
+                continue
+            filtered.append(src)
+        return filtered
 
     @staticmethod
     def _linux_list_pactl_sources():
@@ -1038,11 +1352,15 @@ class PyQtBroadcasterApp(QMainWindow):
         if proc is None or proc.returncode != 0:
             return []
 
-        short_names = []
+        short_entries = []
         for line in (proc.stdout or "").splitlines():
             parts = line.split("\t") if "\t" in line else line.split()
             if len(parts) >= 2:
-                short_names.append(parts[1].strip())
+                try:
+                    src_id = int(parts[0].strip())
+                except ValueError:
+                    src_id = None
+                short_entries.append((src_id, parts[1].strip()))
 
         detail = PyQtBroadcasterApp._linux_run_cmd(["pactl", "list", "sources"], timeout=4)
         descriptions = {}
@@ -1056,7 +1374,7 @@ class PyQtBroadcasterApp(QMainWindow):
                     descriptions[current_name] = stripped.split(":", 1)[-1].strip()
 
         results = []
-        for pulse_name in short_names:
+        for src_id, pulse_name in short_entries:
             if not pulse_name:
                 continue
             desc = descriptions.get(pulse_name) or pulse_name
@@ -1070,7 +1388,7 @@ class PyQtBroadcasterApp(QMainWindow):
             else:
                 label = desc
             results.append({
-                "wp_id": None,
+                "wp_id": src_id,
                 "pulse_source": pulse_name,
                 "name": label,
                 "is_monitor": is_monitor,
@@ -1080,20 +1398,91 @@ class PyQtBroadcasterApp(QMainWindow):
         return results
 
     @staticmethod
+    def _linux_merge_capture_sources(*groups):
+        """Merge source lists, enriching duplicates (pulse name / wp id / monitor flag)."""
+        merged = []
+        index_by_key = {}
+
+        def keys_for(src):
+            out = []
+            pulse = src.get("pulse_source")
+            wp_id = src.get("wp_id")
+            if pulse:
+                out.append(("pulse", pulse))
+            if wp_id is not None:
+                out.append(
+                    ("wp_mon", wp_id) if src.get("is_monitor") else ("wp", wp_id)
+                )
+            if not out:
+                out.append(("name", (src.get("name") or "").lower()))
+            return out
+
+        for group in groups:
+            for src in group or []:
+                keys = keys_for(src)
+                existing_idx = None
+                for key in keys:
+                    if key in index_by_key:
+                        existing_idx = index_by_key[key]
+                        break
+                if existing_idx is None:
+                    merged.append(dict(src))
+                    idx = len(merged) - 1
+                    for key in keys_for(merged[idx]):
+                        index_by_key[key] = idx
+                    continue
+
+                existing = merged[existing_idx]
+                if not existing.get("pulse_source") and src.get("pulse_source"):
+                    existing["pulse_source"] = src.get("pulse_source")
+                if existing.get("wp_id") is None and src.get("wp_id") is not None:
+                    existing["wp_id"] = src.get("wp_id")
+                if src.get("is_monitor"):
+                    existing["is_monitor"] = True
+                    name = src.get("name") or ""
+                    if name.startswith("System Audio (loopback)"):
+                        existing["name"] = name
+                if src.get("is_default"):
+                    existing["is_default"] = True
+                for key in keys_for(existing):
+                    index_by_key[key] = existing_idx
+
+        return merged
+
+    @staticmethod
     def _linux_list_capture_sources():
-        """Discover connected capture sources via wpctl, pw-dump, or pactl."""
+        """Discover mics + sink-monitor (system output) sources from all backends."""
+        groups = []
         for lister in (
             PyQtBroadcasterApp._linux_list_wpctl_sources,
+            PyQtBroadcasterApp._linux_list_wpctl_sink_monitors,
             PyQtBroadcasterApp._linux_list_pw_dump_sources,
             PyQtBroadcasterApp._linux_list_pactl_sources,
         ):
             try:
-                sources = lister()
-            except Exception:
-                sources = []
-            if sources:
-                return sources
-        return []
+                groups.append(lister())
+            except Exception as exc:
+                print("Capture source lister failed:", lister.__name__, exc)
+                groups.append([])
+
+        merged = PyQtBroadcasterApp._linux_merge_capture_sources(*groups)
+        filtered = PyQtBroadcasterApp._linux_filter_unavailable_sources(merged)
+
+        # Keep at least the default sink monitor even if port availability is odd.
+        if not any(src.get("is_monitor") for src in filtered):
+            monitors = [src for src in merged if src.get("is_monitor")]
+            if monitors:
+                preferred = next((m for m in monitors if m.get("is_default")), monitors[0])
+                filtered.append(preferred)
+
+        filtered.sort(
+            key=lambda item: (
+                0 if item.get("is_default") and item.get("is_monitor") else
+                1 if item.get("is_monitor") else 2,
+                item.get("name") or "",
+            )
+        )
+        return filtered
 
     @staticmethod
     def _linux_default_capture_keys():
@@ -1187,6 +1576,7 @@ class PyQtBroadcasterApp(QMainWindow):
                 "pulse_source": src.get("pulse_source"),
                 "wp_id": src.get("wp_id"),
                 "is_default": bool(src.get("is_default")),
+                "is_monitor": bool(src.get("is_monitor")),
             } for src in capture_sources]
 
         if chosen is not None:
@@ -1281,56 +1671,607 @@ class PyQtBroadcasterApp(QMainWindow):
             return -1
         return self._default_input_device_index()
 
-    def _populate_input_device_combos(self, selected_id=None, selected_pulse_source=None, selected_wp_id=None):
-        self.devices = self.get_input_devices()
-        names = [dev["name"] for dev in self.devices]
-        combo = getattr(self, "live_device_combo", None)
-        if combo is None:
-            return
-        combo.blockSignals(True)
-        combo.clear()
-        if names:
-            combo.addItems(names)
-        pulse_source = (
-            selected_pulse_source
-            if selected_pulse_source is not None
-            else getattr(self, "active_pulse_source", None)
+    @staticmethod
+    def _fingerprint_input_devices(devices):
+        return tuple(
+            (dev.get("wp_id"), dev.get("pulse_source"), dev.get("name"))
+            for dev in devices
         )
-        wp_id = (
-            selected_wp_id
-            if selected_wp_id is not None
-            else getattr(self, "active_wp_id", None)
+
+    def _device_capture_key(self, device):
+        if not device:
+            return None
+        return (
+            device.get("id"),
+            device.get("pulse_source"),
+            device.get("wp_id"),
+            device.get("name"),
         )
-        selected = False
+
+    def _lookup_device_in_list(self, devices, selection):
+        if not devices or not selection:
+            return None
+        wp_id = selection.get("wp_id")
+        pulse_source = selection.get("pulse_source")
+        selected_id = selection.get("id")
         if wp_id is not None:
-            for i, dev in enumerate(self.devices):
+            for dev in devices:
+                if dev.get("wp_id") == wp_id:
+                    return dev
+        if pulse_source:
+            for dev in devices:
+                if dev.get("pulse_source") == pulse_source:
+                    return dev
+        if selected_id is not None and wp_id is None and not pulse_source:
+            matches = [dev for dev in devices if dev.get("id") == selected_id]
+            if len(matches) == 1:
+                return matches[0]
+        return None
+
+    def _resolve_capture_devices_from_ui(self):
+        """Return (mic_device_or_None, system_device_or_None) from Live controls."""
+        mic = None
+        sys_dev = None
+
+        mic_devices = getattr(self, "devices", None) or []
+        mic_combo = getattr(self, "live_device_combo", None)
+        if mic_combo is not None and mic_devices:
+            idx = mic_combo.currentIndex()
+            if 0 <= idx < len(mic_devices):
+                candidate = mic_devices[idx]
+                if not candidate.get("is_no_input"):
+                    mic = candidate
+        elif self._mic_selection:
+            candidate = self._lookup_device_in_list(mic_devices, self._mic_selection)
+            if candidate is not None and not candidate.get("is_no_input"):
+                mic = candidate
+
+        if self._capture_system_audio_enabled():
+            # Always follow the current default output (what you hear).
+            sys_dev = self._resolve_default_system_audio_device()
+
+        return mic, sys_dev
+
+    def _apply_capture_selection_from_ui(self):
+        """Sync capture plan from mic dropdown and system-audio checkbox."""
+        mic, sys_dev = self._resolve_capture_devices_from_ui()
+        sig = (self._device_capture_key(mic), self._device_capture_key(sys_dev))
+        changed = sig != getattr(self, "_capture_sig", None)
+        self._capture_mic = mic
+        self._capture_sys = sys_dev
+        self._capture_sig = sig
+
+        primary = mic or sys_dev
+        if mic and sys_dev:
+            self.active_device_id = mic.get("id")
+            self.active_pulse_source = mic.get("pulse_source")
+            self.active_wp_id = mic.get("wp_id")
+            self._active_device_name = (
+                f"{mic.get('name') or 'Input'} + "
+                f"{self._system_audio_display_name(sys_dev)}"
+            )
+        elif primary:
+            self.active_device_id = primary.get("id")
+            self.active_pulse_source = primary.get("pulse_source")
+            self.active_wp_id = primary.get("wp_id")
+            self._active_device_name = primary.get("name") or ""
+        else:
+            self.active_device_id = None
+            self.active_pulse_source = None
+            self.active_wp_id = None
+            self._active_device_name = "No input"
+
+        if not changed:
+            return
+
+        print(
+            "Capture plan synced:",
+            "mic=", (mic or {}).get("name"),
+            "sys=", (sys_dev or {}).get("name"),
+        )
+        if self.is_broadcasting:
+            self.connection_status = (
+                "Input muted..." if primary is None else "Switching input..."
+            )
+
+    def _sync_active_input_from_combo_selection(self):
+        """Apply combo selection to active_* when refresh changed it without signals."""
+        self._apply_capture_selection_from_ui()
+
+    @staticmethod
+    def _reshape_audio_channels(indata, target_channels):
+        x = np.asarray(indata, dtype=np.float32)
+        if x.ndim == 1:
+            x = x.reshape(-1, 1)
+        if x.shape[1] == target_channels:
+            return x
+        if x.shape[1] == 1 and target_channels > 1:
+            return np.repeat(x, target_channels, axis=1)
+        if x.shape[1] > 1 and target_channels == 1:
+            return np.mean(x, axis=1, keepdims=True).astype(np.float32)
+        if x.shape[1] > target_channels:
+            return x[:, :target_channels]
+        pad = np.zeros((x.shape[0], target_channels - x.shape[1]), dtype=np.float32)
+        return np.concatenate([x, pad], axis=1)
+
+    @staticmethod
+    def _queue_put_latest(q, item):
+        """Enqueue item; if full, drop oldest so live latency stays low."""
+        for _ in range(8):
+            try:
+                q.put_nowait(item)
+                return
+            except queue.Full:
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    return
+
+    @staticmethod
+    def _queue_put_realtime(q, item):
+        """
+        Prefer continuous audio over hard drops.
+        Block briefly for space; only then drop one oldest chunk (catch-up).
+        """
+        try:
+            q.put(item, timeout=0.05)
+            return
+        except queue.Full:
+            pass
+        try:
+            q.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            q.put_nowait(item)
+        except queue.Full:
+            pass
+
+    @staticmethod
+    def _pipe_read_exact(pipe, nbytes, stop_event):
+        """Read exactly nbytes from a pipe (no silence padding)."""
+        buf = bytearray()
+        while len(buf) < nbytes:
+            if stop_event.is_set():
+                return None
+            try:
+                chunk = pipe.read(nbytes - len(buf))
+            except Exception:
+                return None
+            if not chunk:
+                return None
+            buf.extend(chunk)
+        return bytes(buf)
+
+    def _linux_pulse_source_format(self, pulse_source):
+        """Return (channels, samplerate) from `pactl list short sources` when possible."""
+        proc = self._linux_run_cmd(["pactl", "list", "short", "sources"], timeout=3)
+        if proc is None or proc.returncode != 0:
+            return None
+        for line in (proc.stdout or "").splitlines():
+            parts = line.split("\t") if "\t" in line else line.split()
+            if len(parts) < 4:
+                continue
+            if parts[1].strip() != pulse_source:
+                continue
+            # e.g. s32le 2ch 48000Hz
+            spec = parts[3].strip().lower()
+            channels = 2
+            rate = 48000
+            try:
+                if "ch" in spec:
+                    for tok in spec.replace("-", " ").split():
+                        if tok.endswith("ch") and tok[:-2].isdigit():
+                            channels = max(1, min(2, int(tok[:-2])))
+                        if tok.endswith("hz") and tok[:-2].isdigit():
+                            rate = int(tok[:-2])
+            except Exception:
+                pass
+            return channels, rate
+        return None
+
+    def _capture_format_for_device(self, device):
+        """Channels/rate for capture; Linux monitors prefer native Pulse format (usually 48k)."""
+        channels, samplerate = self.get_device_capture_params(device.get("id"))
+        if sys.platform == "linux":
+            pulse = device.get("pulse_source")
+            if pulse:
+                fmt = self._linux_pulse_source_format(pulse)
+                if fmt:
+                    return fmt
+            if device.get("is_monitor") or self._is_system_audio_device(device):
+                return max(channels, 2), 48000
+        return channels, samplerate
+
+    def _mix_capture_loop(self, mic_q, sys_q, out_q, stop_event, channels):
+        """
+        Combine mic + system-audio PCM.
+
+        System audio is the timing clock when present so playback stays continuous.
+        Mic is mixed when a chunk is ready; missing mic does not stall the stream.
+        """
+        while not stop_event.is_set():
+            sys_chunk = None
+            mic = None
+            try:
+                sys_chunk = sys_q.get(timeout=0.05)
+            except queue.Empty:
+                pass
+            try:
+                mic = mic_q.get_nowait()
+            except queue.Empty:
+                pass
+
+            if sys_chunk is None and mic is None:
+                continue
+
+            if sys_chunk is None:
+                mixed = self._reshape_audio_channels(mic, channels)
+            elif mic is None:
+                mixed = self._reshape_audio_channels(sys_chunk, channels)
+            else:
+                a = self._reshape_audio_channels(mic, channels)
+                b = self._reshape_audio_channels(sys_chunk, channels)
+                n = min(a.shape[0], b.shape[0])
+                if n <= 0:
+                    continue
+                mixed = np.clip(a[:n] + b[:n], -1.0, 1.0)
+            self._queue_put_realtime(out_q, mixed)
+
+    def _open_parec_to_queue(self, pulse_source, channels, samplerate, out_q, blocksize=1024):
+        """Capture a Pulse/PipeWire source via parec into out_q (Linux mix path)."""
+        import subprocess
+
+        cmd = [
+            "parec",
+            f"--device={pulse_source}",
+            f"--channels={int(channels)}",
+            f"--rate={int(samplerate)}",
+            "--format=float32le",
+            "--latency-msec=25",
+            "--process-time-msec=15",
+        ]
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+        )
+        stop = threading.Event()
+
+        def reader():
+            nbytes = blocksize * channels * 4
+            while not stop.is_set():
+                data = self._pipe_read_exact(proc.stdout, nbytes, stop)
+                if data is None:
+                    break
+                arr = np.frombuffer(data, dtype=np.float32).reshape(-1, channels).copy()
+                self._queue_put_realtime(out_q, arr)
+
+        thread = threading.Thread(target=reader, daemon=True)
+        thread.start()
+        return {"type": "parec", "proc": proc, "stop": stop, "thread": thread}
+
+    def _open_pw_record_to_queue(self, wp_id, channels, samplerate, out_q, blocksize=1024):
+        """Capture a PipeWire node via pw-cat into out_q."""
+        import subprocess
+
+        cmd = [
+            "pw-cat",
+            "--record",
+            f"--target={int(wp_id)}",
+            f"--channels={int(channels)}",
+            f"--rate={int(samplerate)}",
+            "--format=f32",
+            "--latency=25ms",
+            "-",
+        ]
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=0,
+        )
+        stop = threading.Event()
+
+        def reader():
+            nbytes = blocksize * channels * 4
+            while not stop.is_set():
+                data = self._pipe_read_exact(proc.stdout, nbytes, stop)
+                if data is None:
+                    break
+                arr = np.frombuffer(data, dtype=np.float32).reshape(-1, channels).copy()
+                self._queue_put_realtime(out_q, arr)
+
+        thread = threading.Thread(target=reader, daemon=True)
+        thread.start()
+        return {"type": "parec", "proc": proc, "stop": stop, "thread": thread}
+
+    def _open_portaudio_to_queue(self, device, channels, samplerate, out_q, apply_linux_route=False):
+        device_id = device.get("id")
+        pulse_source = device.get("pulse_source") if apply_linux_route else None
+        wp_id = device.get("wp_id") if apply_linux_route else None
+
+        def audio_callback(indata, frames, time_info, status):
+            if status:
+                print("Audio input status:", status)
+            self._queue_put_realtime(
+                out_q,
+                self._reshape_audio_channels(indata.copy(), channels),
+            )
+
+        stream_kwargs = {
+            "device": device_id,
+            "channels": channels,
+            "samplerate": samplerate,
+            "blocksize": 1024,
+            "callback": audio_callback,
+        }
+        if sys.platform == "darwin":
+            stream_kwargs["latency"] = "low"
+        stream = self._open_input_stream(
+            stream_kwargs,
+            pulse_source=pulse_source,
+            wp_id=wp_id,
+        )
+        return {"type": "portaudio", "stream": stream}
+
+    def _open_source_to_queue(self, device, channels, samplerate, out_q, for_mix=False):
+        """Open one capture source that writes PCM float chunks into out_q."""
+        if sys.platform == "linux" and (for_mix or device.get("is_monitor")):
+            pulse = device.get("pulse_source")
+            if pulse:
+                return self._open_parec_to_queue(pulse, channels, samplerate, out_q)
+            if device.get("wp_id") is not None:
+                return self._open_pw_record_to_queue(
+                    device["wp_id"], channels, samplerate, out_q
+                )
+        return self._open_portaudio_to_queue(
+            device,
+            channels,
+            samplerate,
+            out_q,
+            apply_linux_route=(sys.platform == "linux" and not for_mix),
+        )
+
+    def _open_capture_bundle(self, mic, sys_dev, out_q):
+        """
+        Open mic and/or system-audio capture.
+        When both are set, mix them into out_q. Returns a closeable handle dict.
+        """
+        if mic and sys_dev:
+            ch_m, sr_m = self._capture_format_for_device(mic)
+            ch_s, sr_s = self._capture_format_for_device(sys_dev)
+            channels = 2 if max(ch_m, ch_s) >= 2 else 1
+            # Prefer 48k on Linux so mic+monitor stay aligned with PipeWire.
+            if sys.platform == "linux":
+                samplerate = 48000
+            elif sr_m == sr_s:
+                samplerate = sr_m
+            elif 48000 in (sr_m, sr_s):
+                samplerate = 48000
+            else:
+                samplerate = sr_m
+
+            mic_q = queue.Queue(maxsize=8)
+            sys_q = queue.Queue(maxsize=8)
+            stop = threading.Event()
+            print(
+                f"Opening mixed capture: mic={mic.get('name')!r} + "
+                f"sys={sys_dev.get('name')!r} ({channels}ch @ {samplerate}Hz)"
+            )
+            stream_mic = self._open_source_to_queue(
+                mic, channels, samplerate, mic_q, for_mix=True
+            )
+            try:
+                stream_sys = self._open_source_to_queue(
+                    sys_dev, channels, samplerate, sys_q, for_mix=True
+                )
+            except Exception:
+                self._close_capture_handle(stream_mic)
+                raise
+            mixer = threading.Thread(
+                target=self._mix_capture_loop,
+                args=(mic_q, sys_q, out_q, stop, channels),
+                daemon=True,
+            )
+            mixer.start()
+            return {
+                "type": "mix",
+                "streams": [stream_mic, stream_sys],
+                "stop": stop,
+                "mixer": mixer,
+                "channels": channels,
+                "samplerate": samplerate,
+            }
+
+        primary = mic or sys_dev
+        channels, samplerate = self._capture_format_for_device(primary)
+        label = primary.get("name") or ""
+        print(
+            f"Opening audio input device {primary.get('id')} "
+            f"({label}, pulse={primary.get('pulse_source')}, wp={primary.get('wp_id')}): "
+            f"{channels}ch @ {samplerate}Hz"
+        )
+        # Linux monitors / pulse sources: parec at native rate (avoids PortAudio routing fights).
+        if sys.platform == "linux" and (
+            primary.get("pulse_source") or primary.get("wp_id") is not None
+        ):
+            handle = self._open_source_to_queue(
+                primary, channels, samplerate, out_q, for_mix=True
+            )
+            handle["channels"] = channels
+            handle["samplerate"] = samplerate
+            return handle
+
+        stream = self._open_portaudio_input_callback(
+            primary["id"],
+            channels,
+            samplerate,
+            pulse_source=primary.get("pulse_source"),
+            wp_id=primary.get("wp_id"),
+        )
+        return {
+            "type": "single",
+            "stream": stream,
+            "channels": channels,
+            "samplerate": samplerate,
+        }
+
+    def _close_capture_handle(self, handle):
+        if handle is None:
+            return
+        if not isinstance(handle, dict):
+            self._close_input_stream(handle)
+            return
+        kind = handle.get("type")
+        if kind == "mix":
+            stop = handle.get("stop")
+            if stop is not None:
+                stop.set()
+            for stream in handle.get("streams") or []:
+                self._close_capture_handle(stream)
+            mixer = handle.get("mixer")
+            if mixer is not None and mixer.is_alive():
+                mixer.join(timeout=1.0)
+            return
+        if kind == "parec":
+            stop = handle.get("stop")
+            if stop is not None:
+                stop.set()
+            proc = handle.get("proc")
+            if proc is not None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            return
+        if kind == "portaudio":
+            self._close_input_stream(handle.get("stream"))
+            return
+        if kind == "single":
+            self._close_input_stream(handle.get("stream"))
+            return
+        self._close_input_stream(handle.get("stream"))
+
+    def _combo_select_device(self, combo, devices, selection):
+        """Select a device in combo from a {id, pulse_source, wp_id} selection dict."""
+        if combo is None or not devices:
+            return False
+        selection = selection or {}
+        wp_id = selection.get("wp_id")
+        pulse_source = selection.get("pulse_source")
+        selected_id = selection.get("id")
+        if wp_id is not None:
+            for i, dev in enumerate(devices):
                 if dev.get("wp_id") == wp_id:
                     combo.setCurrentIndex(i)
-                    selected = True
-                    break
-        if not selected and pulse_source:
-            for i, dev in enumerate(self.devices):
+                    return True
+        if pulse_source:
+            for i, dev in enumerate(devices):
                 if dev.get("pulse_source") == pulse_source:
                     combo.setCurrentIndex(i)
-                    selected = True
-                    break
-        if not selected and selected_id is not None:
-            for i, dev in enumerate(self.devices):
-                if dev.get("id") == selected_id:
+                    return True
+        # id-only match is safe when pulse/wp are absent (typical on macOS/Windows).
+        if selected_id is not None and wp_id is None and not pulse_source:
+            for i, dev in enumerate(devices):
+                if (
+                    dev.get("id") == selected_id
+                    and dev.get("wp_id") is None
+                    and not dev.get("pulse_source")
+                ):
                     combo.setCurrentIndex(i)
+                    return True
+                if dev.get("id") == selected_id and len(devices) == 1:
+                    combo.setCurrentIndex(i)
+                    return True
+            # Last resort: unique id among this list.
+            matches = [i for i, dev in enumerate(devices) if dev.get("id") == selected_id]
+            if len(matches) == 1:
+                combo.setCurrentIndex(matches[0])
+                return True
+        combo.setCurrentIndex(0)
+        return False
+
+    def _effective_capture_device(self):
+        """Legacy helper: first available capture device (mic preferred, else system)."""
+        mic, sys_dev = self._resolve_capture_devices_from_ui()
+        return mic or sys_dev or _NO_INPUT_DEVICE
+
+    def _populate_input_device_combos(self, selected_id=None, selected_pulse_source=None, selected_wp_id=None):
+        all_devices = self.get_input_devices()
+        self._input_devices_fp = self._fingerprint_input_devices(all_devices)
+        self._output_route_fp = self._current_output_route_fingerprint()
+
+        mic_devices = [dev for dev in all_devices if not self._is_system_audio_device(dev)]
+        self.devices = [_NO_INPUT_DEVICE] + mic_devices
+
+        mic_combo = getattr(self, "live_device_combo", None)
+
+        if selected_id is not None or selected_pulse_source is not None or selected_wp_id is not None:
+            # Connect Live restores a mic selection (system audio is checkbox-driven).
+            matched_sys = None
+            for dev in all_devices:
+                if not self._is_system_audio_device(dev):
+                    continue
+                if selected_wp_id is not None and dev.get("wp_id") == selected_wp_id:
+                    matched_sys = dev
                     break
-        combo.blockSignals(False)
+                if selected_pulse_source and dev.get("pulse_source") == selected_pulse_source:
+                    matched_sys = dev
+                    break
+            if matched_sys is not None:
+                cb = getattr(self, "capture_system_audio_cb", None)
+                if cb is not None:
+                    cb.blockSignals(True)
+                    cb.setChecked(True)
+                    cb.blockSignals(False)
+                self._mic_selection = {"id": None, "pulse_source": None, "wp_id": None}
+            else:
+                self._mic_selection = {
+                    "id": selected_id,
+                    "pulse_source": selected_pulse_source,
+                    "wp_id": selected_wp_id,
+                }
+
+        if mic_combo is not None:
+            mic_combo.blockSignals(True)
+            mic_combo.clear()
+            mic_combo.addItems([dev["name"] for dev in self.devices])
+            self._combo_select_device(mic_combo, self.devices, self._mic_selection)
+            idx = mic_combo.currentIndex()
+            if 0 <= idx < len(self.devices):
+                self._mic_selection = self._selection_from_device(self.devices[idx])
+            mic_combo.blockSignals(False)
+
+        self._apply_capture_selection_from_ui()
 
     def refresh_input_devices(self):
         """Reload input devices for the Live screen dropdown."""
-        selected_id = getattr(self, "active_device_id", None)
-        selected_pulse = getattr(self, "active_pulse_source", None)
-        selected_wp = getattr(self, "active_wp_id", None)
-        self._populate_input_device_combos(
-            selected_id=selected_id,
-            selected_pulse_source=selected_pulse,
-            selected_wp_id=selected_wp,
-        )
+        self._populate_input_device_combos()
+
+    def _poll_input_device_changes(self):
+        """Reload when inputs change or the default output route changes."""
+        try:
+            devices = self.get_input_devices()
+        except Exception as exc:
+            print("Input device poll failed:", exc)
+            return
+        fingerprint = self._fingerprint_input_devices(devices)
+        route_fp = self._current_output_route_fingerprint()
+        if (
+            fingerprint == getattr(self, "_input_devices_fp", None)
+            and route_fp == getattr(self, "_output_route_fp", None)
+        ):
+            return
+        print("Input/output route changed — refreshing capture plan")
+        self._input_devices_fp = fingerprint
+        self._output_route_fp = route_fp
+        self.refresh_input_devices()
 
     def _open_input_stream(self, stream_kwargs, pulse_source=None, wp_id=None):
         with self._audio_io_lock:
@@ -1353,7 +2294,7 @@ class PyQtBroadcasterApp(QMainWindow):
     def _close_capture_source(self, capture_source):
         if capture_source is None:
             return
-        self._close_input_stream(capture_source)
+        self._close_capture_handle(capture_source)
 
     def load_config(self):
         self.config_path = os.path.expanduser("~/.verisonic_broadcaster.json")
@@ -1817,9 +2758,15 @@ class PyQtBroadcasterApp(QMainWindow):
         dev_lbl.setStyleSheet("color: #94a3b8;")
         card_layout.addWidget(dev_lbl)
         
-        self.live_device_combo = QComboBox()
+        self.live_device_combo = RefreshOnOpenComboBox(on_popup_open=self.refresh_input_devices)
         self.live_device_combo.currentIndexChanged.connect(self.on_live_device_changed)
         card_layout.addWidget(self.live_device_combo)
+
+        self.capture_system_audio_cb = QCheckBox("Capture system audio (what you hear)")
+        self.capture_system_audio_cb.setChecked(False)
+        self.capture_system_audio_cb.setCursor(Qt.PointingHandCursor)
+        self.capture_system_audio_cb.stateChanged.connect(self.on_capture_system_audio_toggled)
+        card_layout.addWidget(self.capture_system_audio_cb)
         
         # Stats display label
         self.stats_lbl = QLabel("Status: Connecting...  |  Sent: 0.00 MB  |  Time: 00:00:00")
@@ -1842,42 +2789,55 @@ class PyQtBroadcasterApp(QMainWindow):
         self.stacked_widget.addWidget(widget)
 
     def on_live_device_changed(self, index):
-        if index < 0 or index >= len(self.devices):
+        devices = getattr(self, "devices", None) or []
+        if index < 0 or index >= len(devices):
             return
-        device_id = self.devices[index]["id"]
-        device_name = self.devices[index]["name"]
-        self.active_device_id = device_id
-        self.active_pulse_source = self.devices[index].get("pulse_source")
-        self.active_wp_id = self.devices[index].get("wp_id")
-        self._active_device_name = device_name
+        self._mic_selection = self._selection_from_device(devices[index])
         print(
-            "Dynamic hot-swap request: Input device ID ->",
-            device_id,
-            device_name,
-            self.active_pulse_source,
-            self.active_wp_id,
+            "Mic input selection ->",
+            self._mic_selection.get("id"),
+            devices[index].get("name"),
         )
-        if self.is_broadcasting:
-            self.connection_status = "Switching input..."
+        self._apply_capture_selection_from_ui()
+
+    def on_capture_system_audio_toggled(self, _state):
+        """Enable/disable capture of the current default system output."""
+        enabled = self._capture_system_audio_enabled()
+        print("Capture system audio ->", enabled)
+        if enabled:
+            sys_dev = self._resolve_default_system_audio_device()
+            if sys_dev is None:
+                QMessageBox.warning(
+                    self,
+                    "System Audio Unavailable",
+                    "Could not find a loopback for the current system output.\n\n"
+                    "On Linux this uses the default sink monitor. "
+                    "On macOS/Windows, install/enable a loopback device "
+                    "(BlackHole, Stereo Mix, etc.).",
+                )
+                cb = getattr(self, "capture_system_audio_cb", None)
+                if cb is not None:
+                    cb.blockSignals(True)
+                    cb.setChecked(False)
+                    cb.blockSignals(False)
+                return
+        self._apply_capture_selection_from_ui()
 
     def _open_portaudio_input_callback(self, device_id, channels, samplerate, pulse_source=None, wp_id=None):
         def audio_callback(indata, frames, time_info, status):
             if status:
                 print("Audio input status:", status)
-            try:
-                self.audio_queue.put_nowait(indata.copy())
-            except queue.Full:
-                pass
+            self._queue_put_realtime(self.audio_queue, indata.copy())
 
         stream_kwargs = {
             "device": device_id,
             "channels": channels,
             "samplerate": samplerate,
-            "blocksize": 2048,
+            "blocksize": 1024,
             "callback": audio_callback,
         }
         if sys.platform == "darwin":
-            stream_kwargs["latency"] = "high"
+            stream_kwargs["latency"] = "low"
         return self._open_input_stream(
             stream_kwargs,
             pulse_source=pulse_source,
@@ -1971,7 +2931,8 @@ class PyQtBroadcasterApp(QMainWindow):
         self._start_broadcast(selected_idx)
 
     def _start_broadcast(self, selected_idx):
-        device_id = self.devices[selected_idx]["id"]
+        selected_device = self.devices[selected_idx]
+        device_id = selected_device["id"]
         server_url = DEFAULT_SERVER_URL
         stream_key = self.key_entry.text().strip()
         
@@ -2033,18 +2994,17 @@ class PyQtBroadcasterApp(QMainWindow):
                     
         self.live_station_title.setText(station_name)
         
-        # Load and sync device selections to live dropdown
-        self.active_pulse_source = self.devices[selected_idx].get("pulse_source")
-        self.active_wp_id = self.devices[selected_idx].get("wp_id")
+        # Mic dropdown gets the Connect Live device; system audio stays checkbox-controlled.
+        self._mic_selection = self._selection_from_device(selected_device)
+        self.active_pulse_source = selected_device.get("pulse_source")
+        self.active_wp_id = selected_device.get("wp_id")
+        self._active_device_name = selected_device["name"]
+        self.active_device_id = device_id
         self._populate_input_device_combos(
             selected_id=device_id,
             selected_pulse_source=self.active_pulse_source,
             selected_wp_id=self.active_wp_id,
         )
-        if selected_idx >= 0:
-            self.live_device_combo.setCurrentIndex(selected_idx)
-        self._active_device_name = self.devices[selected_idx]["name"]
-        self.active_device_id = device_id
         bitrate_index = self.bitrate_combo.currentIndex()
         bitrate_opts = [320, 256, 192, 128, 96]
         if bitrate_index >= 0 and bitrate_index < len(bitrate_opts):
@@ -2057,7 +3017,8 @@ class PyQtBroadcasterApp(QMainWindow):
         
         self.bytes_sent = 0
         self.start_time = time.time()
-        self.audio_queue = queue.Queue(maxsize=100)
+        self.audio_queue = queue.Queue(maxsize=16)
+        self.mp3_queue = queue.Queue(maxsize=32)
         self.broadcast_error = None
         
         self.stacked_widget.setCurrentIndex(2)
@@ -2105,10 +3066,11 @@ class PyQtBroadcasterApp(QMainWindow):
         """Async WebSocket ingest worker with concurrent VU meter loop."""
         attempts = 0
         max_attempts = 100
-        self.active_device_id = device_id
-        current_stream_device_id = None
-        current_pulse_source = None
-        current_wp_id = None
+        # Prefer the dual-capture plan already set from the Live dropdowns.
+        if getattr(self, "_capture_sig", None) is None:
+            self.active_device_id = device_id
+            self._apply_capture_selection_from_ui()
+        current_capture_sig = None
         audio_stream = None
         encoder = None
         vu_task = None
@@ -2161,65 +3123,65 @@ class PyQtBroadcasterApp(QMainWindow):
                     pcm_bytes = pcm_int16.tobytes()
                     mp3_data = encoder.encode(pcm_bytes)
                     if mp3_data:
-                        try:
-                            self.mp3_queue.put_nowait(mp3_data)
-                        except queue.Full:
-                            pass
+                        self._queue_put_realtime(self.mp3_queue, mp3_data)
 
         def open_capture_for_active_device():
-            """Open/replace PortAudio capture for active_device_id without touching the WebSocket."""
-            nonlocal audio_stream, encoder, current_stream_device_id, current_pulse_source, current_wp_id, vu_task
+            """Open/replace capture for the current mic and/or system-audio plan."""
+            nonlocal audio_stream, encoder, current_capture_sig, vu_task
 
-            pulse_source = getattr(self, "active_pulse_source", None)
-            wp_id = getattr(self, "active_wp_id", None)
-            if (
-                self.active_device_id == current_stream_device_id
-                and pulse_source == current_pulse_source
-                and wp_id == current_wp_id
-                and audio_stream is not None
-            ):
+            mic = getattr(self, "_capture_mic", None)
+            sys_dev = getattr(self, "_capture_sys", None)
+            sig = getattr(self, "_capture_sig", None)
+
+            # Both empty: stay LIVE on the WebSocket but stop capturing/sending audio.
+            if mic is None and sys_dev is None:
+                if current_capture_sig == sig and audio_stream is None:
+                    return True
+                print("Disabling audio input (No input / no system audio)")
+                if audio_stream:
+                    self._close_capture_source(audio_stream)
+                    audio_stream = None
+                encoder = None
+                self.audio_queue = queue.Queue(maxsize=16)
+                self.mp3_queue = queue.Queue(maxsize=32)
+                self.current_volume_db = -60.0
+                self.current_frequency_levels = [0] * 20
+                current_capture_sig = sig
                 return True
 
-            channels, samplerate = self.get_device_capture_params(self.active_device_id)
-            device_label = getattr(self, "_active_device_name", "")
-            print(
-                f"Opening audio input device {self.active_device_id} "
-                f"({device_label}, pulse={pulse_source}, wp={wp_id}): {channels}ch @ {samplerate}Hz"
-            )
+            if sig == current_capture_sig and audio_stream is not None:
+                return True
 
             if audio_stream:
                 self._close_capture_source(audio_stream)
                 audio_stream = None
 
-            self.audio_queue = queue.Queue(maxsize=100)
-            self.mp3_queue = queue.Queue(maxsize=200)
-
-            encoder = lameenc.Encoder()
-            encoder.set_bit_rate(bitrate)
-            encoder.set_in_sample_rate(samplerate)
-            encoder.set_channels(channels)
-            encoder.set_quality(0)
+            self.audio_queue = queue.Queue(maxsize=16)
+            self.mp3_queue = queue.Queue(maxsize=32)
 
             try:
-                audio_stream = self._open_portaudio_input_callback(
-                    self.active_device_id,
-                    channels,
-                    samplerate,
-                    pulse_source=pulse_source,
-                    wp_id=wp_id,
-                )
+                bundle = self._open_capture_bundle(mic, sys_dev, self.audio_queue)
             except Exception as ae:
                 print("Failed to open audio capture:", ae)
                 device_hint = getattr(self, "_active_device_name", "the selected device")
-                if self._is_loopback_device_name(device_hint):
+                if sys_dev is not None and mic is None:
+                    self.broadcast_error = self._loopback_capture_error_message(device_hint)
+                elif self._is_loopback_device_name(device_hint):
                     self.broadcast_error = self._loopback_capture_error_message(device_hint)
                 else:
                     self.broadcast_error = self._microphone_capture_error_message()
                 return False
 
-            current_stream_device_id = self.active_device_id
-            current_pulse_source = pulse_source
-            current_wp_id = wp_id
+            channels = bundle.get("channels", 2)
+            samplerate = bundle.get("samplerate", 48000)
+            encoder = lameenc.Encoder()
+            encoder.set_bit_rate(bitrate)
+            encoder.set_in_sample_rate(int(samplerate))
+            encoder.set_channels(int(channels))
+            encoder.set_quality(0)
+
+            audio_stream = bundle
+            current_capture_sig = sig
 
             if vu_task is None or vu_task.done():
                 vu_task = asyncio.ensure_future(vu_loop())
@@ -2275,11 +3237,7 @@ class PyQtBroadcasterApp(QMainWindow):
                         break
 
                     while self.is_broadcasting:
-                        if (
-                            self.active_device_id != current_stream_device_id
-                            or getattr(self, "active_pulse_source", None) != current_pulse_source
-                            or getattr(self, "active_wp_id", None) != current_wp_id
-                        ):
+                        if getattr(self, "_capture_sig", None) != current_capture_sig:
                             print("Input device changed — swapping capture source (WebSocket stays open)")
                             if not open_capture_for_active_device():
                                 self.is_broadcasting = False
@@ -2356,6 +3314,16 @@ class PyQtBroadcasterApp(QMainWindow):
             QMessageBox.critical(self, "Broadcast Error", err)
             self.handle_stop_broadcast()
             return
+
+        # Hotplug: refresh inputs when devices appear/disappear (e.g. unplug headphones).
+        live_page = (
+            hasattr(self, "stacked_widget")
+            and self.stacked_widget.currentIndex() == 2
+        )
+        if self.is_broadcasting or live_page:
+            if now - getattr(self, "_last_input_device_poll", 0) >= 1.5:
+                self._last_input_device_poll = now
+                self._poll_input_device_changes()
 
         if self.is_broadcasting:
             # Pass 20 bands levels list to the custom visualizer
