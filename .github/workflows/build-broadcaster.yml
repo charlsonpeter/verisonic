@@ -4,10 +4,15 @@ on:
   push:
     branches:
       - master
+    tags:
+      - 'v*'
     paths:
       - 'broadcaster/**'
       - '.github/workflows/build-broadcaster.yml'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -94,3 +99,22 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}
           path: broadcaster/dist/verisonic-broadcaster_amd64.deb
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Installers
+        uses: actions/download-artifact@v7
+        with:
+          path: release-assets
+
+      - name: Create Release and Upload Installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --generate-notes
+          gh release upload "$TAG" release-assets/*/*
