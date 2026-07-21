@@ -471,6 +471,10 @@ _LINUX_SKIP_INPUT_PREFIXES = (
 _LINUX_SOUND_SERVER_NAMES = frozenset({"default", "pulse", "pipewire"})
 
 
+_MIX_BLOCKSIZE = 1024
+_MIX_MIC_BUFFER_MAX = 48000  # ~1s @ 48kHz sample cap for drift
+
+
 class PyQtBroadcasterApp(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -494,6 +498,7 @@ class PyQtBroadcasterApp(QMainWindow):
         self.broadcast_error = None
         self.broadcast_warning = None
         self._broadcast_warning_action = None
+        self._loopback_silence_warned_sig = None
         self.active_device_id = None
         self.active_pulse_source = None
         self.active_wp_id = None
@@ -1007,6 +1012,11 @@ class PyQtBroadcasterApp(QMainWindow):
                 pass
 
         out_name = self._normalize_device_name(self._system_default_output_name())
+        if out_name and ("multi-output" in out_name or "multi output" in out_name):
+            for dev in monitors:
+                label = self._normalize_device_name(dev.get("name") or dev.get("raw_name"))
+                if "blackhole" in label:
+                    return dev
         if out_name:
             for dev in monitors:
                 label = self._normalize_device_name(
@@ -1872,9 +1882,71 @@ class PyQtBroadcasterApp(QMainWindow):
             return channels, rate
         return None
 
+    def _system_output_samplerate_hint(self):
+        """Prefer the active output device's sample rate for loopback capture."""
+        try:
+            out_id = sd.default.device[1]
+            if out_id is None or int(out_id) < 0:
+                return None
+            info = sd.query_devices(int(out_id), "output")
+            sr = info.get("default_samplerate") or info.get("default_sample_rate")
+            sr = int(sr) if sr else 0
+            return sr if sr > 0 else None
+        except Exception:
+            return None
+
+    def _negotiate_shared_samplerate(self, device_specs):
+        """Pick a sample rate supported by every (device, channels) pair in the bundle."""
+        device_rates = []
+        for dev, _ch in device_specs:
+            if dev:
+                _, sr = self.get_device_capture_params(dev.get("id"))
+                device_rates.append(sr)
+
+        candidates = []
+        out_sr = self._system_output_samplerate_hint()
+        if out_sr:
+            candidates.append(out_sr)
+        for sr in (48000, 44100, 96000):
+            if sr not in candidates:
+                candidates.append(sr)
+        for sr in device_rates:
+            if sr not in candidates:
+                candidates.append(sr)
+
+        for sr in candidates:
+            supported = True
+            for dev, ch in device_specs:
+                if not dev:
+                    continue
+                try:
+                    sd.check_input_settings(
+                        device=dev.get("id"),
+                        channels=ch,
+                        samplerate=sr,
+                    )
+                except Exception:
+                    supported = False
+                    break
+            if supported:
+                return sr
+        return device_rates[0] if device_rates else 48000
+
     def _capture_format_for_device(self, device):
         """Channels/rate for capture; Linux monitors prefer native Pulse format (usually 48k)."""
-        channels, samplerate = self.get_device_capture_params(device.get("id"))
+        device_id = device.get("id")
+        channels, samplerate = self.get_device_capture_params(device_id)
+        if sys.platform == "darwin" and self._is_system_audio_device(device):
+            channels = max(channels, 2)
+            out_sr = self._system_output_samplerate_hint()
+            if out_sr:
+                try:
+                    sd.check_input_settings(
+                        device=device_id, channels=channels, samplerate=out_sr
+                    )
+                    return channels, out_sr
+                except Exception:
+                    pass
         if sys.platform == "linux":
             pulse = device.get("pulse_source")
             if pulse:
@@ -1889,36 +1961,77 @@ class PyQtBroadcasterApp(QMainWindow):
         """
         Combine mic + system-audio PCM.
 
-        System audio is the timing clock when present so playback stays continuous.
-        Mic is mixed when a chunk is ready; missing mic does not stall the stream.
+        System audio is the timing clock. Mic samples are FIFO-aligned to each
+        sys block so neither source is skipped or duplicated mid-stream.
         """
-        while not stop_event.is_set():
-            sys_chunk = None
-            mic = None
-            try:
-                sys_chunk = sys_q.get(timeout=0.05)
-            except queue.Empty:
-                pass
-            try:
-                mic = mic_q.get_nowait()
-            except queue.Empty:
-                pass
+        mic_chunks = []
+        mic_samples = 0
 
-            if sys_chunk is None and mic is None:
+        def drain_mic():
+            nonlocal mic_samples
+            while True:
+                try:
+                    chunk = mic_q.get_nowait()
+                except queue.Empty:
+                    break
+                part = self._reshape_audio_channels(chunk, channels)
+                mic_chunks.append(part)
+                mic_samples += part.shape[0]
+            while mic_samples > _MIX_MIC_BUFFER_MAX and mic_chunks:
+                dropped = mic_chunks.pop(0)
+                mic_samples -= dropped.shape[0]
+
+        def take_mic(num_samples):
+            nonlocal mic_samples
+            if num_samples <= 0:
+                return np.zeros((0, channels), dtype=np.float32)
+            if mic_samples <= 0:
+                return np.zeros((num_samples, channels), dtype=np.float32)
+            parts = []
+            need = num_samples
+            while need > 0 and mic_chunks:
+                head = mic_chunks[0]
+                if head.shape[0] <= need:
+                    parts.append(head)
+                    need -= head.shape[0]
+                    mic_samples -= head.shape[0]
+                    mic_chunks.pop(0)
+                else:
+                    parts.append(head[:need].copy())
+                    mic_chunks[0] = head[need:]
+                    mic_samples -= need
+                    need = 0
+            if not parts:
+                return np.zeros((num_samples, channels), dtype=np.float32)
+            mic_part = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=0)
+            if mic_part.shape[0] < num_samples:
+                pad = np.zeros((num_samples - mic_part.shape[0], channels), dtype=np.float32)
+                mic_part = np.concatenate([mic_part, pad], axis=0)
+            return mic_part
+
+        mix_gain = 0.85
+        while not stop_event.is_set():
+            drain_mic()
+            try:
+                sys_chunk = sys_q.get(timeout=0.1)
+            except queue.Empty:
                 continue
 
-            if sys_chunk is None:
-                mixed = self._reshape_audio_channels(mic, channels)
-            elif mic is None:
-                mixed = self._reshape_audio_channels(sys_chunk, channels)
-            else:
-                a = self._reshape_audio_channels(mic, channels)
-                b = self._reshape_audio_channels(sys_chunk, channels)
-                n = min(a.shape[0], b.shape[0])
-                if n <= 0:
-                    continue
-                mixed = np.clip(a[:n] + b[:n], -1.0, 1.0)
+            sys_part = self._reshape_audio_channels(sys_chunk, channels)
+            n = sys_part.shape[0]
+            if n <= 0:
+                continue
+
+            mic_part = take_mic(n)
+            mixed = np.clip(mic_part * mix_gain + sys_part * mix_gain, -1.0, 1.0)
             self._queue_put_realtime(out_q, mixed)
+
+    def _portaudio_latency_for_device(self, device, for_mix=False):
+        if sys.platform == "darwin":
+            if for_mix or (device and self._is_system_audio_device(device)):
+                return "high"
+            return "low"
+        return None
 
     def _open_parec_to_queue(self, pulse_source, channels, samplerate, out_q, blocksize=1024):
         """Capture a Pulse/PipeWire source via parec into out_q (Linux mix path)."""
@@ -1989,28 +2102,40 @@ class PyQtBroadcasterApp(QMainWindow):
         thread.start()
         return {"type": "parec", "proc": proc, "stop": stop, "thread": thread}
 
-    def _open_portaudio_to_queue(self, device, channels, samplerate, out_q, apply_linux_route=False):
+    @staticmethod
+    def _boost_loopback_pcm(pcm, device):
+        """macOS loopback (BlackHole) capture is often very quiet; apply modest gain."""
+        if sys.platform != "darwin" or not device or not PyQtBroadcasterApp._is_system_audio_device(device):
+            return pcm
+        boosted = np.asarray(pcm, dtype=np.float32) * 5.0
+        return np.clip(boosted, -1.0, 1.0)
+
+    def _open_portaudio_to_queue(self, device, channels, samplerate, out_q, apply_linux_route=False, mix_channels=None, for_mix=False):
         device_id = device.get("id")
         pulse_source = device.get("pulse_source") if apply_linux_route else None
         wp_id = device.get("wp_id") if apply_linux_route else None
+        reshape_to = mix_channels if mix_channels is not None else channels
 
         def audio_callback(indata, frames, time_info, status):
             if status:
                 print("Audio input status:", status)
+            pcm = self._boost_loopback_pcm(indata.copy(), device)
             self._queue_put_realtime(
                 out_q,
-                self._reshape_audio_channels(indata.copy(), channels),
+                self._reshape_audio_channels(pcm, reshape_to),
             )
 
+        mix_block = _MIX_BLOCKSIZE if for_mix else 1024
         stream_kwargs = {
             "device": device_id,
             "channels": channels,
             "samplerate": samplerate,
-            "blocksize": 1024,
+            "blocksize": mix_block,
             "callback": audio_callback,
         }
-        if sys.platform == "darwin":
-            stream_kwargs["latency"] = "low"
+        latency = self._portaudio_latency_for_device(device, for_mix=for_mix)
+        if latency is not None:
+            stream_kwargs["latency"] = latency
         stream = self._open_input_stream(
             stream_kwargs,
             pulse_source=pulse_source,
@@ -2018,7 +2143,7 @@ class PyQtBroadcasterApp(QMainWindow):
         )
         return {"type": "portaudio", "stream": stream}
 
-    def _open_source_to_queue(self, device, channels, samplerate, out_q, for_mix=False):
+    def _open_source_to_queue(self, device, channels, samplerate, out_q, for_mix=False, mix_channels=None):
         """Open one capture source that writes PCM float chunks into out_q."""
         if sys.platform == "linux" and (for_mix or device.get("is_monitor")):
             pulse = device.get("pulse_source")
@@ -2034,6 +2159,8 @@ class PyQtBroadcasterApp(QMainWindow):
             samplerate,
             out_q,
             apply_linux_route=(sys.platform == "linux" and not for_mix),
+            mix_channels=mix_channels,
+            for_mix=for_mix,
         )
 
     def _open_capture_bundle(self, mic, sys_dev, out_q):
@@ -2045,33 +2172,38 @@ class PyQtBroadcasterApp(QMainWindow):
             ch_m, sr_m = self._capture_format_for_device(mic)
             ch_s, sr_s = self._capture_format_for_device(sys_dev)
             channels = 2 if max(ch_m, ch_s) >= 2 else 1
-            # Prefer 48k on Linux so mic+monitor stay aligned with PipeWire.
-            if sys.platform == "linux":
-                samplerate = 48000
-            elif sr_m == sr_s:
-                samplerate = sr_m
-            elif 48000 in (sr_m, sr_s):
-                samplerate = 48000
-            else:
-                samplerate = sr_m
+            samplerate = self._negotiate_shared_samplerate([(mic, ch_m), (sys_dev, ch_s)])
 
-            mic_q = queue.Queue(maxsize=8)
-            sys_q = queue.Queue(maxsize=8)
+            mic_q = queue.Queue(maxsize=32)
+            sys_q = queue.Queue(maxsize=32)
             stop = threading.Event()
             print(
-                f"Opening mixed capture: mic={mic.get('name')!r} + "
-                f"sys={sys_dev.get('name')!r} ({channels}ch @ {samplerate}Hz)"
+                f"Opening mixed capture: mic={mic.get('name')!r} ({ch_m}ch) + "
+                f"sys={sys_dev.get('name')!r} ({ch_s}ch) -> {channels}ch @ {samplerate}Hz"
             )
-            stream_mic = self._open_source_to_queue(
-                mic, channels, samplerate, mic_q, for_mix=True
-            )
-            try:
-                stream_sys = self._open_source_to_queue(
-                    sys_dev, channels, samplerate, sys_q, for_mix=True
+            if sys.platform == "darwin":
+                # Open the built-in mic first; some macOS builds route BlackHole reliably only after.
+                stream_mic = self._open_source_to_queue(
+                    mic, ch_m, samplerate, mic_q, for_mix=True, mix_channels=channels
                 )
-            except Exception:
-                self._close_capture_handle(stream_mic)
-                raise
+                try:
+                    stream_sys = self._open_source_to_queue(
+                        sys_dev, ch_s, samplerate, sys_q, for_mix=True, mix_channels=channels
+                    )
+                except Exception:
+                    self._close_capture_handle(stream_mic)
+                    raise
+            else:
+                stream_mic = self._open_source_to_queue(
+                    mic, ch_m, samplerate, mic_q, for_mix=True, mix_channels=channels
+                )
+                try:
+                    stream_sys = self._open_source_to_queue(
+                        sys_dev, ch_s, samplerate, sys_q, for_mix=True, mix_channels=channels
+                    )
+                except Exception:
+                    self._close_capture_handle(stream_mic)
+                    raise
             mixer = threading.Thread(
                 target=self._mix_capture_loop,
                 args=(mic_q, sys_q, out_q, stop, channels),
@@ -2106,19 +2238,12 @@ class PyQtBroadcasterApp(QMainWindow):
             handle["samplerate"] = samplerate
             return handle
 
-        stream = self._open_portaudio_input_callback(
-            primary["id"],
-            channels,
-            samplerate,
-            pulse_source=primary.get("pulse_source"),
-            wp_id=primary.get("wp_id"),
+        handle = self._open_source_to_queue(
+            primary, channels, samplerate, out_q, for_mix=True
         )
-        return {
-            "type": "single",
-            "stream": stream,
-            "channels": channels,
-            "samplerate": samplerate,
-        }
+        handle["channels"] = channels
+        handle["samplerate"] = samplerate
+        return handle
 
     def _close_capture_handle(self, handle):
         if handle is None:
@@ -2825,7 +2950,7 @@ class PyQtBroadcasterApp(QMainWindow):
                 return
         self._apply_capture_selection_from_ui()
 
-    def _open_portaudio_input_callback(self, device_id, channels, samplerate, pulse_source=None, wp_id=None):
+    def _open_portaudio_input_callback(self, device_id, channels, samplerate, pulse_source=None, wp_id=None, device=None):
         def audio_callback(indata, frames, time_info, status):
             if status:
                 print("Audio input status:", status)
@@ -2838,8 +2963,9 @@ class PyQtBroadcasterApp(QMainWindow):
             "blocksize": 1024,
             "callback": audio_callback,
         }
-        if sys.platform == "darwin":
-            stream_kwargs["latency"] = "low"
+        latency = self._portaudio_latency_for_device(device)
+        if latency is not None:
+            stream_kwargs["latency"] = latency
         return self._open_input_stream(
             stream_kwargs,
             pulse_source=pulse_source,
@@ -2916,6 +3042,10 @@ class PyQtBroadcasterApp(QMainWindow):
             "3. System Settings → Sound → Output → Multi-Output Device\n"
             "4. Re-enable Capture system audio when ready"
         )
+
+    def _schedule_loopback_silence_check(self, sys_dev):
+        """Reserved — silence auto-warn disabled; it false-triggered and unchecked system audio."""
+        return
 
     def _loopback_capture_error_message(self, device_name):
         if sys.platform == "darwin":
@@ -3095,6 +3225,7 @@ class PyQtBroadcasterApp(QMainWindow):
         self.broadcast_error = None
         self.broadcast_warning = None
         self._broadcast_warning_action = None
+        self._loopback_silence_warned_sig = None
         
         self.stacked_widget.setCurrentIndex(2)
         
@@ -3294,6 +3425,8 @@ class PyQtBroadcasterApp(QMainWindow):
                     encoder.set_quality(0)
                     audio_stream = bundle
                     current_capture_sig = sig
+                    if plan_sys is not None:
+                        self._schedule_loopback_silence_check(plan_sys)
                     if vu_task is None or vu_task.done():
                         vu_task = asyncio.ensure_future(vu_loop())
 
@@ -3312,6 +3445,9 @@ class PyQtBroadcasterApp(QMainWindow):
 
             audio_stream = bundle
             current_capture_sig = sig
+
+            if sys_dev is not None:
+                self._schedule_loopback_silence_check(sys_dev)
 
             if vu_task is None or vu_task.done():
                 vu_task = asyncio.ensure_future(vu_loop())
@@ -3674,7 +3810,12 @@ class PyQtBroadcasterApp(QMainWindow):
             print("Failed to query device capture params:", exc)
             return channels, preferred_sr
 
+        is_loopback = self._is_loopback_device_name(info.get("name", ""))
+        out_sr = self._system_output_samplerate_hint() if is_loopback else None
+
         candidates = []
+        if out_sr:
+            candidates.append(out_sr)
         for sr in (preferred_sr, 48000, 44100, 96000):
             if sr not in candidates:
                 candidates.append(sr)
