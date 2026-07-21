@@ -9,7 +9,7 @@ BUILD_DIR="$BROADCASTER_DIR/build"
 BINARY="$DIST_DIR/verisonic-broadcaster"
 STAGING="$BUILD_DIR/deb-staging"
 DEB_VERSION="${VERISONIC_DEB_VERSION:-1.0.0}"
-OUTPUT="$DIST_DIR/verisonic-broadcaster_${DEB_VERSION}_amd64.deb"
+OUTPUT="$DIST_DIR/verisonic-broadcaster_amd64.deb"
 TEMPLATE="$SCRIPT_DIR/debian"
 
 if [ ! -f "$BINARY" ]; then

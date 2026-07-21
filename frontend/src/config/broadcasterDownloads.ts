@@ -6,7 +6,7 @@ const downloadBase =
 export const BROADCASTER_INSTALLERS = {
   windows: `${downloadBase}/VeriSonic%20Broadcaster%20Setup.exe`,
   macos: `${downloadBase}/VeriSonic%20Broadcaster.pkg`,
-  linux: `${downloadBase}/verisonic-broadcaster_1.0.0_amd64.deb`,
+  linux: `${downloadBase}/verisonic-broadcaster_amd64.deb`,
 } as const;
 
 export type BroadcasterPlatform = keyof typeof BROADCASTER_INSTALLERS;
