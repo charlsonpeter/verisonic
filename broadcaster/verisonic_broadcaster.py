@@ -493,6 +493,7 @@ class PyQtBroadcasterApp(QMainWindow):
         self.current_frequency_levels = [0] * 20
         self.broadcast_error = None
         self.broadcast_warning = None
+        self._broadcast_warning_action = None
         self.active_device_id = None
         self.active_pulse_source = None
         self.active_wp_id = None
@@ -2845,38 +2846,76 @@ class PyQtBroadcasterApp(QMainWindow):
             wp_id=wp_id,
         )
 
+    def _uncheck_system_audio_capture_cb(self):
+        cb = getattr(self, "capture_system_audio_cb", None)
+        if cb is not None:
+            cb.blockSignals(True)
+            cb.setChecked(False)
+            cb.blockSignals(False)
+        self._apply_capture_selection_from_ui()
+
+    def _select_no_input_in_live_combo(self):
+        combo = getattr(self, "live_device_combo", None)
+        if combo is not None and getattr(self, "devices", None):
+            combo.blockSignals(True)
+            combo.setCurrentIndex(0)
+            combo.blockSignals(False)
+            if self.devices:
+                self._mic_selection = self._selection_from_device(self.devices[0])
+        else:
+            self._mic_selection = self._selection_from_device(_NO_INPUT_DEVICE)
+        self._apply_capture_selection_from_ui()
+
+    def _apply_capture_plan_state(self, mic, sys_dev):
+        """Sync in-memory capture plan without touching Live UI controls."""
+        self._capture_mic = mic
+        self._capture_sys = sys_dev
+        self._capture_sig = (self._device_capture_key(mic), self._device_capture_key(sys_dev))
+        if mic and sys_dev:
+            self.active_device_id = mic.get("id")
+            self.active_pulse_source = mic.get("pulse_source")
+            self.active_wp_id = mic.get("wp_id")
+            self._active_device_name = (
+                f"{mic.get('name') or 'Input'} + "
+                f"{self._system_audio_display_name(sys_dev)}"
+            )
+        elif mic:
+            self.active_device_id = mic.get("id")
+            self.active_pulse_source = mic.get("pulse_source")
+            self.active_wp_id = mic.get("wp_id")
+            self._active_device_name = mic.get("name") or ""
+        elif sys_dev:
+            self.active_device_id = sys_dev.get("id")
+            self.active_pulse_source = sys_dev.get("pulse_source")
+            self.active_wp_id = sys_dev.get("wp_id")
+            self._active_device_name = sys_dev.get("name") or ""
+        else:
+            self.active_device_id = None
+            self.active_pulse_source = None
+            self.active_wp_id = None
+            self._active_device_name = "No input"
+        self.connection_status = "LIVE"
+
+    def _run_broadcast_warning_action(self, action):
+        if action == "uncheck_system_audio":
+            self._uncheck_system_audio_capture_cb()
+        elif action == "select_no_input":
+            self._select_no_input_in_live_combo()
+        elif action == "select_no_input_and_uncheck_system_audio":
+            self._uncheck_system_audio_capture_cb()
+            self._select_no_input_in_live_combo()
+
     def _system_audio_fallback_warning_message(self, sys_dev):
         name = self._system_audio_display_name(sys_dev) if sys_dev else "system audio"
         return (
             f"Could not open {name}.\n\n"
-            "Continuing with your microphone only.\n\n"
+            "Continuing with your selected input device only.\n\n"
             "For system audio via BlackHole:\n"
             "1. Audio MIDI Setup → Create Multi-Output Device\n"
             "2. Enable BlackHole 2ch + your speakers/headphones\n"
             "3. System Settings → Sound → Output → Multi-Output Device\n"
             "4. Re-enable Capture system audio when ready"
         )
-
-    def _sync_mic_only_fallback_state(self):
-        """Disable system-audio capture in UI/state after a mixed-capture fallback."""
-        mic = getattr(self, "_capture_mic", None)
-        self._capture_sys = None
-        self._capture_sig = (self._device_capture_key(mic), None)
-        if mic:
-            self.active_device_id = mic.get("id")
-            self.active_pulse_source = mic.get("pulse_source")
-            self.active_wp_id = mic.get("wp_id")
-            self._active_device_name = mic.get("name") or ""
-        self.connection_status = "LIVE"
-
-        def _uncheck_system_audio_cb():
-            cb = getattr(self, "capture_system_audio_cb", None)
-            if cb is not None:
-                cb.blockSignals(True)
-                cb.setChecked(False)
-                cb.blockSignals(False)
-
-        QTimer.singleShot(0, _uncheck_system_audio_cb)
 
     def _loopback_capture_error_message(self, device_name):
         if sys.platform == "darwin":
@@ -2902,21 +2941,21 @@ class PyQtBroadcasterApp(QMainWindow):
             "(PulseAudio/PipeWire) or check your sound server loopback module."
         )
 
-    def _microphone_capture_error_message(self):
+    def _input_device_capture_error_message(self):
         if sys.platform == "darwin":
             return (
-                "Could not open the selected audio input.\n\n"
+                "Could not open the selected input device.\n\n"
                 "Open System Settings → Privacy & Security → Microphone "
                 "and enable VeriSonic Broadcaster, then try again."
             )
         if sys.platform == "win32":
             return (
-                "Could not open the selected audio input.\n\n"
+                "Could not open the selected input device.\n\n"
                 "Open Settings → Privacy & security → Microphone and allow desktop apps, "
                 "then check Settings → System → Sound → Input."
             )
         return (
-            "Could not open the selected audio input.\n\n"
+            "Could not open the selected input device.\n\n"
             "Check your system sound/privacy settings and confirm the input device is available."
         )
 
@@ -3055,6 +3094,7 @@ class PyQtBroadcasterApp(QMainWindow):
         self.mp3_queue = queue.Queue(maxsize=32)
         self.broadcast_error = None
         self.broadcast_warning = None
+        self._broadcast_warning_action = None
         
         self.stacked_widget.setCurrentIndex(2)
         
@@ -3198,26 +3238,69 @@ class PyQtBroadcasterApp(QMainWindow):
                 bundle = self._open_capture_bundle(mic, sys_dev, self.audio_queue)
             except Exception as ae:
                 print("Failed to open audio capture:", ae)
+                bundle = None
+                warning_msg = None
+                warning_action = None
+                plan_mic = mic
+                plan_sys = sys_dev
+
                 if mic is not None and sys_dev is not None:
-                    print("Mixed capture failed — falling back to microphone only")
+                    print("Mixed capture failed — falling back to input device only")
                     try:
                         bundle = self._open_capture_bundle(mic, None, self.audio_queue)
-                    except Exception as mic_ae:
-                        print("Microphone fallback also failed:", mic_ae)
-                        self.broadcast_error = self._microphone_capture_error_message()
-                        return False
-                    self.broadcast_warning = self._system_audio_fallback_warning_message(sys_dev)
-                    self._sync_mic_only_fallback_state()
-                    sig = getattr(self, "_capture_sig", None)
+                        warning_msg = self._system_audio_fallback_warning_message(sys_dev)
+                        warning_action = "uncheck_system_audio"
+                        plan_sys = None
+                    except Exception as input_ae:
+                        print("Input device fallback failed:", input_ae)
+                        try:
+                            bundle = self._open_capture_bundle(None, sys_dev, self.audio_queue)
+                            warning_msg = self._input_device_capture_error_message()
+                            warning_action = "select_no_input"
+                            plan_mic = None
+                        except Exception as sys_ae:
+                            print("System audio fallback failed:", sys_ae)
+                            warning_msg = self._input_device_capture_error_message()
+                            warning_action = "select_no_input_and_uncheck_system_audio"
+                            plan_mic = None
+                            plan_sys = None
+                elif sys_dev is not None:
+                    device_hint = getattr(self, "_active_device_name", "system audio")
+                    warning_msg = self._loopback_capture_error_message(device_hint)
+                    warning_action = "uncheck_system_audio"
+                    plan_sys = None
+                elif mic is not None:
+                    warning_msg = self._input_device_capture_error_message()
+                    warning_action = "select_no_input"
+                    plan_mic = None
                 else:
-                    device_hint = getattr(self, "_active_device_name", "the selected device")
-                    if sys_dev is not None and mic is None:
-                        self.broadcast_error = self._loopback_capture_error_message(device_hint)
-                    elif self._is_loopback_device_name(device_hint):
-                        self.broadcast_error = self._loopback_capture_error_message(device_hint)
-                    else:
-                        self.broadcast_error = self._microphone_capture_error_message()
-                    return False
+                    return True
+
+                self._apply_capture_plan_state(plan_mic, plan_sys)
+                sig = getattr(self, "_capture_sig", None)
+
+                if bundle is None:
+                    encoder = None
+                    self.current_volume_db = -60.0
+                    self.current_frequency_levels = [0] * 20
+                    current_capture_sig = sig
+                else:
+                    channels = bundle.get("channels", 2)
+                    samplerate = bundle.get("samplerate", 48000)
+                    encoder = lameenc.Encoder()
+                    encoder.set_bit_rate(bitrate)
+                    encoder.set_in_sample_rate(int(samplerate))
+                    encoder.set_channels(int(channels))
+                    encoder.set_quality(0)
+                    audio_stream = bundle
+                    current_capture_sig = sig
+                    if vu_task is None or vu_task.done():
+                        vu_task = asyncio.ensure_future(vu_loop())
+
+                if warning_msg:
+                    self.broadcast_warning = warning_msg
+                    self._broadcast_warning_action = warning_action
+                return True
 
             channels = bundle.get("channels", 2)
             samplerate = bundle.get("samplerate", 48000)
@@ -3356,9 +3439,13 @@ class PyQtBroadcasterApp(QMainWindow):
 
         if hasattr(self, 'broadcast_warning') and self.broadcast_warning:
             warn = self.broadcast_warning
+            action = getattr(self, "_broadcast_warning_action", None)
             self.broadcast_warning = None
+            self._broadcast_warning_action = None
             self.show_and_activate()
-            QMessageBox.warning(self, "System Audio Unavailable", warn)
+            QMessageBox.warning(self, "Audio Capture Unavailable", warn)
+            if action:
+                self._run_broadcast_warning_action(action)
 
         if hasattr(self, 'broadcast_error') and self.broadcast_error:
             err = self.broadcast_error
