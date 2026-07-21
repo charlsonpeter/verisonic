@@ -58,7 +58,9 @@ if sys.platform == "darwin":
     try:
         from installer.macos.audio_permission import (
             ensure_microphone_access,
+            get_default_audio_device_name,
             get_microphone_authorization_status,
+            list_connected_audio_input_names,
             open_microphone_privacy_settings,
             request_microphone_access,
         )
@@ -510,6 +512,8 @@ class PyQtBroadcasterApp(QMainWindow):
         self._capture_sig = None
         self._input_devices_fp = None
         self._output_route_fp = None
+        self._input_route_fp = None
+        self._pending_input_disconnect_warning = None
         self._last_input_device_poll = 0.0
         self.selected_station_id = None
         self.user_stations = []
@@ -955,12 +959,15 @@ class PyQtBroadcasterApp(QMainWindow):
             or PyQtBroadcasterApp._is_loopback_device_name(device.get("raw_name"))
         )
 
-    @staticmethod
-    def _system_audio_display_name(device):
+    def _system_audio_display_name(self, device):
         name = (device.get("name") or "").strip()
         prefix = "System Audio (loopback) — "
         if name.startswith(prefix):
             return name[len(prefix):].strip() or name
+        if sys.platform == "darwin" and self._is_system_audio_device(device):
+            out_name = self._system_default_output_name()
+            if out_name:
+                return f"System Audio (loopback) — {out_name}"
         return name or "System Audio"
 
     def _capture_system_audio_enabled(self):
@@ -979,6 +986,12 @@ class PyQtBroadcasterApp(QMainWindow):
         if sys.platform == "linux":
             return self._linux_default_sink_name()
         return self._normalize_device_name(self._system_default_output_name())
+
+    def _current_input_route_fingerprint(self):
+        """Track the active input route (macOS default mic changes)."""
+        if sys.platform != "darwin":
+            return None
+        return self._normalize_device_name(self._system_default_input_name())
 
     def _resolve_default_system_audio_device(self, devices=None):
         """Pick the monitor/loopback for the current system default output (what you hear)."""
@@ -1028,11 +1041,35 @@ class PyQtBroadcasterApp(QMainWindow):
 
     @staticmethod
     def _selection_from_device(device):
-        return {
+        selection = {
             "id": device.get("id"),
             "pulse_source": device.get("pulse_source"),
             "wp_id": device.get("wp_id"),
         }
+        if sys.platform in ("darwin", "win32"):
+            selection["raw_name"] = device.get("raw_name") or device.get("name")
+        return selection
+
+    @staticmethod
+    def _normalized_device_raw_name(device):
+        return PyQtBroadcasterApp._normalize_device_name(
+            (device or {}).get("raw_name") or (device or {}).get("name") or ""
+        )
+
+    def _find_device_index_by_stable_name(self, devices, selection):
+        """Match PortAudio devices by name when indices shift after refresh."""
+        if sys.platform not in ("darwin", "win32") or not devices:
+            return None
+        target = self._normalize_device_name((selection or {}).get("raw_name") or "")
+        if not target or target == "no input":
+            return None
+        matches = [
+            i for i, dev in enumerate(devices)
+            if self._normalized_device_raw_name(dev) == target
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        return None
 
     @staticmethod
     def _linux_is_sound_server_device(name):
@@ -1628,11 +1665,35 @@ class PyQtBroadcasterApp(QMainWindow):
         return (name or "").lower().strip()
 
     def _system_default_output_name(self):
+        if sys.platform == "darwin" and HAS_MACOS_MIC_API:
+            try:
+                name = get_default_audio_device_name("output")
+                if name:
+                    return name
+            except Exception:
+                pass
         try:
             out_id = sd.default.device[1]
             if out_id is None or int(out_id) < 0:
                 return ""
             info = sd.query_devices(int(out_id), "output")
+            return str(info.get("name", ""))
+        except Exception:
+            return ""
+
+    def _system_default_input_name(self):
+        if sys.platform == "darwin" and HAS_MACOS_MIC_API:
+            try:
+                name = get_default_audio_device_name("input")
+                if name:
+                    return name
+            except Exception:
+                pass
+        try:
+            in_id = sd.default.device[0]
+            if in_id is None or int(in_id) < 0:
+                return ""
+            info = sd.query_devices(int(in_id), "input")
             return str(info.get("name", ""))
         except Exception:
             return ""
@@ -1654,6 +1715,13 @@ class PyQtBroadcasterApp(QMainWindow):
             for i, dev in enumerate(self.devices):
                 if dev.get("is_default"):
                     return i
+        if sys.platform == "darwin":
+            default_name = self._normalize_device_name(self._system_default_input_name())
+            if default_name:
+                for i, dev in enumerate(self.devices):
+                    label = self._normalized_device_raw_name(dev)
+                    if label == default_name and not self._is_loopback_device_name(label):
+                        return i
         try:
             default_input_id = sd.default.device[0]
             if default_input_id is not None and int(default_input_id) >= 0:
@@ -1693,12 +1761,17 @@ class PyQtBroadcasterApp(QMainWindow):
     def _device_capture_key(self, device):
         if not device:
             return None
-        return (
+        key = (
             device.get("id"),
             device.get("pulse_source"),
             device.get("wp_id"),
             device.get("name"),
         )
+        if sys.platform == "darwin" and self._is_system_audio_device(device):
+            key = key + (
+                self._normalize_device_name(self._system_default_output_name()),
+            )
+        return key
 
     def _lookup_device_in_list(self, devices, selection):
         if not devices or not selection:
@@ -1718,6 +1791,9 @@ class PyQtBroadcasterApp(QMainWindow):
             matches = [dev for dev in devices if dev.get("id") == selected_id]
             if len(matches) == 1:
                 return matches[0]
+        idx = self._find_device_index_by_stable_name(devices, selection)
+        if idx is not None:
+            return devices[idx]
         return None
 
     def _resolve_capture_devices_from_ui(self):
@@ -1741,6 +1817,9 @@ class PyQtBroadcasterApp(QMainWindow):
         if self._capture_system_audio_enabled():
             # Always follow the current default output (what you hear).
             sys_dev = self._resolve_default_system_audio_device()
+        else:
+            # Never keep a stale system-audio plan when the checkbox is off.
+            sys_dev = None
 
         return mic, sys_dev
 
@@ -1766,7 +1845,10 @@ class PyQtBroadcasterApp(QMainWindow):
             self.active_device_id = primary.get("id")
             self.active_pulse_source = primary.get("pulse_source")
             self.active_wp_id = primary.get("wp_id")
-            self._active_device_name = primary.get("name") or ""
+            if self._is_system_audio_device(primary):
+                self._active_device_name = self._system_audio_display_name(primary)
+            else:
+                self._active_device_name = primary.get("name") or ""
         else:
             self.active_device_id = None
             self.active_pulse_source = None
@@ -2171,7 +2253,11 @@ class PyQtBroadcasterApp(QMainWindow):
         if mic and sys_dev:
             ch_m, sr_m = self._capture_format_for_device(mic)
             ch_s, sr_s = self._capture_format_for_device(sys_dev)
-            channels = 2 if max(ch_m, ch_s) >= 2 else 1
+            # macOS: always emit stereo (mono sources are duplicated L/R).
+            if sys.platform == "darwin":
+                channels = 2
+            else:
+                channels = 2 if max(ch_m, ch_s) >= 2 else 1
             samplerate = self._negotiate_shared_samplerate([(mic, ch_m), (sys_dev, ch_s)])
 
             mic_q = queue.Queue(maxsize=32)
@@ -2220,26 +2306,38 @@ class PyQtBroadcasterApp(QMainWindow):
             }
 
         primary = mic or sys_dev
-        channels, samplerate = self._capture_format_for_device(primary)
+        capture_ch, samplerate = self._capture_format_for_device(primary)
+        # macOS: always emit stereo; open at native channel count and reshape mono→stereo.
+        if sys.platform == "darwin":
+            channels = 2
+            mix_channels = 2
+        else:
+            channels = capture_ch
+            mix_channels = None
         label = primary.get("name") or ""
         print(
             f"Opening audio input device {primary.get('id')} "
             f"({label}, pulse={primary.get('pulse_source')}, wp={primary.get('wp_id')}): "
-            f"{channels}ch @ {samplerate}Hz"
+            f"{capture_ch}ch capture -> {channels}ch @ {samplerate}Hz"
         )
         # Linux monitors / pulse sources: parec at native rate (avoids PortAudio routing fights).
         if sys.platform == "linux" and (
             primary.get("pulse_source") or primary.get("wp_id") is not None
         ):
             handle = self._open_source_to_queue(
-                primary, channels, samplerate, out_q, for_mix=True
+                primary, capture_ch, samplerate, out_q, for_mix=True
             )
             handle["channels"] = channels
             handle["samplerate"] = samplerate
             return handle
 
         handle = self._open_source_to_queue(
-            primary, channels, samplerate, out_q, for_mix=True
+            primary,
+            capture_ch,
+            samplerate,
+            out_q,
+            for_mix=True,
+            mix_channels=mix_channels,
         )
         handle["channels"] = channels
         handle["samplerate"] = samplerate
@@ -2321,6 +2419,10 @@ class PyQtBroadcasterApp(QMainWindow):
             if len(matches) == 1:
                 combo.setCurrentIndex(matches[0])
                 return True
+        stable_idx = self._find_device_index_by_stable_name(devices, selection)
+        if stable_idx is not None:
+            combo.setCurrentIndex(stable_idx)
+            return True
         combo.setCurrentIndex(0)
         return False
 
@@ -2330,9 +2432,27 @@ class PyQtBroadcasterApp(QMainWindow):
         return mic or sys_dev or _NO_INPUT_DEVICE
 
     def _populate_input_device_combos(self, selected_id=None, selected_pulse_source=None, selected_wp_id=None):
+        previous_selection = dict(getattr(self, "_mic_selection", None) or {})
+        previous_name = (
+            previous_selection.get("raw_name")
+            or previous_selection.get("name")
+            or ""
+        ).strip()
+        had_real_mic = bool(
+            previous_name
+            and previous_name.lower() != "no input"
+            and (
+                previous_selection.get("id") is not None
+                or previous_selection.get("pulse_source")
+                or previous_selection.get("wp_id") is not None
+                or previous_selection.get("raw_name")
+            )
+        )
+
         all_devices = self.get_input_devices()
         self._input_devices_fp = self._fingerprint_input_devices(all_devices)
         self._output_route_fp = self._current_output_route_fingerprint()
+        self._input_route_fp = self._current_input_route_fingerprint()
 
         mic_devices = [dev for dev in all_devices if not self._is_system_audio_device(dev)]
         self.devices = [_NO_INPUT_DEVICE] + mic_devices
@@ -2363,7 +2483,33 @@ class PyQtBroadcasterApp(QMainWindow):
                     "id": selected_id,
                     "pulse_source": selected_pulse_source,
                     "wp_id": selected_wp_id,
+                    "raw_name": previous_selection.get("raw_name"),
                 }
+
+        lost_selection = False
+        if (
+            selected_id is None
+            and selected_pulse_source is None
+            and selected_wp_id is None
+            and had_real_mic
+        ):
+            still_present = self._lookup_device_in_list(self.devices, previous_selection)
+            if still_present is None:
+                lost_selection = True
+                fallback_idx = self._find_default_microphone_input_index()
+                if fallback_idx < 0:
+                    fallback_idx = 0
+                self._mic_selection = self._selection_from_device(self.devices[fallback_idx])
+                fallback_name = self.devices[fallback_idx].get("name") or "No input"
+                # Never auto-enable system audio when a mic is unplugged.
+                if not self._capture_system_audio_enabled():
+                    self._capture_sys = None
+                self._pending_input_disconnect_warning = (
+                    f"The audio input “{previous_name}” was disconnected.\n\n"
+                    f"Switched to “{fallback_name}”.\n\n"
+                    "System audio is not captured unless "
+                    "“Capture system audio” is checked."
+                )
 
         if mic_combo is not None:
             mic_combo.blockSignals(True)
@@ -2376,6 +2522,12 @@ class PyQtBroadcasterApp(QMainWindow):
             mic_combo.blockSignals(False)
 
         self._apply_capture_selection_from_ui()
+        if lost_selection:
+            print(
+                "Selected input disconnected — fell back to",
+                (self._mic_selection or {}).get("raw_name")
+                or (self._mic_selection or {}).get("id"),
+            )
 
     def refresh_input_devices(self):
         """Reload input devices for the Live screen dropdown."""
@@ -2390,14 +2542,17 @@ class PyQtBroadcasterApp(QMainWindow):
             return
         fingerprint = self._fingerprint_input_devices(devices)
         route_fp = self._current_output_route_fingerprint()
+        input_route_fp = self._current_input_route_fingerprint()
         if (
             fingerprint == getattr(self, "_input_devices_fp", None)
             and route_fp == getattr(self, "_output_route_fp", None)
+            and input_route_fp == getattr(self, "_input_route_fp", None)
         ):
             return
         print("Input/output route changed — refreshing capture plan")
         self._input_devices_fp = fingerprint
         self._output_route_fp = route_fp
+        self._input_route_fp = input_route_fp
         self.refresh_input_devices()
 
     def _open_input_stream(self, stream_kwargs, pulse_source=None, wp_id=None):
@@ -3014,7 +3169,7 @@ class PyQtBroadcasterApp(QMainWindow):
             self.active_device_id = sys_dev.get("id")
             self.active_pulse_source = sys_dev.get("pulse_source")
             self.active_wp_id = sys_dev.get("wp_id")
-            self._active_device_name = sys_dev.get("name") or ""
+            self._active_device_name = self._system_audio_display_name(sys_dev)
         else:
             self.active_device_id = None
             self.active_pulse_source = None
@@ -3583,6 +3738,12 @@ class PyQtBroadcasterApp(QMainWindow):
             if action:
                 self._run_broadcast_warning_action(action)
 
+        pending_disconnect = getattr(self, "_pending_input_disconnect_warning", None)
+        if pending_disconnect:
+            self._pending_input_disconnect_warning = None
+            self.show_and_activate()
+            QMessageBox.warning(self, "Input Device Disconnected", pending_disconnect)
+
         if hasattr(self, 'broadcast_error') and self.broadcast_error:
             err = self.broadcast_error
             self.broadcast_error = None
@@ -3834,10 +3995,25 @@ class PyQtBroadcasterApp(QMainWindow):
             device_list = sd.query_devices()
             if sys.platform == "linux":
                 return self._get_linux_input_devices(device_list)
+            connected_names = None
+            if sys.platform == "darwin" and HAS_MACOS_MIC_API:
+                try:
+                    connected_names = {
+                        self._normalize_device_name(n)
+                        for n in list_connected_audio_input_names()
+                        if n
+                    }
+                except Exception as exc:
+                    print("CoreAudio input list failed:", exc)
+                    connected_names = None
             for idx, dev in enumerate(device_list):
                 if dev.get("max_input_channels", 0) <= 0:
                     continue
                 raw_name = dev.get("name", "Unknown Device") or "Unknown Device"
+                if connected_names is not None:
+                    # Drop PortAudio ghost entries after unplug (e.g. headset mic).
+                    if self._normalize_device_name(raw_name) not in connected_names:
+                        continue
                 devices.append({
                     "id": idx,
                     "name": raw_name,
