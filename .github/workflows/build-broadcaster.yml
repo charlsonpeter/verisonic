@@ -114,6 +114,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add broadcaster/dist/VeriSonic\ Broadcaster\ Setup.exe broadcaster/dist/VeriSonic\ Broadcaster.pkg broadcaster/dist/verisonic-broadcaster_amd64.deb
+          git add -f broadcaster/dist/VeriSonic\ Broadcaster\ Setup.exe broadcaster/dist/VeriSonic\ Broadcaster.pkg broadcaster/dist/verisonic-broadcaster_amd64.deb
           git diff --cached --quiet || git commit -m "build: update broadcaster installers"
           git push
