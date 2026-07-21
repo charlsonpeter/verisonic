@@ -492,6 +492,7 @@ class PyQtBroadcasterApp(QMainWindow):
         self.current_volume_db = -60.0
         self.current_frequency_levels = [0] * 20
         self.broadcast_error = None
+        self.broadcast_warning = None
         self.active_device_id = None
         self.active_pulse_source = None
         self.active_wp_id = None
@@ -2844,6 +2845,39 @@ class PyQtBroadcasterApp(QMainWindow):
             wp_id=wp_id,
         )
 
+    def _system_audio_fallback_warning_message(self, sys_dev):
+        name = self._system_audio_display_name(sys_dev) if sys_dev else "system audio"
+        return (
+            f"Could not open {name}.\n\n"
+            "Continuing with your microphone only.\n\n"
+            "For system audio via BlackHole:\n"
+            "1. Audio MIDI Setup → Create Multi-Output Device\n"
+            "2. Enable BlackHole 2ch + your speakers/headphones\n"
+            "3. System Settings → Sound → Output → Multi-Output Device\n"
+            "4. Re-enable Capture system audio when ready"
+        )
+
+    def _sync_mic_only_fallback_state(self):
+        """Disable system-audio capture in UI/state after a mixed-capture fallback."""
+        mic = getattr(self, "_capture_mic", None)
+        self._capture_sys = None
+        self._capture_sig = (self._device_capture_key(mic), None)
+        if mic:
+            self.active_device_id = mic.get("id")
+            self.active_pulse_source = mic.get("pulse_source")
+            self.active_wp_id = mic.get("wp_id")
+            self._active_device_name = mic.get("name") or ""
+        self.connection_status = "LIVE"
+
+        def _uncheck_system_audio_cb():
+            cb = getattr(self, "capture_system_audio_cb", None)
+            if cb is not None:
+                cb.blockSignals(True)
+                cb.setChecked(False)
+                cb.blockSignals(False)
+
+        QTimer.singleShot(0, _uncheck_system_audio_cb)
+
     def _loopback_capture_error_message(self, device_name):
         if sys.platform == "darwin":
             return (
@@ -3020,6 +3054,7 @@ class PyQtBroadcasterApp(QMainWindow):
         self.audio_queue = queue.Queue(maxsize=16)
         self.mp3_queue = queue.Queue(maxsize=32)
         self.broadcast_error = None
+        self.broadcast_warning = None
         
         self.stacked_widget.setCurrentIndex(2)
         
@@ -3163,14 +3198,26 @@ class PyQtBroadcasterApp(QMainWindow):
                 bundle = self._open_capture_bundle(mic, sys_dev, self.audio_queue)
             except Exception as ae:
                 print("Failed to open audio capture:", ae)
-                device_hint = getattr(self, "_active_device_name", "the selected device")
-                if sys_dev is not None and mic is None:
-                    self.broadcast_error = self._loopback_capture_error_message(device_hint)
-                elif self._is_loopback_device_name(device_hint):
-                    self.broadcast_error = self._loopback_capture_error_message(device_hint)
+                if mic is not None and sys_dev is not None:
+                    print("Mixed capture failed — falling back to microphone only")
+                    try:
+                        bundle = self._open_capture_bundle(mic, None, self.audio_queue)
+                    except Exception as mic_ae:
+                        print("Microphone fallback also failed:", mic_ae)
+                        self.broadcast_error = self._microphone_capture_error_message()
+                        return False
+                    self.broadcast_warning = self._system_audio_fallback_warning_message(sys_dev)
+                    self._sync_mic_only_fallback_state()
+                    sig = getattr(self, "_capture_sig", None)
                 else:
-                    self.broadcast_error = self._microphone_capture_error_message()
-                return False
+                    device_hint = getattr(self, "_active_device_name", "the selected device")
+                    if sys_dev is not None and mic is None:
+                        self.broadcast_error = self._loopback_capture_error_message(device_hint)
+                    elif self._is_loopback_device_name(device_hint):
+                        self.broadcast_error = self._loopback_capture_error_message(device_hint)
+                    else:
+                        self.broadcast_error = self._microphone_capture_error_message()
+                    return False
 
             channels = bundle.get("channels", 2)
             samplerate = bundle.get("samplerate", 48000)
@@ -3306,6 +3353,12 @@ class PyQtBroadcasterApp(QMainWindow):
                     target=lambda: self.ensure_auth_token_fresh(min_ttl_sec=300),
                     daemon=True,
                 ).start()
+
+        if hasattr(self, 'broadcast_warning') and self.broadcast_warning:
+            warn = self.broadcast_warning
+            self.broadcast_warning = None
+            self.show_and_activate()
+            QMessageBox.warning(self, "System Audio Unavailable", warn)
 
         if hasattr(self, 'broadcast_error') and self.broadcast_error:
             err = self.broadcast_error
