@@ -64,13 +64,28 @@ export const LicenceDocumentUpload: React.FC<LicenceDocumentUploadProps> = ({
   };
 
   return (
-    <div className="space-y-2 sm:col-span-2">
-      <label className="font-bold text-slate-400 uppercase tracking-wider block text-xs">
-        Licence Document
-      </label>
-      <p className="text-[10px] text-slate-500">
-        PDF or image (JPG, PNG, WEBP), max 10 MB.
-      </p>
+    <div className="flex flex-wrap items-center gap-2 sm:col-span-2">
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+        className="hidden"
+        disabled={disabled || isUploading}
+        onChange={handleFileChange}
+      />
+      <button
+        type="button"
+        disabled={disabled || isUploading}
+        onClick={() => inputRef.current?.click()}
+        className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 border border-white/5 rounded-xl text-[10px] font-bold text-slate-300 hover:text-white uppercase tracking-wider transition disabled:opacity-40"
+      >
+        {isUploading ? (
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+        ) : (
+          <Upload className="w-3.5 h-3.5" />
+        )}
+        {currentUrl ? 'Replace document' : 'Upload document'}
+      </button>
       {currentUrl && (
         <a
           href={currentUrl}
@@ -79,33 +94,10 @@ export const LicenceDocumentUpload: React.FC<LicenceDocumentUploadProps> = ({
           className="inline-flex items-center gap-1.5 text-[10px] font-bold text-rose-400 hover:text-rose-300"
         >
           <FileText className="w-3.5 h-3.5" />
-          View current document
+          View
           <ExternalLink className="w-3 h-3" />
         </a>
       )}
-      <div className="flex items-center gap-2">
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
-          className="hidden"
-          disabled={disabled || isUploading}
-          onChange={handleFileChange}
-        />
-        <button
-          type="button"
-          disabled={disabled || isUploading}
-          onClick={() => inputRef.current?.click()}
-          className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 border border-white/5 rounded-xl text-[10px] font-bold text-slate-300 hover:text-white uppercase tracking-wider transition disabled:opacity-40"
-        >
-          {isUploading ? (
-            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          ) : (
-            <Upload className="w-3.5 h-3.5" />
-          )}
-          {currentUrl ? 'Replace document' : 'Upload document'}
-        </button>
-      </div>
     </div>
   );
 };

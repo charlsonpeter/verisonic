@@ -360,8 +360,9 @@ def get_trending_tracks(
     current_user: Optional[User] = Depends(get_optional_current_user),
 ):
     """
-    Rank tracks by net reactions (likes - dislikes) within a recent window.
-    Falls back to listening-history popularity when no positive net reactions exist.
+    Rank tracks by net likes and play counts (views) within a recent window.
+    Pads with other approved streamable tracks when scored results are below `limit`,
+    so the UI can always show a full Trending strip when catalog allows.
     """
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=days)
     like_case = case((TrackReaction.reaction == "like", 1), else_=0)
@@ -378,72 +379,83 @@ def get_trending_tracks(
         .all()
     )
 
-    scored: list[tuple[int, int, int]] = []
+    play_rows = (
+        db.query(ListeningHistory.track_id, func.count(ListeningHistory.id).label("plays"))
+        .filter(ListeningHistory.played_at >= cutoff)
+        .group_by(ListeningHistory.track_id)
+        .all()
+    )
+    plays_by_id = {int(row.track_id): int(row.plays or 0) for row in play_rows}
+
+    # score = net likes (floored at 0) * weight + play count
+    scored: dict[int, tuple[int, int, int]] = {}
     for row in reaction_rows:
         likes = int(row.likes or 0)
         dislikes = int(row.dislikes or 0)
-        net = likes - dislikes
-        if net > 0:
-            scored.append((row.track_id, net, likes))
+        net = max(0, likes - dislikes)
+        plays = plays_by_id.get(int(row.track_id), 0)
+        score = net * 10 + plays
+        if score > 0:
+            scored[int(row.track_id)] = (score, net, plays)
 
-    scored.sort(key=lambda item: (-item[1], -item[2], item[0]))
-    ranked_ids = [track_id for track_id, _, _ in scored[:limit]]
+    for track_id, plays in plays_by_id.items():
+        if track_id in scored:
+            continue
+        if plays > 0:
+            scored[track_id] = (plays, 0, plays)
+
+    ranked_ids = [
+        track_id
+        for track_id, _ in sorted(
+            scored.items(),
+            key=lambda item: (-item[1][0], -item[1][1], -item[1][2], item[0]),
+        )
+    ]
+
+    streamable_filter = (
+        Track.approved == True,
+        Track.hls_playlist_path.isnot(None),
+        Artist.is_active == True,
+    )
+
+    ordered: List[Track] = []
+    seen: Set[int] = set()
 
     if ranked_ids:
         tracks = (
             db.query(Track)
             .options(joinedload(Track.artist), joinedload(Track.album), joinedload(Track.genres))
             .join(Artist, Track.artist_id == Artist.id)
-            .filter(
-                Track.id.in_(ranked_ids),
-                Track.approved == True,
-                Track.hls_playlist_path.isnot(None),
-                Artist.is_active == True,
-            )
+            .filter(Track.id.in_(ranked_ids), *streamable_filter)
             .all()
         )
         by_id = {t.id: t for t in tracks}
-        ordered = [by_id[tid] for tid in ranked_ids if tid in by_id]
-        return [serialize_track(t, db, viewer=current_user) for t in ordered]
+        for tid in ranked_ids:
+            track = by_id.get(tid)
+            if not track or track.id in seen:
+                continue
+            ordered.append(track)
+            seen.add(track.id)
+            if len(ordered) >= limit:
+                break
 
-    # Fallback: listening-history popularity when reactions are sparse
-    play_rows = (
-        db.query(ListeningHistory.track_id, func.count(ListeningHistory.id).label("plays"))
-        .filter(ListeningHistory.played_at >= cutoff)
-        .group_by(ListeningHistory.track_id)
-        .order_by(func.count(ListeningHistory.id).desc(), ListeningHistory.track_id.asc())
-        .limit(limit * 2)
-        .all()
-    )
-    if not play_rows:
-        recent = (
+    # Pad with recent approved tracks when likes/views leave the list short
+    if len(ordered) < limit:
+        fillers = (
             db.query(Track)
             .options(joinedload(Track.artist), joinedload(Track.album), joinedload(Track.genres))
             .join(Artist, Track.artist_id == Artist.id)
-            .filter(
-                Track.approved == True,
-                Track.hls_playlist_path.isnot(None),
-                Artist.is_active == True,
-            )
+            .filter(*streamable_filter)
             .order_by(Track.created_at.desc())
-            .limit(limit)
+            .limit(limit * 3)
             .all()
         )
-        return [serialize_track(t, db, viewer=current_user) for t in recent]
+        for track in fillers:
+            if track.id in seen:
+                continue
+            ordered.append(track)
+            seen.add(track.id)
+            if len(ordered) >= limit:
+                break
 
-    play_ids = [row.track_id for row in play_rows]
-    tracks = (
-        db.query(Track)
-        .options(joinedload(Track.artist), joinedload(Track.album), joinedload(Track.genres))
-        .join(Artist, Track.artist_id == Artist.id)
-        .filter(
-            Track.id.in_(play_ids),
-            Track.approved == True,
-            Track.hls_playlist_path.isnot(None),
-            Artist.is_active == True,
-        )
-        .all()
-    )
-    by_id = {t.id: t for t in tracks}
-    ordered = [by_id[tid] for tid in play_ids if tid in by_id][:limit]
-    return [serialize_track(t, db, viewer=current_user) for t in ordered]
+    return [serialize_track(t, db, viewer=current_user) for t in ordered[:limit]]

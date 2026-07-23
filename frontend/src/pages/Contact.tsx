@@ -239,7 +239,8 @@ export const Contact: React.FC = () => {
         <button
           type="button"
           onClick={() => {
-            window.location.hash = 'landing';
+            window.history.replaceState(null, '', '#landing');
+            window.dispatchEvent(new HashChangeEvent('hashchange'));
           }}
           className="text-xs font-bold text-slate-400 hover:text-white transition"
         >

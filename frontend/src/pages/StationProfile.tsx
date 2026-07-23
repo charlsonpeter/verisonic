@@ -1,13 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, Plus, Edit2, ArrowLeft, Radio, Info, MapPin, Globe, Eye, EyeOff, Copy, Check, RefreshCw, Wifi } from 'lucide-react';
+import { Plus, Edit2, ArrowLeft, Radio, Info, MapPin, Globe, Wifi, Settings } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { showError, showSuccess } from '../utils/swal';
-import { fetchBroadcastKey, getAccessToken } from '../utils/authTokens';
+import { fetchBroadcastKey } from '../utils/authTokens';
 import Swal from 'sweetalert2';
 import { CardGridSkeleton } from '../components/shared/skeleton';
 import { LicenceDocumentUpload } from '../components/shared/LicenceDocumentUpload';
 import { CoverImageUpload } from '../components/shared/CoverImageUpload';
 import { ListSearchInput } from '../components/shared/ListSearchInput';
+
+const fieldClass =
+  'w-full bg-transparent border-0 border-b border-white/10 rounded-none px-0 py-2 text-xs outline-none focus:border-rose-500 text-slate-200 transition';
+const labelClass = 'text-[10px] font-semibold text-slate-500 uppercase tracking-wider block mb-0.5';
+
+const SectionTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <h4 className="text-[10px] font-bold text-rose-400 uppercase tracking-[0.2em] border-b border-white/10 pb-1.5 mb-3">
+    {children}
+  </h4>
+);
 
 interface StationProfileProps {
   onNavigate?: (tab: string) => void;
@@ -585,290 +595,148 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
 
       {/* 2. ADD / EDIT FORM VIEW */}
       {viewMode !== 'list' && (
-        <form onSubmit={handleSubmit} className="bg-slate-900/10 border border-white/3 p-6 rounded-3xl shadow-inner space-y-6">
-          <h3 className="text-xs font-black text-rose-400 uppercase tracking-widest flex items-center gap-1.5 font-sans pt-1">
-            <Settings className="w-4.5 h-4.5" /> 
-            {viewMode === 'edit' ? 'Update Radio Station Details' : 'Register New Station Node'}
-          </h3>
+        <form onSubmit={handleSubmit} className="bg-slate-900/40 border border-white/5 rounded-2xl p-5 sm:p-6 space-y-5">
+          <div className="flex items-center justify-between gap-3 border-b border-white/10 pb-3">
+            <h3 className="text-xs font-black text-white uppercase tracking-widest flex items-center gap-1.5">
+              <Settings className="w-4 h-4 text-rose-400" />
+              {viewMode === 'edit' ? 'Edit Station' : 'Add Station'}
+            </h3>
+          </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
-            
-            {/* Left Column */}
-            <div className="space-y-8">
-              
-              {/* Core Info */}
-              <div className="glass-card p-6 rounded-3xl border border-white/5 space-y-4 shadow-xl">
-                <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5 font-sans">
-                  Core Info
-                </h3>
-                <div className="grid grid-cols-1 gap-4 text-xs">
-                  <div className="space-y-1.5">
-                    <label className="font-bold text-slate-400 uppercase tracking-wider block">Station Name *</label>
-                    <input
-                      type="text"
-                      name="name"
-                      placeholder="e.g. Echo FM"
-                      value={formValues.name}
-                      onChange={handleInputChange}
-                      className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                      required
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="font-bold text-slate-400 uppercase tracking-wider block">Description *</label>
-                    <textarea
-                      name="description"
-                      placeholder="e.g. Premium lossless continuous stream from Berlin"
-                      value={formValues.description}
-                      onChange={handleInputChange}
-                      rows={2}
-                      className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition resize-none"
-                      required
-                    />
-                  </div>
-                  {viewMode === 'edit' && editingStationId && (
-                    <CoverImageUpload
-                      uploadUrl={`/api/radio/${editingStationId}/cover`}
-                      coverUrl={coverArtUrl}
-                      token={token}
-                      label="Station Cover"
-                      onUploaded={setCoverArtUrl}
-                    />
-                  )}
-                  {viewMode === 'add' && (
-                    <p className="text-[10px] text-slate-500">
-                      Save the station first, then upload a cover image from the edit screen.
-                    </p>
-                  )}
-                  
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="font-bold text-slate-400 uppercase tracking-wider block">Category</label>
-                      <input
-                        type="text"
-                        name="category"
-                        placeholder="e.g. Ambient, Pop"
-                        value={formValues.category}
-                        onChange={handleInputChange}
-                        className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="font-bold text-slate-400 uppercase tracking-wider block">Frequency</label>
-                      <input
-                        type="text"
-                        name="broadcast_frequency"
-                        placeholder="e.g. 98.1 FM, Web Only"
-                        value={formValues.broadcast_frequency}
-                        onChange={handleInputChange}
-                        className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="font-bold text-slate-400 uppercase tracking-wider block">Languages</label>
-                      <input
-                        type="text"
-                        name="languages"
-                        placeholder="e.g. English, German"
-                        value={formValues.languages}
-                        onChange={handleInputChange}
-                        className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="font-bold text-slate-400 uppercase tracking-wider block">Licence info</label>
-                      <input
-                        type="text"
-                        name="licence"
-                        placeholder="Licence identification"
-                        value={formValues.licence}
-                        onChange={handleInputChange}
-                        className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                      />
-                    </div>
-                  </div>
-                  {viewMode === 'edit' && editingStationId && (
-                    <LicenceDocumentUpload
-                      uploadUrl={`/api/radio/${editingStationId}/licence-document`}
-                      documentUrl={licenceDocumentUrl}
-                      token={token}
-                      onUploaded={setLicenceDocumentUrl}
-                    />
-                  )}
-                  {viewMode === 'add' && (
-                    <p className="text-[10px] text-slate-500">
-                      Save the station first, then upload licence documents from the edit screen.
-                    </p>
-                  )}
-                  {viewMode === 'add' && (
-                    <div className="space-y-1.5">
-                      <label className="font-bold text-slate-400 uppercase tracking-wider block">Stream URL (Optional)</label>
-                      <input
-                        type="text"
-                        name="stream_url"
-                        placeholder="e.g. https://domain.com/live"
-                        value={formValues.stream_url}
-                        onChange={handleInputChange}
-                        className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                      />
-                    </div>
-                  )}
-                </div>
+          {/* Header — cover + identity */}
+          <div className="flex flex-col sm:flex-row gap-4 items-start">
+            <CoverImageUpload
+              uploadUrl={
+                viewMode === 'edit' && editingStationId
+                  ? `/api/radio/${editingStationId}/cover`
+                  : undefined
+              }
+              coverUrl={coverArtUrl}
+              token={token}
+              disabled={viewMode !== 'edit' || !editingStationId}
+              className="w-24 h-24"
+              onUploaded={setCoverArtUrl}
+            />
+            <div className="flex-1 w-full min-w-0 space-y-2.5">
+              <div>
+                <label className={labelClass}>Station Name *</label>
+                <input type="text" name="name" value={formValues.name} onChange={handleInputChange} className={fieldClass} required />
               </div>
-
-              {/* Location details */}
-              <div className="glass-card p-6 rounded-3xl border border-white/5 space-y-4 shadow-xl">
-                <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5 font-sans">
-                  Location Details
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                  <div className="space-y-1.5 sm:col-span-2">
-                    <label className="font-bold text-slate-400 uppercase tracking-wider block">Street Address</label>
-                    <input
-                      type="text"
-                      name="street_address"
-                      placeholder="Street Address"
-                      value={formValues.street_address}
-                      onChange={handleInputChange}
-                      className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="font-bold text-slate-400 uppercase tracking-wider block">City</label>
-                    <input
-                      type="text"
-                      name="city"
-                      placeholder="City"
-                      value={formValues.city}
-                      onChange={handleInputChange}
-                      className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="font-bold text-slate-400 uppercase tracking-wider block">State / Province</label>
-                    <input
-                      type="text"
-                      name="state_province"
-                      placeholder="State / Province"
-                      value={formValues.state_province}
-                      onChange={handleInputChange}
-                      className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="font-bold text-slate-400 uppercase tracking-wider block">Postal Code</label>
-                    <input
-                      type="text"
-                      name="postal_code"
-                      placeholder="Postal Code"
-                      value={formValues.postal_code}
-                      onChange={handleInputChange}
-                      className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="font-bold text-slate-400 uppercase tracking-wider block">Country</label>
-                    <input
-                      type="text"
-                      name="country"
-                      placeholder="Country"
-                      value={formValues.country}
-                      onChange={handleInputChange}
-                      className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            {/* Right Column */}
-            <div className="space-y-8">
-              
-              {/* Contact Details */}
-              <div className="glass-card p-6 rounded-3xl border border-white/5 space-y-4 shadow-xl">
-                <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5 font-sans">
-                  Contact & Socials
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                  <div className="space-y-1.5">
-                    <label className="font-bold text-slate-400 uppercase tracking-wider block">Phone Number</label>
-                    <input
-                      type="text"
-                      name="phone"
-                      placeholder="Phone"
-                      value={formValues.phone}
-                      onChange={handleInputChange}
-                      className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="font-bold text-slate-400 uppercase tracking-wider block">Email Address</label>
-                    <input
-                      type="email"
-                      name="email"
-                      placeholder="Email"
-                      value={formValues.email}
-                      onChange={handleInputChange}
-                      className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                    />
-                  </div>
-                  <div className="space-y-1.5 sm:col-span-2">
-                    <label className="font-bold text-slate-400 uppercase tracking-wider block">Website</label>
-                    <input
-                      type="text"
-                      name="website"
-                      placeholder="Website URL"
-                      value={formValues.website}
-                      onChange={handleInputChange}
-                      className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="font-bold text-slate-400 uppercase tracking-wider block">Twitter</label>
-                    <input
-                      type="text"
-                      name="social_twitter"
-                      placeholder="@handle"
-                      value={formValues.social_twitter}
-                      onChange={handleInputChange}
-                      className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="font-bold text-slate-400 uppercase tracking-wider block">Instagram</label>
-                    <input
-                      type="text"
-                      name="social_instagram"
-                      placeholder="@handle"
-                      value={formValues.social_instagram}
-                      onChange={handleInputChange}
-                      className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition"
-                    />
-                  </div>
-                </div>
+              <div>
+                <label className={labelClass}>Description *</label>
+                <textarea name="description" value={formValues.description} onChange={handleInputChange} rows={2} className={`${fieldClass} resize-none`} required />
               </div>
             </div>
           </div>
 
-          <div className="flex justify-center gap-4 pt-2">
+          <section>
+            <SectionTitle>Broadcast</SectionTitle>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-2.5">
+              <div>
+                <label className={labelClass}>Category</label>
+                <input type="text" name="category" value={formValues.category} onChange={handleInputChange} className={fieldClass} />
+              </div>
+              <div>
+                <label className={labelClass}>Frequency</label>
+                <input type="text" name="broadcast_frequency" value={formValues.broadcast_frequency} onChange={handleInputChange} className={fieldClass} />
+              </div>
+              <div>
+                <label className={labelClass}>Languages</label>
+                <input type="text" name="languages" value={formValues.languages} onChange={handleInputChange} className={fieldClass} />
+              </div>
+              {viewMode === 'add' && (
+                <div className="sm:col-span-3">
+                  <label className={labelClass}>Stream URL</label>
+                  <input type="text" name="stream_url" value={formValues.stream_url} onChange={handleInputChange} className={fieldClass} />
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section>
+            <SectionTitle>Licence</SectionTitle>
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-end">
+              <div>
+                <label className={labelClass}>Licence Info</label>
+                <input type="text" name="licence" value={formValues.licence} onChange={handleInputChange} className={fieldClass} />
+              </div>
+              {viewMode === 'edit' && editingStationId && (
+                <LicenceDocumentUpload
+                  uploadUrl={`/api/radio/${editingStationId}/licence-document`}
+                  documentUrl={licenceDocumentUrl}
+                  token={token}
+                  onUploaded={setLicenceDocumentUrl}
+                />
+              )}
+            </div>
+          </section>
+
+          <section>
+            <SectionTitle>Location</SectionTitle>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-2.5">
+              <div className="sm:col-span-2 lg:col-span-4">
+                <label className={labelClass}>Street</label>
+                <input type="text" name="street_address" value={formValues.street_address} onChange={handleInputChange} className={fieldClass} />
+              </div>
+              <div>
+                <label className={labelClass}>City</label>
+                <input type="text" name="city" value={formValues.city} onChange={handleInputChange} className={fieldClass} />
+              </div>
+              <div>
+                <label className={labelClass}>State</label>
+                <input type="text" name="state_province" value={formValues.state_province} onChange={handleInputChange} className={fieldClass} />
+              </div>
+              <div>
+                <label className={labelClass}>Postal</label>
+                <input type="text" name="postal_code" value={formValues.postal_code} onChange={handleInputChange} className={fieldClass} />
+              </div>
+              <div>
+                <label className={labelClass}>Country</label>
+                <input type="text" name="country" value={formValues.country} onChange={handleInputChange} className={fieldClass} />
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <SectionTitle>Contact</SectionTitle>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-x-4 gap-y-2.5">
+              <div>
+                <label className={labelClass}>Phone</label>
+                <input type="text" name="phone" value={formValues.phone} onChange={handleInputChange} className={fieldClass} />
+              </div>
+              <div>
+                <label className={labelClass}>Email</label>
+                <input type="email" name="email" value={formValues.email} onChange={handleInputChange} className={fieldClass} />
+              </div>
+              <div className="sm:col-span-2">
+                <label className={labelClass}>Website</label>
+                <input type="text" name="website" value={formValues.website} onChange={handleInputChange} className={fieldClass} />
+              </div>
+              <div>
+                <label className={labelClass}>Twitter</label>
+                <input type="text" name="social_twitter" value={formValues.social_twitter} onChange={handleInputChange} className={fieldClass} />
+              </div>
+              <div>
+                <label className={labelClass}>Instagram</label>
+                <input type="text" name="social_instagram" value={formValues.social_instagram} onChange={handleInputChange} className={fieldClass} />
+              </div>
+            </div>
+          </section>
+
+          <div className="flex justify-end gap-3 pt-1 border-t border-white/10">
             <button
               type="button"
               onClick={() => { setViewMode('list'); setMessage(null); }}
-              className="px-8 py-3.5 bg-slate-900 hover:bg-slate-800 border border-white/5 text-slate-400 hover:text-white font-bold text-xs rounded-xl shadow-lg transition uppercase tracking-wider cursor-pointer"
+              className="px-6 py-2.5 bg-transparent hover:bg-slate-800 border border-white/10 text-slate-400 hover:text-white font-bold text-xs rounded-xl transition uppercase tracking-wider cursor-pointer"
             >
               Cancel
             </button>
-
             <button
               type="submit"
               disabled={isSaving}
-              className="px-8 py-3.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg transition uppercase tracking-wider cursor-pointer"
+              className="px-6 py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition uppercase tracking-wider cursor-pointer"
             >
-              {isSaving 
-                ? 'Saving Details...' 
-                : viewMode === 'edit' ? 'Save Station Details' : 'Register Station Node'}
+              {isSaving ? 'Saving...' : viewMode === 'edit' ? 'Save Details' : 'Register Station'}
             </button>
           </div>
         </form>

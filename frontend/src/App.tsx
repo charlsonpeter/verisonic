@@ -9,6 +9,7 @@ import {
 // Context & providers
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AudioProvider, useAudio } from './context/AudioContext';
+import { getPostLoginTab, STAFF_LISTENER_TABS } from './utils/navigation';
 
 // Layout components
 import { Header } from './components/layout/Header';
@@ -63,7 +64,7 @@ const API_URL = '/api';
 
 // Headless UI Router Core
 function DashboardContent() {
-  const { currentUser, token, hasRadioStation, hasStudioProfileComplete, mustResetPassword, canAccessPlatformSettings, canAccessStationProfile, serverUserMode } = useAuth();
+  const { currentUser, token, hasStudioProfileComplete, mustResetPassword, canAccessPlatformSettings, canAccessStationProfile, serverUserMode } = useAuth();
   const { playTrack, playQueue, addToQueue, favorites } = useAudio();
 
   // Route/Tab Switcher state
@@ -88,6 +89,9 @@ function DashboardContent() {
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches
   );
 
+  const roleHome = () =>
+    getPostLoginTab(currentUser, { serverUserMode, hasStudioProfileComplete });
+
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 767px)');
     const onChange = () => setIsMobileViewport(mq.matches);
@@ -103,6 +107,16 @@ function DashboardContent() {
     }
   };
 
+  /** Permission / auth hops must replace so browser Back skips intermediate tabs. */
+  const replaceTab = (tab: string) => {
+    if (tab === activeTab) {
+      replaceHash(tab);
+      return;
+    }
+    replaceHash(tab);
+    setActiveTab(tab);
+  };
+
   // Sync activeTab with localStorage & URL Hash
   useEffect(() => {
     localStorage.setItem('activeTab', activeTab);
@@ -116,7 +130,7 @@ function DashboardContent() {
     const handleHashChange = () => {
       if (mustResetPassword) {
         if (activeTab !== 'admin-password-reset') {
-          setActiveTab('admin-password-reset');
+          replaceTab('admin-password-reset');
         }
         return;
       }
@@ -131,17 +145,18 @@ function DashboardContent() {
 
   // Logged-in users should not land on marketing/auth via browser Back
   useEffect(() => {
-    if (token && !mustResetPassword && (activeTab === 'landing' || activeTab === 'auth')) {
-      replaceHash('home');
-      setActiveTab('home');
-    }
-  }, [token, activeTab, mustResetPassword]);
+    if (!token || mustResetPassword || (activeTab !== 'landing' && activeTab !== 'auth')) return;
+    // Wait for user so radio/studio land on their admin home, not the listener feed
+    if (!currentUser) return;
+    replaceTab(
+      getPostLoginTab(currentUser, { serverUserMode, hasStudioProfileComplete })
+    );
+  }, [token, activeTab, mustResetPassword, currentUser, serverUserMode, hasStudioProfileComplete]);
 
   // Handle logout redirect or invalid session redirect
   useEffect(() => {
     if (!token && activeTab !== 'auth' && activeTab !== 'landing' && activeTab !== 'contact') {
-      replaceHash('landing');
-      setActiveTab('landing');
+      replaceTab('landing');
       localStorage.removeItem('activeTab');
     }
   }, [token, activeTab]);
@@ -149,26 +164,25 @@ function DashboardContent() {
   // Force super admin to reset default password before using the app
   useEffect(() => {
     if (mustResetPassword && activeTab !== 'admin-password-reset') {
-      setActiveTab('admin-password-reset');
+      replaceTab('admin-password-reset');
     }
   }, [mustResetPassword, activeTab]);
 
   useEffect(() => {
     if (activeTab === 'settings' && !canAccessPlatformSettings) {
-      const role = currentUser?.real_role || currentUser?.role;
-      setActiveTab(role === 'radio_admin' ? 'radio' : 'home');
+      replaceTab(roleHome());
     }
-  }, [activeTab, canAccessPlatformSettings, currentUser]);
+  }, [activeTab, canAccessPlatformSettings, currentUser, serverUserMode, hasStudioProfileComplete]);
 
   useEffect(() => {
     if (activeTab === 'station-profile' && !canAccessStationProfile) {
-      setActiveTab('settings');
+      replaceTab(roleHome());
     }
-  }, [activeTab, canAccessStationProfile]);
+  }, [activeTab, canAccessStationProfile, currentUser, serverUserMode, hasStudioProfileComplete]);
 
   useEffect(() => {
     if (activeTab === 'history') {
-      setActiveTab('home');
+      replaceTab('home');
     }
   }, [activeTab]);
 
@@ -178,53 +192,67 @@ function DashboardContent() {
       (activeTab === 'accounts' || activeTab === 'users' || activeTab === 'analytics')
       && role !== 'admin'
     ) {
-      setActiveTab('home');
+      replaceTab(roleHome());
     }
-    if (activeTab === 'reports' && role !== 'admin' && role !== 'studio_admin') {
-      setActiveTab('home');
+    if (activeTab === 'reports' && role !== 'admin' && !(role === 'studio_admin' && serverUserMode === 'admin')) {
+      replaceTab(roleHome());
     }
-  }, [activeTab, currentUser?.role, currentUser?.real_role]);
+  }, [activeTab, currentUser, serverUserMode, hasStudioProfileComplete]);
 
   useEffect(() => {
     if (
       activeTab === 'contact' &&
-      currentUser?.role === 'admin'
+      (currentUser?.real_role || currentUser?.role) === 'admin'
     ) {
-      setActiveTab('accounts');
+      replaceTab('accounts');
     }
-  }, [activeTab, currentUser?.role]);
+  }, [activeTab, currentUser?.role, currentUser?.real_role]);
 
   useEffect(() => {
     if (activeTab === 'studio-tracks-engagement') {
-      setActiveTab('engagements');
+      replaceTab('engagements');
     }
   }, [activeTab]);
 
   useEffect(() => {
-    if (activeTab === 'engagements' && currentUser?.role !== 'admin') {
-      setActiveTab('home');
+    const role = currentUser?.real_role || currentUser?.role;
+    if (activeTab === 'engagements' && role !== 'admin') {
+      replaceTab(roleHome());
     }
-  }, [activeTab, currentUser?.role]);
+  }, [activeTab, currentUser, serverUserMode, hasStudioProfileComplete]);
 
-  // Hide studio admin manage menus in listen mode
+  // Staff in Listen mode: only listener-facing routes
   useEffect(() => {
     const role = currentUser?.real_role || currentUser?.role;
-    if (currentUser && role === 'studio_admin' && serverUserMode === 'listener') {
-      if (activeTab === 'tracks' || activeTab === 'studio-profile' || activeTab === 'track-list') {
-        setActiveTab('home');
-      }
+    if (
+      currentUser &&
+      (role === 'studio_admin' || role === 'radio_admin') &&
+      serverUserMode === 'listener' &&
+      !STAFF_LISTENER_TABS.has(activeTab)
+    ) {
+      replaceTab('home');
     }
   }, [currentUser, activeTab, serverUserMode]);
 
-  // Route protection redirect for Radio Admins who do NOT have a station yet (admin mode only)
+  // Radio admin (admin mode): stay on station management routes, never the listener feed
   useEffect(() => {
     const role = currentUser?.real_role || currentUser?.role;
-    if (currentUser && role === 'radio_admin' && !hasRadioStation && serverUserMode === 'admin') {
-      if (activeTab !== 'radio' && activeTab !== 'contact' && activeTab !== 'settings' && activeTab !== 'profile' && activeTab !== 'artist' && activeTab !== 'station-profile' && activeTab !== 'studio-profile' && activeTab !== 'broadcaster-download' && activeTab !== 'wallet') {
-        setActiveTab('radio');
+    if (currentUser && role === 'radio_admin' && serverUserMode === 'admin') {
+      const allowed = new Set([
+        'radio',
+        'contact',
+        'profile',
+        'artist',
+        'station-profile',
+        'broadcaster-download',
+        'wallet',
+        'admin-password-reset',
+      ]);
+      if (!allowed.has(activeTab)) {
+        replaceTab('radio');
       }
     }
-  }, [currentUser, activeTab, hasRadioStation, serverUserMode]);
+  }, [currentUser, activeTab, serverUserMode]);
 
   // Restrict studio admin admin mode to tracks list, contact, and account-menu pages
   useEffect(() => {
@@ -235,7 +263,6 @@ function DashboardContent() {
         'contact',
         'profile',
         'artist',
-        'settings',
         'admin-password-reset',
       ]);
       const allowed = hasStudioProfileComplete
@@ -252,14 +279,14 @@ function DashboardContent() {
           ])
         : onboardingAllowed;
       if (!allowed.has(activeTab)) {
-        setActiveTab(hasStudioProfileComplete ? 'track-list' : 'studio-profile');
+        replaceTab(hasStudioProfileComplete ? 'track-list' : 'studio-profile');
       }
     }
   }, [currentUser, activeTab, serverUserMode, hasStudioProfileComplete]);
 
   useEffect(() => {
     if (activeTab === 'discover') {
-      setActiveTab('home');
+      replaceTab('home');
     }
   }, [activeTab]);
 
@@ -450,7 +477,7 @@ function DashboardContent() {
             artistName={selectedArtistName}
             onViewDetails={handleDetailsView}
             onArtistClick={openArtistPage}
-            onBack={() => setActiveTab('home')}
+            onBack={() => replaceTab(roleHome())}
           />
         );
       case 'favorites':
@@ -487,20 +514,14 @@ function DashboardContent() {
       case 'broadcaster-download':
         return <BroadcasterDownload />;
       case 'auth':
-        return (
-          <AuthPage
-            onSuccess={() => {
-              replaceHash('home');
-              setActiveTab('home');
-            }}
-          />
-        );
+        return <AuthPage onSuccess={() => {}} />;
       case 'admin-password-reset':
         return (
           <ForceAdminPasswordReset
             onSuccess={() => {
-              replaceHash('home');
-              setActiveTab('home');
+              replaceTab(
+                getPostLoginTab(currentUser, { serverUserMode, hasStudioProfileComplete })
+              );
             }}
           />
         );
@@ -814,6 +835,7 @@ function DashboardContent() {
             setSelectedSearchPlaylistId={setSelectedSearchPlaylistId}
             activeTab={activeTab} 
             setActiveTab={setActiveTab}
+            replaceActiveTab={replaceTab}
             pageTitleOverride={
               activeTab === 'details'
                 ? selectedDetailsTrack?.title ?? 'Track Details'

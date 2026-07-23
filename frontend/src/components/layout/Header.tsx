@@ -7,6 +7,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { useAudio } from '../../context/AudioContext';
 import { getPageTitle } from '../../utils/pageTitles';
+import { getPostLoginTab } from '../../utils/navigation';
 import { getAccountTierLabel, hasPaidSubscription, isOnFreeTrial } from '../../utils/accountTier';
 import { HeaderSearch } from './HeaderSearch';
 import { UserAvatar } from '../shared/UserAvatar';
@@ -20,6 +21,8 @@ interface HeaderProps {
   setSelectedSearchPlaylistId: (id: number | null) => void;
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  /** Use for mode switches / permission hops so Back skips intermediate tabs. */
+  replaceActiveTab?: (tab: string) => void;
   pageTitleOverride?: string | null;
   onOpenArtistPage?: (artistName: string) => void;
 }
@@ -27,12 +30,20 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({ 
   searchQuery, setSearchQuery, selectedSearchArtist, setSelectedSearchArtist,
   setSelectedSearchAlbum, setSelectedSearchPlaylistId,
-  activeTab, setActiveTab, pageTitleOverride, onOpenArtistPage,
+  activeTab, setActiveTab, replaceActiveTab, pageTitleOverride, onOpenArtistPage,
 }) => {
-  const { currentUser, logout, token, userMode, switchUserMode, isSwitchingMode, isStaffInAdminMode, canUsePlaylists, canAccessPlatformSettings, canAccessStationProfile } = useAuth();
+  const {
+    currentUser, logout, token, userMode, switchUserMode, isSwitchingMode,
+    isStaffInAdminMode, canUsePlaylists, canAccessPlatformSettings, canAccessStationProfile,
+    hasStudioProfileComplete,
+  } = useAuth();
   const { setShowPremiumModal } = useAudio();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const goReplace = (tab: string) => {
+    (replaceActiveTab ?? setActiveTab)(tab);
+  };
 
   // Close dropdown if clicking outside
   useEffect(() => {
@@ -59,7 +70,7 @@ export const Header: React.FC<HeaderProps> = ({
   const isOnTrial = isOnFreeTrial(currentUser);
   const tierLabel = getAccountTierLabel(currentUser);
 
-  const isPlatformAdmin = currentUser?.role === 'admin';
+  const isPlatformAdmin = (currentUser?.real_role || currentUser?.role) === 'admin';
   const contactNavItem = { id: 'contact', label: 'Contact Us', icon: Mail };
 
   const navItems = isRadioAdminInAdminMode
@@ -92,13 +103,31 @@ export const Header: React.FC<HeaderProps> = ({
 
   const handleLogoClick = () => {
     if (currentUser && isStaffInAdminMode) {
-      const role = currentUser.real_role || currentUser.role;
-      if (role === 'radio_admin') setActiveTab('radio');
-      else if (role === 'studio_admin') setActiveTab('track-list');
-      else setActiveTab('home');
+      goReplace(
+        getPostLoginTab(currentUser, {
+          serverUserMode: 'admin',
+          hasStudioProfileComplete,
+        })
+      );
       return;
     }
     setActiveTab('home');
+  };
+
+  const switchToMode = async (nextMode: 'admin' | 'listener') => {
+    if (isSwitchingMode || !currentUser) return;
+    const ok = await switchUserMode(nextMode);
+    if (!ok) return;
+    if (nextMode === 'listener') {
+      goReplace('home');
+      return;
+    }
+    goReplace(
+      getPostLoginTab(currentUser, {
+        serverUserMode: 'admin',
+        hasStudioProfileComplete,
+      })
+    );
   };
 
   const mobilePageTitle =
@@ -236,19 +265,7 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               type="button"
               disabled={isSwitchingMode}
-              onClick={async () => {
-                if (isSwitchingMode) return;
-                if (userMode === 'admin') {
-                  const ok = await switchUserMode('listener');
-                  if (ok) setActiveTab('home');
-                } else {
-                  const ok = await switchUserMode('admin');
-                  if (ok) {
-                    const role = currentUser.real_role || currentUser.role;
-                    setActiveTab(role === 'radio_admin' ? 'radio' : role === 'studio_admin' ? 'track-list' : 'home');
-                  }
-                }
-              }}
+              onClick={() => switchToMode(userMode === 'admin' ? 'listener' : 'admin')}
               className={`w-20 h-7 rounded-full p-0.5 transition-colors duration-300 outline-none cursor-pointer relative flex items-center disabled:opacity-60 disabled:cursor-wait ${
                 userMode === 'admin' ? 'bg-rose-600 shadow-md shadow-rose-600/15' : 'bg-slate-800'
               }`}
@@ -338,17 +355,8 @@ export const Header: React.FC<HeaderProps> = ({
                       type="button"
                       disabled={isSwitchingMode}
                       onClick={async () => {
-                        if (isSwitchingMode) return;
-                        if (userMode === 'admin') {
-                          const ok = await switchUserMode('listener');
-                          if (ok) handleDropdownSelect('home');
-                        } else {
-                          const ok = await switchUserMode('admin');
-                          if (ok) {
-                            const role = currentUser.real_role || currentUser.role;
-                            handleDropdownSelect(role === 'radio_admin' ? 'radio' : role === 'studio_admin' ? 'track-list' : 'home');
-                          }
-                        }
+                        await switchToMode(userMode === 'admin' ? 'listener' : 'admin');
+                        setDropdownOpen(false);
                       }}
                       className={`w-20 h-7 rounded-full p-0.5 transition-colors duration-300 outline-none cursor-pointer relative flex items-center disabled:opacity-60 disabled:cursor-wait ${
                         userMode === 'admin' ? 'bg-rose-600 shadow-md shadow-rose-600/15' : 'bg-slate-800'
@@ -424,7 +432,7 @@ export const Header: React.FC<HeaderProps> = ({
                   </button>
                 )}
 
-                {currentUser.role === 'admin' && (
+                {isPlatformAdmin && (
                   <>
                     <button
                       onClick={() => handleDropdownSelect('engagements')}

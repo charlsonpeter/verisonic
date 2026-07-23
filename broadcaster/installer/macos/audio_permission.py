@@ -1,6 +1,8 @@
 """macOS microphone permission via AVFoundation (triggers the system TCC dialog)."""
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import subprocess
 import sys
 
@@ -10,6 +12,125 @@ _STATUS_MAP = {
     2: "denied",
     3: "authorized",
 }
+
+
+def _coreaudio_fourcc(code: str) -> int:
+    return int.from_bytes(code.encode("ascii")[:4].ljust(4, b" "), "big")
+
+
+class _AudioObjectPropertyAddress(ctypes.Structure):
+    _fields_ = [
+        ("mSelector", ctypes.c_uint32),
+        ("mScope", ctypes.c_uint32),
+        ("mElement", ctypes.c_uint32),
+    ]
+
+
+def _coreaudio_lib():
+    if sys.platform != "darwin":
+        return None
+    try:
+        return ctypes.CDLL(ctypes.util.find_library("CoreAudio"))
+    except Exception:
+        return None
+
+
+def _coreaudio_device_name(core_audio, device_id: int) -> str:
+    name_address = _AudioObjectPropertyAddress(
+        _coreaudio_fourcc("name"),
+        _coreaudio_fourcc("glob"),
+        0,
+    )
+    name_buf = ctypes.create_string_buffer(256)
+    name_size = ctypes.c_uint32(ctypes.sizeof(name_buf))
+    err = core_audio.AudioObjectGetPropertyData(
+        ctypes.c_uint32(device_id),
+        ctypes.byref(name_address),
+        0,
+        None,
+        ctypes.byref(name_size),
+        name_buf,
+    )
+    if err != 0:
+        return ""
+    return name_buf.value.decode("utf-8", errors="replace").strip()
+
+
+def get_default_audio_device_name(scope: str = "output") -> str:
+    """Return the system default input or output device name via CoreAudio."""
+    core_audio = _coreaudio_lib()
+    if core_audio is None:
+        return ""
+
+    selector = _coreaudio_fourcc("dIn " if scope == "input" else "dOut")
+    address = _AudioObjectPropertyAddress(selector, _coreaudio_fourcc("glob"), 0)
+    device_id = ctypes.c_uint32(0)
+    size = ctypes.c_uint32(ctypes.sizeof(device_id))
+    err = core_audio.AudioObjectGetPropertyData(
+        1,
+        ctypes.byref(address),
+        0,
+        None,
+        ctypes.byref(size),
+        ctypes.byref(device_id),
+    )
+    if err != 0:
+        return ""
+    return _coreaudio_device_name(core_audio, int(device_id.value))
+
+
+def list_connected_audio_input_names() -> list[str]:
+    """
+    Return names of currently connected CoreAudio devices that have input streams.
+    Use this to drop PortAudio ghost entries after a headset/USB mic is unplugged.
+    """
+    core_audio = _coreaudio_lib()
+    if core_audio is None:
+        return []
+
+    devices_address = _AudioObjectPropertyAddress(
+        _coreaudio_fourcc("dev#"),
+        _coreaudio_fourcc("glob"),
+        0,
+    )
+    size = ctypes.c_uint32(0)
+    err = core_audio.AudioObjectGetPropertyDataSize(
+        1, ctypes.byref(devices_address), 0, None, ctypes.byref(size)
+    )
+    if err != 0 or size.value < 4:
+        return []
+
+    count = size.value // ctypes.sizeof(ctypes.c_uint32)
+    device_ids = (ctypes.c_uint32 * count)()
+    data_size = ctypes.c_uint32(size.value)
+    err = core_audio.AudioObjectGetPropertyData(
+        1,
+        ctypes.byref(devices_address),
+        0,
+        None,
+        ctypes.byref(data_size),
+        device_ids,
+    )
+    if err != 0:
+        return []
+
+    streams_address = _AudioObjectPropertyAddress(
+        _coreaudio_fourcc("stm#"),
+        _coreaudio_fourcc("inpt"),
+        0,
+    )
+    names: list[str] = []
+    for device_id in device_ids:
+        stream_size = ctypes.c_uint32(0)
+        err = core_audio.AudioObjectGetPropertyDataSize(
+            device_id, ctypes.byref(streams_address), 0, None, ctypes.byref(stream_size)
+        )
+        if err != 0 or stream_size.value < 4:
+            continue
+        name = _coreaudio_device_name(core_audio, int(device_id))
+        if name:
+            names.append(name)
+    return names
 
 
 def avfoundation_available() -> bool:

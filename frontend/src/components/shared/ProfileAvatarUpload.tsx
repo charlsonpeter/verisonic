@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Camera, Loader2, User } from 'lucide-react';
 import { getUserInitials } from './UserAvatar';
+import { compressImageIfNeeded } from '../../utils/compressImage';
 import { showError, showSuccess } from '../../utils/swal';
 
 interface ProfileAvatarUploadProps {
@@ -42,8 +43,19 @@ export const ProfileAvatarUpload: React.FC<ProfileAvatarUploadProps> = ({
 
     setIsUploading(true);
     try {
+      let uploadFile = file;
+      try {
+        uploadFile = await compressImageIfNeeded(file, { maxDimension: 1024 });
+      } catch (err) {
+        showError(
+          'Upload Failed',
+          err instanceof Error ? err.message : 'Could not prepare the image for upload.'
+        );
+        return;
+      }
+
       const formData = new FormData();
-      formData.append('cover_image', file);
+      formData.append('cover_image', uploadFile);
       const res = await fetch(uploadUrl, {
         method: 'POST',
         headers: {

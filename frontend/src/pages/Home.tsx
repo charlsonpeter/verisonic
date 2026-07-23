@@ -32,6 +32,10 @@ interface HomeProps {
 const RECENT_MOBILE_PAGE_SIZE = 9;
 const RECENT_DESKTOP_BATCH_SIZE = 27;
 const RECENT_DESKTOP_VISIBLE_ROWS = 9;
+const RECENT_MAX_TRACKS = 18;
+const TRENDING_DESKTOP_COUNT = 10;
+const TRENDING_MOBILE_COUNT = 9;
+const POPULAR_ARTISTS_MAX = 10;
 
 /** Split into fixed-size pages. Pad the last page to a full 3×3 only when there is more than one page. */
 function chunkIntoMobilePages<T>(items: T[], pageSize: number): (T | null)[][] {
@@ -166,6 +170,9 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
       const existingIds = new Set(prev.map((t) => t.id));
       const merged = [...prev];
       for (const track of tracks) {
+        if (merged.length >= RECENT_MAX_TRACKS) {
+          break;
+        }
         if (!existingIds.has(track.id)) {
           merged.push(track);
         }
@@ -189,23 +196,27 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
 
   const getInitialBatchSize = () =>
     typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
-      ? RECENT_DESKTOP_BATCH_SIZE
-      : RECENT_MOBILE_PAGE_SIZE;
+      ? Math.min(RECENT_DESKTOP_BATCH_SIZE, RECENT_MAX_TRACKS)
+      : Math.min(RECENT_MOBILE_PAGE_SIZE, RECENT_MAX_TRACKS);
 
-  const popularArtists = buildArtistCandidatesFromTracks(allTracks).map((art) => {
-    const normalized = art.name.toLowerCase().trim();
-    return {
-      name: art.name,
-      genre: art.file_format || 'Artist',
-      tracks: art.trackCount,
-      avatar:
-        studioCovers[normalized]
-        || art.cover_art_url
-        || DEFAULT_COVER_FALLBACK,
-    };
-  });
+  const popularArtists = buildArtistCandidatesFromTracks(allTracks)
+    .slice(0, POPULAR_ARTISTS_MAX)
+    .map((art) => {
+      const normalized = art.name.toLowerCase().trim();
+      return {
+        name: art.name,
+        genre: art.file_format || 'Artist',
+        tracks: art.trackCount,
+        avatar:
+          studioCovers[normalized]
+          || art.cover_art_url
+          || DEFAULT_COVER_FALLBACK,
+      };
+    });
 
-  const trackPages = chunkIntoMobilePages(allTracks, 9);
+  const trendingDesktopTracks = allTracks.slice(0, TRENDING_DESKTOP_COUNT);
+  const trendingMobileTracks = allTracks.slice(0, TRENDING_MOBILE_COUNT);
+  const trackPages = chunkIntoMobilePages(trendingMobileTracks, TRENDING_MOBILE_COUNT);
 
   useEffect(() => {
     const loadStudios = async () => {
@@ -231,7 +242,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
     const loadTracks = async () => {
       setIsLoading(true);
       try {
-        const res = await fetch('/api/discovery/trending?limit=50');
+        const res = await fetch(`/api/discovery/trending?limit=${TRENDING_DESKTOP_COUNT}`);
         if (res.ok) {
           const data = await res.json();
           setAllTracks(data);
@@ -261,9 +272,10 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
       try {
         const batchSize = getInitialBatchSize();
         const { tracks, hasMore } = await fetchRecentBatch(batchSize, 0);
-        setRecentlyPlayed(tracks);
-        recentOffsetRef.current = tracks.length;
-        setHasMoreRecent(hasMore);
+        const limitedTracks = tracks.slice(0, RECENT_MAX_TRACKS);
+        setRecentlyPlayed(limitedTracks);
+        recentOffsetRef.current = limitedTracks.length;
+        setHasMoreRecent(hasMore && limitedTracks.length < RECENT_MAX_TRACKS);
       } catch {
         setRecentlyPlayed([]);
         setHasMoreRecent(false);
@@ -278,16 +290,23 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
     if (isLoadingMoreRecent || isLoadingRecent || !hasMoreRecent || !canAccessListeningHistory) {
       return;
     }
+    const remaining = RECENT_MAX_TRACKS - recentlyPlayed.length;
+    if (remaining <= 0) {
+      setHasMoreRecent(false);
+      return;
+    }
     setIsLoadingMoreRecent(true);
     try {
-      const { tracks, hasMore } = await fetchRecentBatch(batchSize, recentOffsetRef.current);
+      const { tracks, hasMore } = await fetchRecentBatch(Math.min(batchSize, remaining), recentOffsetRef.current);
       if (tracks.length === 0) {
         setHasMoreRecent(false);
         return;
       }
-      appendRecentTracks(tracks);
-      recentOffsetRef.current += tracks.length;
-      setHasMoreRecent(hasMore);
+      const limitedTracks = tracks.slice(0, remaining);
+      appendRecentTracks(limitedTracks);
+      const nextCount = recentlyPlayed.length + limitedTracks.length;
+      recentOffsetRef.current += limitedTracks.length;
+      setHasMoreRecent(hasMore && nextCount < RECENT_MAX_TRACKS);
     } catch {
       setHasMoreRecent(false);
     } finally {
@@ -300,6 +319,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
     hasMoreRecent,
     isLoadingMoreRecent,
     isLoadingRecent,
+    recentlyPlayed.length,
   ]);
 
   useEffect(() => {
@@ -487,7 +507,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
 
           {/* Mobile: 3×3 pages, row-major within each page, scroll horizontally */}
           {isLoading ? (
-            <TrendingMobileSkeleton tileCount={9} />
+            <TrendingMobileSkeleton tileCount={TRENDING_MOBILE_COUNT} />
           ) : (
           <div className={MOBILE_SCROLL_STRIP}>
             {trackPages.map((page, pageIdx) => (
@@ -515,9 +535,9 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
           {/* Desktop: list view */}
           <div className="hidden md:block space-y-2 bg-slate-950/40 backdrop-blur-md p-5 rounded-3xl shadow-inner glow-rose/5">
             {isLoading ? (
-              <TrackRowSkeleton count={8} borderless />
+              <TrackRowSkeleton count={TRENDING_DESKTOP_COUNT} borderless />
             ) : (
-            allTracks.map((track, index) => (
+            trendingDesktopTracks.map((track, index) => (
               <TrackRow
                 key={track.id}
                 track={track}
