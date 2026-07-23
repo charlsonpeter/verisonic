@@ -254,6 +254,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (res.ok && data.access_token) {
         setAuthTokens(data.access_token, data.refresh_token);
         setToken(data.access_token);
+        // Load profile before returning so post-login navigation knows the role
+        try {
+          const meRes = await fetch(`${API_URL}/auth/me`, {
+            headers: { Authorization: `Bearer ${data.access_token}` },
+          });
+          if (meRes.ok) {
+            const me = await meRes.json();
+            setPendingMode(null);
+            const userWithSub = applyUserFromApi(me);
+            if ((userWithSub.real_role || userWithSub.role) === 'radio_admin') {
+              await checkRadioStationStatus(userWithSub);
+            }
+          }
+        } catch {
+          // Bootstrap effect will retry via token change
+        }
         return true;
       }
       setAuthError(data.detail || 'Invalid credentials.');
@@ -314,9 +330,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setHasRadioStation(false);
       return false;
     }
+    const accessToken = getAccessToken();
     try {
       const res = await fetch(`${API_URL}/radio`, {
-        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+        headers: accessToken ? { 'Authorization': `Bearer ${accessToken}` } : {}
       });
       if (res.ok) {
         const data = await res.json();
