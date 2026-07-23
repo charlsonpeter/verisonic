@@ -14,8 +14,6 @@
 
 ---
 
-
-
 ## Subscriptions (complete)
 
 - [x] Backend — Razorpay orders, payment verify, plan queue/cancel/reactivate (`/api/subscriptions`)
@@ -24,8 +22,6 @@
 - [x] Frontend — `SubscriptionPlans`, Settings/Landing checkout, `PremiumModal`, admin tier assignment
 
 ---
-
-
 
 ## Search (complete)
 
@@ -38,8 +34,6 @@
 
 ---
 
-
-
 ## Profiles, covers & documents (complete)
 
 - [x] User display picture — hover camera on My Profile initials; `POST /api/auth/profile/avatar`
@@ -50,33 +44,46 @@
 
 ---
 
+## Wallet & daily settlement (complete)
 
-
-## Wallet & revenue (complete)
-
-- [x] Database — wallets, ledger, bank accounts (encrypted), withdrawals, billable plays, radio listen sessions (migration 014+)
-- [x] Owner API — `/api/wallet` (summary, **instant** withdraw, bank account, export)
-- [x] Admin API — `/api/admin/revenue` (settings, owners, subscribers, withdrawals view/export)
+- [x] Database — wallets, ledger, bank accounts (encrypted), withdrawals, billable plays, radio listen sessions, daily settlement runs/credits (migration 014–022+)
+- [x] Listen recording — track `listen-progress` and radio heartbeats record seconds only (no realtime credit)
+- [x] Celery Beat — `settle_daily_revenue_task` at 00:30 UTC; Compose `beat` service
+- [x] Owner API — `/api/wallet` (summary, instant withdraw, bank account, export)
+- [x] Admin API — `/api/admin/revenue` (settings, owners, subscribers, withdrawals, **settle**)
 - [x] Accounts UI — Overview → Owners → Withdrawals → Subscriptions → Settings; date filters; opening balance on filtered withdrawal CSV
-- [x] Crediting — track `listen-progress`, radio listen-session heartbeats (row locks)
-- [x] Frontend — `Wallet.tsx`, `AccountsManagement.tsx`, `RevenueSettingsPanel`
+- [x] Attribution — `owner_revenue_service.py` attributes track/station INR from settlements
 
 ---
 
 ## Consumer discovery & engagement (complete)
 
 - [x] Artists page — `#artist` route, `Artist.tsx`, `GET /api/discovery/artists/{name}`
-- [x] Recently played on Home — mobile 3×3 horizontal pages + desktop 3×9 vertical scroll, lazy-loaded via `GET /api/music/listening-history`
-- [x] Track comments — `track_comments` table, `GET/POST /api/music/{id}/comments`, MusicDetails wired
-- [x] Album/genre CRUD — `/api/albums`, `/api/genres` (studio admin + platform admin)
+- [x] Recently played on Home — lazy-loaded via `GET /api/music/listening-history`
+- [x] Trending — `GET /api/discovery/trending`
+- [x] Track comments — threaded (`parent_id`) + comment reactions
+- [x] Track / radio-program like-dislike — `/api/reactions` + player controls
+- [x] Radio program comments — `/api/radio/{station}/programs/{key}/comments`
+- [x] Admin Engagements — `#engagements` (`StudioTracksEngagement`)
+- [x] Album/genre CRUD — `/api/albums`, `/api/genres`
 - [x] Studio cover in browse — Home Popular Artists + Artist page via `/api/discovery/studios`
-- [x] Header avatar — `UserAvatar` with `profile_image_url` in header + dropdown
+- [x] Header avatar — `UserAvatar` with `profile_image_url`
+
+---
+
+## Catalog quality & lyrics (complete)
+
+- [x] Authenticity / fake-lossless detection — migration 026 + `acoustic_quality.py`
+- [x] Per-quality HLS paths — migration 024 + transcode + cleanup/retranscode tasks
+- [x] Timed lyrics fields — migration 025
+- [x] Hybrid lyrics pipeline — `lyrics_pipeline.py` + `extract_lyrics_task` (optional env flags)
 
 ---
 
 ## Rebuild documentation (complete)
 
-- [x] [BUILD_GUIDE.md](BUILD_GUIDE.md) — full application blueprint (layout, features, APIs, build order, acceptance)
+- [x] [BUILD_GUIDE.md](BUILD_GUIDE.md) — full application blueprint aligned to current code
+- [x] [implementation_plan.md](implementation_plan.md) / [README.md](README.md) / this checklist — synced to migrations 001–029
 
 ---
 
