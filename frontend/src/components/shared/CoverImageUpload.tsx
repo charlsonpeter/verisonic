@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ImageIcon, Upload, Loader2 } from 'lucide-react';
+import { compressImageIfNeeded } from '../../utils/compressImage';
 import { showError, showSuccess } from '../../utils/swal';
 
 interface CoverImageUploadProps {
@@ -19,7 +20,7 @@ export const CoverImageUpload: React.FC<CoverImageUploadProps> = ({
   token,
   disabled = false,
   label = 'Cover Image',
-  hint = 'JPG, PNG, or WEBP, max 10 MB. Shown in radio listings and search.',
+  hint = 'JPG, PNG, or WEBP. HD allowed; stored at 1 MB max for clarity on the web.',
   previewClassName = 'rounded-xl',
   onUploaded,
 }) => {
@@ -37,8 +38,19 @@ export const CoverImageUpload: React.FC<CoverImageUploadProps> = ({
 
     setIsUploading(true);
     try {
+      let uploadFile = file;
+      try {
+        uploadFile = await compressImageIfNeeded(file, { maxDimension: 2048 });
+      } catch (err) {
+        showError(
+          'Upload Failed',
+          err instanceof Error ? err.message : 'Could not prepare the image for upload.'
+        );
+        return;
+      }
+
       const formData = new FormData();
-      formData.append('cover_image', file);
+      formData.append('cover_image', uploadFile);
       const res = await fetch(uploadUrl, {
         method: 'POST',
         headers: {
