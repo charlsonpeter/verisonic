@@ -32,6 +32,8 @@ interface HomeProps {
 const RECENT_MOBILE_PAGE_SIZE = 9;
 const RECENT_DESKTOP_BATCH_SIZE = 27;
 const RECENT_DESKTOP_VISIBLE_ROWS = 9;
+const TRENDING_DESKTOP_COUNT = 10;
+const TRENDING_MOBILE_COUNT = 9;
 
 /** Split into fixed-size pages. Pad the last page to a full 3×3 only when there is more than one page. */
 function chunkIntoMobilePages<T>(items: T[], pageSize: number): (T | null)[][] {
@@ -205,7 +207,9 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
     };
   });
 
-  const trackPages = chunkIntoMobilePages(allTracks, 9);
+  const trendingDesktopTracks = allTracks.slice(0, TRENDING_DESKTOP_COUNT);
+  const trendingMobileTracks = allTracks.slice(0, TRENDING_MOBILE_COUNT);
+  const trackPages = chunkIntoMobilePages(trendingMobileTracks, TRENDING_MOBILE_COUNT);
 
   useEffect(() => {
     const loadStudios = async () => {
@@ -231,7 +235,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
     const loadTracks = async () => {
       setIsLoading(true);
       try {
-        const res = await fetch('/api/discovery/trending?limit=50');
+        const res = await fetch(`/api/discovery/trending?limit=${TRENDING_DESKTOP_COUNT}`);
         if (res.ok) {
           const data = await res.json();
           setAllTracks(data);
@@ -487,7 +491,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
 
           {/* Mobile: 3×3 pages, row-major within each page, scroll horizontally */}
           {isLoading ? (
-            <TrendingMobileSkeleton tileCount={9} />
+            <TrendingMobileSkeleton tileCount={TRENDING_MOBILE_COUNT} />
           ) : (
           <div className={MOBILE_SCROLL_STRIP}>
             {trackPages.map((page, pageIdx) => (
@@ -515,9 +519,9 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
           {/* Desktop: list view */}
           <div className="hidden md:block space-y-2 bg-slate-950/40 backdrop-blur-md p-5 rounded-3xl shadow-inner glow-rose/5">
             {isLoading ? (
-              <TrackRowSkeleton count={8} borderless />
+              <TrackRowSkeleton count={TRENDING_DESKTOP_COUNT} borderless />
             ) : (
-            allTracks.map((track, index) => (
+            trendingDesktopTracks.map((track, index) => (
               <TrackRow
                 key={track.id}
                 track={track}

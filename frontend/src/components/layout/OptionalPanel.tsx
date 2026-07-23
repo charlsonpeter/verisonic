@@ -11,7 +11,8 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
   const { 
     playQueue, 
     currentQueueIndex, 
-    playTrack, 
+    playQueueAt,
+    togglePlay,
     removeFromQueue, 
     clearQueue, 
     currentTrack,
@@ -269,16 +270,33 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
                 const isDraggable = track.queueIndex !== -1;
                 const isOver = idx === dragOverIndex;
 
+                const handlePlayClick = () => {
+                  if (track.queueIndex === -1) {
+                    togglePlay();
+                    return;
+                  }
+                  playQueueAt(track.queueIndex);
+                };
+
                 return (
                   <div
                     key={track.queueIndex === -1 ? `current-${track.id}` : `${track.id}-${track.queueIndex}`}
+                    role="button"
+                    tabIndex={0}
                     draggable={isDraggable}
                     onDragStart={(e) => handleDragStart(e, track.queueIndex)}
                     onDragOver={(e) => handleDragOver(e, idx)}
                     onDragEnter={(e) => handleDragEnter(e, idx)}
                     onDragLeave={handleDragLeave}
                     onDrop={(e) => handleDrop(e, track.queueIndex)}
-                    className={`flex items-center justify-between p-2 rounded-xl border transition-all duration-200 ${
+                    onClick={handlePlayClick}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handlePlayClick();
+                      }
+                    }}
+                    className={`flex items-center justify-between p-2 rounded-xl border transition-all duration-200 cursor-pointer ${
                       isCurrent 
                         ? 'bg-rose-600/10 border-rose-500/30' 
                         : 'bg-slate-900/30 border-white/3 hover:border-slate-800'
@@ -322,7 +340,10 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
                     {isDraggable && (
                       <div className="flex items-center gap-1 flex-shrink-0 ml-2">
                         <button
-                          onClick={() => removeFromQueue(track.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeFromQueue(track.id);
+                          }}
                           className="text-slate-500 hover:text-rose-400 p-1.5 transition flex-shrink-0"
                           title="Remove from Queue"
                         >
@@ -331,6 +352,7 @@ export const OptionalPanel: React.FC<OptionalPanelProps> = ({ isOpen, onClose })
                         <div 
                           className="text-slate-500 hover:text-slate-300 cursor-grab active:cursor-grabbing p-1.5 transition flex-shrink-0"
                           title="Drag to reorder"
+                          onClick={(e) => e.stopPropagation()}
                         >
                           <GripVertical className="w-3.5 h-3.5" />
                         </div>

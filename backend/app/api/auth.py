@@ -12,7 +12,8 @@ from app.services.radio_programs import station_has_programs, ensure_station_pro
 from app.services.radio_engagement import engagement_counts_for_programs, build_program_engagement_items
 from app.core.security import (
     verify_password, get_password_hash, create_access_token, create_refresh_token,
-    validate_refresh_token, revoke_refresh_token, ALGORITHM, REFRESH_COOKIE_NAME,
+    validate_refresh_token, revoke_refresh_token, revoke_refresh_jti,
+    revoke_refresh_session_token, ALGORITHM, REFRESH_COOKIE_NAME,
     REFRESH_TOKEN_TTL_DAYS,
 )
 from app.core.config import settings
@@ -378,10 +379,14 @@ def update_user_settings(
 
 @router.post("/logout")
 def logout(
+    request: Request,
     response: Response,
     current_user: User = Depends(get_current_user_allow_reset),
 ):
-    revoke_refresh_token(current_user.id)
+    # Revoke only this browser/device session so other logins stay alive.
+    cookie = request.cookies.get(REFRESH_COOKIE_NAME)
+    if cookie:
+        revoke_refresh_session_token(cookie)
     _clear_refresh_cookie(response)
     return {"detail": "Logged out successfully"}
 
@@ -840,7 +845,7 @@ def refresh_token(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        user_id = validate_refresh_token(refresh_token_value)
+        user_id, jti = validate_refresh_token(refresh_token_value)
     except Exception:
         raise credentials_exception
 
@@ -848,7 +853,8 @@ def refresh_token(
     if user is None or not user.is_active:
         raise credentials_exception
 
-    revoke_refresh_token(user.id)
+    # Rotate only this session's refresh token; leave other devices alone.
+    revoke_refresh_jti(user.id, jti)
     return _issue_token_response(user, response)
 
 def _apply_studio_status_filter(query, status: Optional[str]):
