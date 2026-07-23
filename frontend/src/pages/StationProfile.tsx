@@ -11,7 +11,7 @@ import { ListSearchInput } from '../components/shared/ListSearchInput';
 
 const fieldClass =
   'w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition';
-const labelClass = 'font-bold text-slate-400 uppercase tracking-wider block text-xs';
+const labelClass = 'font-bold text-slate-400 uppercase tracking-wider block text-xs mb-1.5';
 
 interface StationProfileProps {
   onNavigate?: (tab: string) => void;
@@ -589,17 +589,15 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
 
       {/* 2. ADD / EDIT FORM VIEW */}
       {viewMode !== 'list' && (
-        <form onSubmit={handleSubmit} className="space-y-6 max-w-4xl">
-          <div className="flex items-center justify-between gap-3 px-1">
-            <h3 className="text-xs font-black text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
-              <Settings className="w-4 h-4" />
-              {viewMode === 'edit' ? 'Update Station Profile' : 'Register New Station'}
-            </h3>
-          </div>
+        <form onSubmit={handleSubmit} className="bg-slate-900/10 border border-white/3 p-5 sm:p-6 rounded-3xl shadow-inner space-y-5">
+          <h3 className="text-xs font-black text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
+            <Settings className="w-4 h-4" />
+            {viewMode === 'edit' ? 'Edit Station' : 'Add Station'}
+          </h3>
 
-          {/* Cover hero + identity */}
-          <section className="bg-gradient-premium border border-white/5 rounded-3xl overflow-hidden shadow-2xl">
-            <div className="p-5 sm:p-6 space-y-5">
+          {/* Identity — cover beside fields like user profile */}
+          <section className="glass-card p-5 rounded-3xl border border-white/5 shadow-xl">
+            <div className="flex flex-col sm:flex-row gap-5 items-start">
               <CoverImageUpload
                 uploadUrl={
                   viewMode === 'edit' && editingStationId
@@ -609,34 +607,25 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
                 coverUrl={coverArtUrl}
                 token={token}
                 disabled={viewMode !== 'edit' || !editingStationId}
-                variant="hero"
-                label="Station Cover"
-                hint={
-                  viewMode === 'edit'
-                    ? 'JPG, PNG, or WEBP · 16:9 recommended · hover to change'
-                    : 'Save the station first, then upload a cover from the edit screen.'
-                }
+                className="w-24 h-24"
                 onUploaded={setCoverArtUrl}
               />
-
-              <div className="grid grid-cols-1 gap-4">
-                <div className="space-y-1.5">
+              <div className="flex-1 w-full min-w-0 space-y-3">
+                <div>
                   <label className={labelClass}>Station Name *</label>
                   <input
                     type="text"
                     name="name"
-                    placeholder="e.g. Echo FM"
                     value={formValues.name}
                     onChange={handleInputChange}
                     className={fieldClass}
                     required
                   />
                 </div>
-                <div className="space-y-1.5">
+                <div>
                   <label className={labelClass}>Description *</label>
                   <textarea
                     name="description"
-                    placeholder="e.g. Premium lossless continuous stream from Berlin"
                     value={formValues.description}
                     onChange={handleInputChange}
                     rows={3}
@@ -644,235 +633,120 @@ export const StationProfile: React.FC<StationProfileProps> = ({ onNavigate }) =>
                     required
                   />
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div className="space-y-1.5">
-                    <label className={labelClass}>Category</label>
-                    <input
-                      type="text"
-                      name="category"
-                      placeholder="e.g. Ambient, Pop"
-                      value={formValues.category}
-                      onChange={handleInputChange}
-                      className={fieldClass}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className={labelClass}>Frequency</label>
-                    <input
-                      type="text"
-                      name="broadcast_frequency"
-                      placeholder="e.g. 98.1 FM"
-                      value={formValues.broadcast_frequency}
-                      onChange={handleInputChange}
-                      className={fieldClass}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className={labelClass}>Languages</label>
-                    <input
-                      type="text"
-                      name="languages"
-                      placeholder="e.g. English, German"
-                      value={formValues.languages}
-                      onChange={handleInputChange}
-                      className={fieldClass}
-                    />
-                  </div>
-                </div>
-                {viewMode === 'add' && (
-                  <div className="space-y-1.5">
-                    <label className={labelClass}>Stream URL (Optional)</label>
-                    <input
-                      type="text"
-                      name="stream_url"
-                      placeholder="e.g. https://domain.com/live"
-                      value={formValues.stream_url}
-                      onChange={handleInputChange}
-                      className={fieldClass}
-                    />
-                  </div>
-                )}
               </div>
             </div>
-          </section>
-
-          {/* Licence */}
-          <section className="glass-card p-5 sm:p-6 rounded-3xl border border-white/5 space-y-4 shadow-xl">
-            <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
-              <Shield className="w-3.5 h-3.5" /> Licence & Compliance
-            </h3>
-            <div className="space-y-4">
-              <div className="space-y-1.5">
-                <label className={labelClass}>Licence Info</label>
-                <input
-                  type="text"
-                  name="licence"
-                  placeholder="Licence identification"
-                  value={formValues.licence}
-                  onChange={handleInputChange}
-                  className={fieldClass}
-                />
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+              <div>
+                <label className={labelClass}>Category</label>
+                <input type="text" name="category" value={formValues.category} onChange={handleInputChange} className={fieldClass} />
               </div>
-              {viewMode === 'edit' && editingStationId ? (
-                <LicenceDocumentUpload
-                  uploadUrl={`/api/radio/${editingStationId}/licence-document`}
-                  documentUrl={licenceDocumentUrl}
-                  token={token}
-                  onUploaded={setLicenceDocumentUrl}
-                />
-              ) : (
-                <p className="text-[10px] text-slate-500">
-                  Save the station first, then upload licence documents from the edit screen.
-                </p>
+              <div>
+                <label className={labelClass}>Frequency</label>
+                <input type="text" name="broadcast_frequency" value={formValues.broadcast_frequency} onChange={handleInputChange} className={fieldClass} />
+              </div>
+              <div>
+                <label className={labelClass}>Languages</label>
+                <input type="text" name="languages" value={formValues.languages} onChange={handleInputChange} className={fieldClass} />
+              </div>
+              {viewMode === 'add' && (
+                <div className="sm:col-span-3">
+                  <label className={labelClass}>Stream URL</label>
+                  <input type="text" name="stream_url" value={formValues.stream_url} onChange={handleInputChange} className={fieldClass} />
+                </div>
               )}
             </div>
           </section>
 
-          {/* Location + Contact */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <section className="glass-card p-5 sm:p-6 rounded-3xl border border-white/5 space-y-4 shadow-xl">
+          <section className="glass-card p-5 rounded-3xl border border-white/5 space-y-3 shadow-xl">
+            <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
+              <Shield className="w-3.5 h-3.5" /> Licence
+            </h3>
+            <div>
+              <label className={labelClass}>Licence Info</label>
+              <input type="text" name="licence" value={formValues.licence} onChange={handleInputChange} className={fieldClass} />
+            </div>
+            {viewMode === 'edit' && editingStationId && (
+              <LicenceDocumentUpload
+                uploadUrl={`/api/radio/${editingStationId}/licence-document`}
+                documentUrl={licenceDocumentUrl}
+                token={token}
+                onUploaded={setLicenceDocumentUrl}
+              />
+            )}
+          </section>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <section className="glass-card p-5 rounded-3xl border border-white/5 space-y-3 shadow-xl">
               <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
                 <MapPin className="w-3.5 h-3.5" /> Location
               </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5 sm:col-span-2">
-                  <label className={labelClass}>Street Address</label>
-                  <input
-                    type="text"
-                    name="street_address"
-                    placeholder="Street Address"
-                    value={formValues.street_address}
-                    onChange={handleInputChange}
-                    className={fieldClass}
-                  />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="sm:col-span-2">
+                  <label className={labelClass}>Street</label>
+                  <input type="text" name="street_address" value={formValues.street_address} onChange={handleInputChange} className={fieldClass} />
                 </div>
-                <div className="space-y-1.5">
+                <div>
                   <label className={labelClass}>City</label>
-                  <input
-                    type="text"
-                    name="city"
-                    placeholder="City"
-                    value={formValues.city}
-                    onChange={handleInputChange}
-                    className={fieldClass}
-                  />
+                  <input type="text" name="city" value={formValues.city} onChange={handleInputChange} className={fieldClass} />
                 </div>
-                <div className="space-y-1.5">
-                  <label className={labelClass}>State / Province</label>
-                  <input
-                    type="text"
-                    name="state_province"
-                    placeholder="State / Province"
-                    value={formValues.state_province}
-                    onChange={handleInputChange}
-                    className={fieldClass}
-                  />
+                <div>
+                  <label className={labelClass}>State</label>
+                  <input type="text" name="state_province" value={formValues.state_province} onChange={handleInputChange} className={fieldClass} />
                 </div>
-                <div className="space-y-1.5">
-                  <label className={labelClass}>Postal Code</label>
-                  <input
-                    type="text"
-                    name="postal_code"
-                    placeholder="Postal Code"
-                    value={formValues.postal_code}
-                    onChange={handleInputChange}
-                    className={fieldClass}
-                  />
+                <div>
+                  <label className={labelClass}>Postal</label>
+                  <input type="text" name="postal_code" value={formValues.postal_code} onChange={handleInputChange} className={fieldClass} />
                 </div>
-                <div className="space-y-1.5">
+                <div>
                   <label className={labelClass}>Country</label>
-                  <input
-                    type="text"
-                    name="country"
-                    placeholder="Country"
-                    value={formValues.country}
-                    onChange={handleInputChange}
-                    className={fieldClass}
-                  />
+                  <input type="text" name="country" value={formValues.country} onChange={handleInputChange} className={fieldClass} />
                 </div>
               </div>
             </section>
 
-            <section className="glass-card p-5 sm:p-6 rounded-3xl border border-white/5 space-y-4 shadow-xl">
+            <section className="glass-card p-5 rounded-3xl border border-white/5 space-y-3 shadow-xl">
               <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
-                <Phone className="w-3.5 h-3.5" /> Contact & Socials
+                <Phone className="w-3.5 h-3.5" /> Contact
               </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className={labelClass}>Phone Number</label>
-                  <input
-                    type="text"
-                    name="phone"
-                    placeholder="Phone"
-                    value={formValues.phone}
-                    onChange={handleInputChange}
-                    className={fieldClass}
-                  />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className={labelClass}>Phone</label>
+                  <input type="text" name="phone" value={formValues.phone} onChange={handleInputChange} className={fieldClass} />
                 </div>
-                <div className="space-y-1.5">
-                  <label className={labelClass}>Email Address</label>
-                  <input
-                    type="email"
-                    name="email"
-                    placeholder="Email"
-                    value={formValues.email}
-                    onChange={handleInputChange}
-                    className={fieldClass}
-                  />
+                <div>
+                  <label className={labelClass}>Email</label>
+                  <input type="email" name="email" value={formValues.email} onChange={handleInputChange} className={fieldClass} />
                 </div>
-                <div className="space-y-1.5 sm:col-span-2">
+                <div className="sm:col-span-2">
                   <label className={labelClass}>Website</label>
-                  <input
-                    type="text"
-                    name="website"
-                    placeholder="https://"
-                    value={formValues.website}
-                    onChange={handleInputChange}
-                    className={fieldClass}
-                  />
+                  <input type="text" name="website" value={formValues.website} onChange={handleInputChange} className={fieldClass} />
                 </div>
-                <div className="space-y-1.5">
+                <div>
                   <label className={labelClass}>Twitter</label>
-                  <input
-                    type="text"
-                    name="social_twitter"
-                    placeholder="@handle"
-                    value={formValues.social_twitter}
-                    onChange={handleInputChange}
-                    className={fieldClass}
-                  />
+                  <input type="text" name="social_twitter" value={formValues.social_twitter} onChange={handleInputChange} className={fieldClass} />
                 </div>
-                <div className="space-y-1.5">
+                <div>
                   <label className={labelClass}>Instagram</label>
-                  <input
-                    type="text"
-                    name="social_instagram"
-                    placeholder="@handle"
-                    value={formValues.social_instagram}
-                    onChange={handleInputChange}
-                    className={fieldClass}
-                  />
+                  <input type="text" name="social_instagram" value={formValues.social_instagram} onChange={handleInputChange} className={fieldClass} />
                 </div>
               </div>
             </section>
           </div>
 
-          <div className="flex justify-center gap-4 pt-1">
+          <div className="flex justify-center gap-3">
             <button
               type="button"
               onClick={() => { setViewMode('list'); setMessage(null); }}
-              className="px-8 py-3.5 bg-slate-900 hover:bg-slate-800 border border-white/5 text-slate-400 hover:text-white font-bold text-xs rounded-xl shadow-lg transition uppercase tracking-wider cursor-pointer"
+              className="px-8 py-3 bg-slate-900 hover:bg-slate-800 border border-white/5 text-slate-400 hover:text-white font-bold text-xs rounded-xl shadow-lg transition uppercase tracking-wider cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={isSaving}
-              className="px-8 py-3.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg transition uppercase tracking-wider cursor-pointer"
+              className="px-8 py-3 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg transition uppercase tracking-wider cursor-pointer"
             >
-              {isSaving
-                ? 'Saving Details...'
-                : viewMode === 'edit' ? 'Save Station Details' : 'Register Station'}
+              {isSaving ? 'Saving...' : viewMode === 'edit' ? 'Save Details' : 'Register Station'}
             </button>
           </div>
         </form>

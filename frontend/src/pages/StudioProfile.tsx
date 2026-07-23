@@ -42,7 +42,7 @@ const studioFormFromProfile = (profile: Record<string, unknown> | null | undefin
 
 const fieldClass =
   'w-full bg-slate-950 border border-white/5 rounded-xl p-3 text-xs outline-none focus:border-rose-500 text-slate-200 transition disabled:opacity-30';
-const labelClass = 'font-bold text-slate-400 uppercase tracking-wider block text-xs';
+const labelClass = 'font-bold text-slate-400 uppercase tracking-wider block text-xs mb-1.5';
 
 export const StudioProfile: React.FC<{ onNavigate?: (tab: string) => void }> = ({ onNavigate }) => {
   const { currentUser, token, fetchCurrentUser, hasStudioProfileComplete } = useAuth();
@@ -162,67 +162,59 @@ export const StudioProfile: React.FC<{ onNavigate?: (tab: string) => void }> = (
   const disabled = isStudioDisabled;
 
   return (
-    <div className="space-y-8 w-full animate-page-entry font-sans max-w-4xl">
+    <div className="space-y-6 w-full animate-page-entry font-sans">
       {isOnboarding && (
-        <div className="relative overflow-hidden bg-gradient-to-r from-slate-900 via-slate-950 to-slate-900 border border-cyan-500/20 p-6 rounded-3xl flex flex-col md:flex-row items-start gap-4 shadow-2xl">
+        <div className="relative overflow-hidden bg-gradient-to-r from-slate-900 via-slate-950 to-slate-900 border border-cyan-500/20 p-5 rounded-3xl flex flex-col md:flex-row items-start gap-4 shadow-2xl">
           <div className="p-3 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 rounded-2xl flex-shrink-0">
-            <Sparkles className="w-6 h-6" />
+            <Sparkles className="w-5 h-5" />
           </div>
-          <div className="space-y-2">
-            <h4 className="text-base font-extrabold text-white">Complete Your Studio Onboarding</h4>
-            <p className="text-xs text-slate-450 leading-relaxed font-medium max-w-2xl">
-              Your account was approved as a Studio Admin. Please fill in your studio details below before uploading tracks or accessing other admin tools.
+          <div className="space-y-1">
+            <h4 className="text-sm font-extrabold text-white">Complete Your Studio Onboarding</h4>
+            <p className="text-xs text-slate-450 leading-relaxed font-medium">
+              Fill in your studio details before uploading tracks or using admin tools.
             </p>
           </div>
         </div>
       )}
 
       {isStudioDisabled && (
-        <div className="p-5 rounded-3xl border border-rose-500/20 bg-rose-500/5 space-y-4 flex items-start gap-4">
+        <div className="p-5 rounded-3xl border border-rose-500/20 bg-rose-500/5 space-y-3 flex items-start gap-4">
           <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-2xl flex-shrink-0 mt-0.5">
-            <AlertTriangle className="w-6 h-6" />
+            <AlertTriangle className="w-5 h-5" />
           </div>
           <div className="space-y-2 flex-1">
-            <h4 className="text-base font-extrabold text-white">Your Music Studio is Temporarily Disabled</h4>
-            <p className="text-xs text-slate-450 leading-relaxed font-medium">
-              A platform administrator deactivated your studio profile. During deactivation, listeners cannot search for your studio, play your tracks, or view your bio details.
-            </p>
+            <h4 className="text-sm font-extrabold text-white">Studio Temporarily Disabled</h4>
             {currentUser?.artist_profile?.disabled_reason && (
-              <div className="p-3.5 bg-slate-950/60 border border-white/5 rounded-2xl">
-                <span className="text-[9px] uppercase font-black tracking-widest text-rose-400 block mb-1">Deactivation Reason</span>
+              <div className="p-3 bg-slate-950/60 border border-white/5 rounded-2xl">
                 <span className="text-xs text-slate-205 leading-normal block">{currentUser.artist_profile.disabled_reason}</span>
               </div>
             )}
             {isAppealPending ? (
-              <div className="p-3.5 bg-amber-500/5 border border-amber-500/10 rounded-2xl text-amber-400 text-xs">
+              <div className="p-3 bg-amber-500/5 border border-amber-500/10 rounded-2xl text-amber-400 text-xs">
                 <span className="font-extrabold uppercase text-[9px] tracking-wide block mb-0.5">Appeal Under Review</span>
                 <span className="text-slate-300 leading-normal block">{currentUser?.artist_profile?.reactivation_reason}</span>
               </div>
             ) : (
-              <div className="pt-2">
-                <button
-                  type="button"
-                  onClick={handleRequestStudioReactivation}
-                  className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-slate-955 text-xs font-bold rounded-xl transition uppercase tracking-wider cursor-pointer"
-                >
-                  Submit Reactivation Appeal
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={handleRequestStudioReactivation}
+                className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 text-slate-955 text-xs font-bold rounded-xl transition uppercase tracking-wider cursor-pointer"
+              >
+                Submit Reactivation Appeal
+              </button>
             )}
           </div>
         </div>
       )}
 
-      <form onSubmit={handleUpdateStudioProfile} className="space-y-6">
-        <div className="flex items-center justify-between gap-3 px-1">
-          <h3 className="text-xs font-black text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
-            <Disc className="w-4 h-4" />
-            {isOnboarding ? 'Studio Onboarding' : 'Studio Profile Settings'}
-          </h3>
-        </div>
+      <form onSubmit={handleUpdateStudioProfile} className="bg-slate-900/10 border border-white/3 p-5 sm:p-6 rounded-3xl shadow-inner space-y-5">
+        <h3 className="text-xs font-black text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
+          <Disc className="w-4 h-4" />
+          {isOnboarding ? 'Studio Onboarding' : 'Studio Profile'}
+        </h3>
 
         {profileMessage && (
-          <div className={`p-4 rounded-2xl text-xs font-semibold shadow-md ${
+          <div className={`p-3 rounded-2xl text-xs font-semibold ${
             profileMessage.type === 'success'
               ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-450'
               : 'bg-rose-500/10 border border-rose-500/20 text-rose-400'
@@ -231,26 +223,19 @@ export const StudioProfile: React.FC<{ onNavigate?: (tab: string) => void }> = (
           </div>
         )}
 
-        {/* Cover hero + identity */}
-        <section className="bg-gradient-premium border border-white/5 rounded-3xl overflow-hidden shadow-2xl">
-          <div className="p-5 sm:p-6 space-y-5">
+        {/* Identity — cover beside fields like user profile */}
+        <section className="glass-card p-5 rounded-3xl border border-white/5 shadow-xl">
+          <div className="flex flex-col sm:flex-row gap-5 items-start">
             <CoverImageUpload
               uploadUrl="/api/auth/studio-profile/cover"
               coverUrl={currentUser?.artist_profile?.cover_art_url}
               token={token}
               disabled={disabled || !canUploadAssets}
-              variant="hero"
-              label="Studio Cover"
-              hint={
-                canUploadAssets
-                  ? 'JPG, PNG, or WEBP · 16:9 recommended · hover to change'
-                  : 'Save your studio profile first, then upload a cover image.'
-              }
+              className="w-24 h-24"
               onUploaded={() => { void fetchCurrentUser?.(); }}
             />
-
-            <div className="grid grid-cols-1 gap-4">
-              <div className="space-y-1.5">
+            <div className="flex-1 w-full min-w-0 space-y-3">
+              <div>
                 <label className={labelClass}>Studio Name *</label>
                 <input
                   type="text"
@@ -258,20 +243,18 @@ export const StudioProfile: React.FC<{ onNavigate?: (tab: string) => void }> = (
                   value={formValues.stage_name}
                   onChange={handleInputChange}
                   disabled={disabled}
-                  placeholder="Your studio or label name"
                   className={fieldClass}
                   required
                 />
               </div>
-              <div className="space-y-1.5">
-                <label className={labelClass}>Studio Bio *</label>
+              <div>
+                <label className={labelClass}>Bio *</label>
                 <textarea
                   name="bio"
                   value={formValues.bio}
                   onChange={handleInputChange}
                   disabled={disabled}
-                  rows={4}
-                  placeholder="Tell listeners about your studio, sound, and artists..."
+                  rows={3}
                   className={`${fieldClass} resize-none`}
                   required
                 />
@@ -280,177 +263,95 @@ export const StudioProfile: React.FC<{ onNavigate?: (tab: string) => void }> = (
           </div>
         </section>
 
-        {/* Licence */}
-        <section className="glass-card p-5 sm:p-6 rounded-3xl border border-white/5 space-y-4 shadow-xl">
+        <section className="glass-card p-5 rounded-3xl border border-white/5 space-y-3 shadow-xl">
           <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
-            <Shield className="w-3.5 h-3.5" /> Licence & Compliance
+            <Shield className="w-3.5 h-3.5" /> Licence
           </h3>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <label className={labelClass}>Licence Info</label>
-              <input
-                type="text"
-                name="licence"
-                placeholder="Business or registration details"
-                value={formValues.licence}
-                onChange={handleInputChange}
-                disabled={disabled}
-                className={fieldClass}
-              />
-            </div>
-            <LicenceDocumentUpload
-              uploadUrl="/api/auth/studio-profile/licence-document"
-              documentUrl={currentUser?.artist_profile?.licence_document_url}
-              token={token}
-              disabled={disabled || !canUploadAssets}
-              onUploaded={() => { void fetchCurrentUser?.(); }}
+          <div>
+            <label className={labelClass}>Licence Info</label>
+            <input
+              type="text"
+              name="licence"
+              value={formValues.licence}
+              onChange={handleInputChange}
+              disabled={disabled}
+              className={fieldClass}
             />
           </div>
+          <LicenceDocumentUpload
+            uploadUrl="/api/auth/studio-profile/licence-document"
+            documentUrl={currentUser?.artist_profile?.licence_document_url}
+            token={token}
+            disabled={disabled || !canUploadAssets}
+            onUploaded={() => { void fetchCurrentUser?.(); }}
+          />
         </section>
 
-        {/* Location + Contact grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <section className="glass-card p-5 sm:p-6 rounded-3xl border border-white/5 space-y-4 shadow-xl">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <section className="glass-card p-5 rounded-3xl border border-white/5 space-y-3 shadow-xl">
             <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
               <MapPin className="w-3.5 h-3.5" /> Location
             </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5 sm:col-span-2">
-                <label className={labelClass}>Street Address</label>
-                <input
-                  type="text"
-                  name="street_address"
-                  value={formValues.street_address}
-                  onChange={handleInputChange}
-                  disabled={disabled}
-                  className={fieldClass}
-                />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="sm:col-span-2">
+                <label className={labelClass}>Street</label>
+                <input type="text" name="street_address" value={formValues.street_address} onChange={handleInputChange} disabled={disabled} className={fieldClass} />
               </div>
-              <div className="space-y-1.5">
+              <div>
                 <label className={labelClass}>City *</label>
-                <input
-                  type="text"
-                  name="city"
-                  value={formValues.city}
-                  onChange={handleInputChange}
-                  disabled={disabled}
-                  className={fieldClass}
-                  required
-                />
+                <input type="text" name="city" value={formValues.city} onChange={handleInputChange} disabled={disabled} className={fieldClass} required />
               </div>
-              <div className="space-y-1.5">
-                <label className={labelClass}>State / Province</label>
-                <input
-                  type="text"
-                  name="state_province"
-                  value={formValues.state_province}
-                  onChange={handleInputChange}
-                  disabled={disabled}
-                  className={fieldClass}
-                />
+              <div>
+                <label className={labelClass}>State</label>
+                <input type="text" name="state_province" value={formValues.state_province} onChange={handleInputChange} disabled={disabled} className={fieldClass} />
               </div>
-              <div className="space-y-1.5">
-                <label className={labelClass}>Postal Code</label>
-                <input
-                  type="text"
-                  name="postal_code"
-                  value={formValues.postal_code}
-                  onChange={handleInputChange}
-                  disabled={disabled}
-                  className={fieldClass}
-                />
+              <div>
+                <label className={labelClass}>Postal</label>
+                <input type="text" name="postal_code" value={formValues.postal_code} onChange={handleInputChange} disabled={disabled} className={fieldClass} />
               </div>
-              <div className="space-y-1.5">
+              <div>
                 <label className={labelClass}>Country *</label>
-                <input
-                  type="text"
-                  name="country"
-                  value={formValues.country}
-                  onChange={handleInputChange}
-                  disabled={disabled}
-                  className={fieldClass}
-                  required
-                />
+                <input type="text" name="country" value={formValues.country} onChange={handleInputChange} disabled={disabled} className={fieldClass} required />
               </div>
             </div>
           </section>
 
-          <section className="glass-card p-5 sm:p-6 rounded-3xl border border-white/5 space-y-4 shadow-xl">
+          <section className="glass-card p-5 rounded-3xl border border-white/5 space-y-3 shadow-xl">
             <h3 className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5">
-              <Phone className="w-3.5 h-3.5" /> Contact & Socials
+              <Phone className="w-3.5 h-3.5" /> Contact
             </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <label className={labelClass}>Phone Number *</label>
-                <input
-                  type="text"
-                  name="phone"
-                  value={formValues.phone}
-                  onChange={handleInputChange}
-                  disabled={disabled}
-                  className={fieldClass}
-                  required
-                />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className={labelClass}>Phone *</label>
+                <input type="text" name="phone" value={formValues.phone} onChange={handleInputChange} disabled={disabled} className={fieldClass} required />
               </div>
-              <div className="space-y-1.5">
-                <label className={labelClass}>Email Address *</label>
-                <input
-                  type="email"
-                  name="email"
-                  value={formValues.email}
-                  onChange={handleInputChange}
-                  disabled={disabled}
-                  className={fieldClass}
-                  required
-                />
+              <div>
+                <label className={labelClass}>Email *</label>
+                <input type="email" name="email" value={formValues.email} onChange={handleInputChange} disabled={disabled} className={fieldClass} required />
               </div>
-              <div className="space-y-1.5 sm:col-span-2">
+              <div className="sm:col-span-2">
                 <label className={labelClass}>Website</label>
-                <input
-                  type="text"
-                  name="website"
-                  value={formValues.website}
-                  onChange={handleInputChange}
-                  disabled={disabled}
-                  placeholder="https://"
-                  className={fieldClass}
-                />
+                <input type="text" name="website" value={formValues.website} onChange={handleInputChange} disabled={disabled} className={fieldClass} />
               </div>
-              <div className="space-y-1.5">
+              <div>
                 <label className={labelClass}>Twitter</label>
-                <input
-                  type="text"
-                  name="social_twitter"
-                  placeholder="@handle"
-                  value={formValues.social_twitter}
-                  onChange={handleInputChange}
-                  disabled={disabled}
-                  className={fieldClass}
-                />
+                <input type="text" name="social_twitter" value={formValues.social_twitter} onChange={handleInputChange} disabled={disabled} className={fieldClass} />
               </div>
-              <div className="space-y-1.5">
+              <div>
                 <label className={labelClass}>Instagram</label>
-                <input
-                  type="text"
-                  name="social_instagram"
-                  placeholder="@handle"
-                  value={formValues.social_instagram}
-                  onChange={handleInputChange}
-                  disabled={disabled}
-                  className={fieldClass}
-                />
+                <input type="text" name="social_instagram" value={formValues.social_instagram} onChange={handleInputChange} disabled={disabled} className={fieldClass} />
               </div>
             </div>
           </section>
         </div>
 
-        <div className="flex justify-center pt-1">
+        <div className="flex justify-center">
           <button
             type="submit"
             disabled={isSavingStudio || isStudioDisabled}
-            className="px-8 py-3.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg transition uppercase tracking-wider cursor-pointer"
+            className="px-8 py-3 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg transition uppercase tracking-wider cursor-pointer"
           >
-            {isSavingStudio ? 'Saving Details...' : isOnboarding ? 'Complete Studio Setup' : 'Save Studio Details'}
+            {isSavingStudio ? 'Saving...' : isOnboarding ? 'Complete Setup' : 'Save Details'}
           </button>
         </div>
       </form>
