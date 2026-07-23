@@ -32,10 +32,10 @@ interface HomeProps {
 const RECENT_MOBILE_PAGE_SIZE = 9;
 const RECENT_DESKTOP_BATCH_SIZE = 27;
 const RECENT_DESKTOP_VISIBLE_ROWS = 9;
-const RECENT_MOBILE_MAX_TRACKS = 18;
-const RECENT_DESKTOP_MAX_TRACKS = 20;
+const RECENT_MAX_TRACKS = 18;
 const TRENDING_DESKTOP_COUNT = 10;
 const TRENDING_MOBILE_COUNT = 9;
+const POPULAR_ARTISTS_MAX = 10;
 
 /** Split into fixed-size pages. Pad the last page to a full 3×3 only when there is more than one page. */
 function chunkIntoMobilePages<T>(items: T[], pageSize: number): (T | null)[][] {
@@ -164,19 +164,13 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
 
   const recentMobilePages = chunkIntoMobilePages(recentlyPlayed, RECENT_MOBILE_PAGE_SIZE);
 
-  const getRecentMaxTracks = () =>
-    typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
-      ? RECENT_DESKTOP_MAX_TRACKS
-      : RECENT_MOBILE_MAX_TRACKS;
-
   const appendRecentTracks = useCallback((tracks: Track[]) => {
     if (tracks.length === 0) return;
     setRecentlyPlayed((prev) => {
-      const maxTracks = getRecentMaxTracks();
       const existingIds = new Set(prev.map((t) => t.id));
       const merged = [...prev];
       for (const track of tracks) {
-        if (merged.length >= maxTracks) {
+        if (merged.length >= RECENT_MAX_TRACKS) {
           break;
         }
         if (!existingIds.has(track.id)) {
@@ -202,21 +196,23 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
 
   const getInitialBatchSize = () =>
     typeof window !== 'undefined' && window.matchMedia('(min-width: 768px)').matches
-      ? Math.min(RECENT_DESKTOP_BATCH_SIZE, RECENT_DESKTOP_MAX_TRACKS)
-      : Math.min(RECENT_MOBILE_PAGE_SIZE, RECENT_MOBILE_MAX_TRACKS);
+      ? Math.min(RECENT_DESKTOP_BATCH_SIZE, RECENT_MAX_TRACKS)
+      : Math.min(RECENT_MOBILE_PAGE_SIZE, RECENT_MAX_TRACKS);
 
-  const popularArtists = buildArtistCandidatesFromTracks(allTracks).map((art) => {
-    const normalized = art.name.toLowerCase().trim();
-    return {
-      name: art.name,
-      genre: art.file_format || 'Artist',
-      tracks: art.trackCount,
-      avatar:
-        studioCovers[normalized]
-        || art.cover_art_url
-        || DEFAULT_COVER_FALLBACK,
-    };
-  });
+  const popularArtists = buildArtistCandidatesFromTracks(allTracks)
+    .slice(0, POPULAR_ARTISTS_MAX)
+    .map((art) => {
+      const normalized = art.name.toLowerCase().trim();
+      return {
+        name: art.name,
+        genre: art.file_format || 'Artist',
+        tracks: art.trackCount,
+        avatar:
+          studioCovers[normalized]
+          || art.cover_art_url
+          || DEFAULT_COVER_FALLBACK,
+      };
+    });
 
   const trendingDesktopTracks = allTracks.slice(0, TRENDING_DESKTOP_COUNT);
   const trendingMobileTracks = allTracks.slice(0, TRENDING_MOBILE_COUNT);
@@ -275,12 +271,11 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
       recentOffsetRef.current = 0;
       try {
         const batchSize = getInitialBatchSize();
-        const maxTracks = getRecentMaxTracks();
         const { tracks, hasMore } = await fetchRecentBatch(batchSize, 0);
-        const limitedTracks = tracks.slice(0, maxTracks);
+        const limitedTracks = tracks.slice(0, RECENT_MAX_TRACKS);
         setRecentlyPlayed(limitedTracks);
         recentOffsetRef.current = limitedTracks.length;
-        setHasMoreRecent(hasMore && limitedTracks.length < maxTracks);
+        setHasMoreRecent(hasMore && limitedTracks.length < RECENT_MAX_TRACKS);
       } catch {
         setRecentlyPlayed([]);
         setHasMoreRecent(false);
@@ -295,8 +290,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
     if (isLoadingMoreRecent || isLoadingRecent || !hasMoreRecent || !canAccessListeningHistory) {
       return;
     }
-    const maxTracks = getRecentMaxTracks();
-    const remaining = maxTracks - recentlyPlayed.length;
+    const remaining = RECENT_MAX_TRACKS - recentlyPlayed.length;
     if (remaining <= 0) {
       setHasMoreRecent(false);
       return;
@@ -312,7 +306,7 @@ export const Home: React.FC<HomeProps> = ({ onNavigate, onViewDetails, onArtistC
       appendRecentTracks(limitedTracks);
       const nextCount = recentlyPlayed.length + limitedTracks.length;
       recentOffsetRef.current += limitedTracks.length;
-      setHasMoreRecent(hasMore && nextCount < maxTracks);
+      setHasMoreRecent(hasMore && nextCount < RECENT_MAX_TRACKS);
     } catch {
       setHasMoreRecent(false);
     } finally {
