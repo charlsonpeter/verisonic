@@ -20,7 +20,18 @@ const mobileScrollStrip =
 
 export const Radio: React.FC = () => {
   const { playRadioStation, activeRadioStation, isPlaying, togglePlay } = useAudio();
-  const { token, currentUser, isLoading: isAuthLoading, checkRadioStationStatus, hasRadioStation } = useAuth();
+  const {
+    token,
+    currentUser,
+    isLoading: isAuthLoading,
+    checkRadioStationStatus,
+    hasRadioStation,
+    isStaffInAdminMode,
+  } = useAuth();
+
+  const realRole = currentUser?.real_role || currentUser?.role;
+  const isRadioAdminManaging = realRole === 'radio_admin' && isStaffInAdminMode;
+  const isPlatformAdmin = realRole === 'admin';
 
   // Radio states
   const [stations, setStations] = useState<RadioStation[]>([]);
@@ -544,7 +555,7 @@ export const Radio: React.FC = () => {
   if (isAuthLoading || isInitialLoad) {
     return (
       <RadioPageSkeleton
-        isRadioAdmin={currentUser?.role === 'radio_admin'}
+        isRadioAdmin={isRadioAdminManaging}
         hasStation={hasRadioStation}
       />
     );
@@ -564,7 +575,7 @@ export const Radio: React.FC = () => {
       {currentUser && (
         <>
           {/* ── Case 1: No station yet → Registration Form ───────────────── */}
-          {currentUser.role === 'radio_admin' && !hasStation && (
+          {isRadioAdminManaging && !hasStation && (
             <div className="max-w-4xl animate-fade-in">
               <form onSubmit={handleCreateStation} className="glass-card p-6 rounded-3xl space-y-4 border border-rose-500/10 flex flex-col justify-between">
                 <div>
@@ -659,7 +670,7 @@ export const Radio: React.FC = () => {
           )}
 
           {/* ── Case 3: Radio Admin with stations → Live Monitor Dashboard ─ */}
-          {currentUser.role === 'radio_admin' && hasStation && (
+          {isRadioAdminManaging && hasStation && (
             <div className="space-y-4 md:space-y-5 w-full animate-fade-in">
 
               <p className="text-[11px] text-slate-500 font-semibold uppercase tracking-widest font-sans">
@@ -1003,7 +1014,7 @@ export const Radio: React.FC = () => {
           )}
 
           {/* ── Case 3.5: Platform Admin with a station → Info panel ──────── */}
-          {currentUser.role === 'admin' && hasStation && (
+          {isPlatformAdmin && hasStation && (
             <div className="max-w-xl animate-fade-in">
               {stations.filter(s => s.owner_id === currentUser.id).map(st => (
                 <div key={st.id} className="glass-card p-6 rounded-3xl border border-rose-500/10 space-y-4">

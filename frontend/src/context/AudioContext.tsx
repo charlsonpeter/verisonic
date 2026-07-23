@@ -159,6 +159,7 @@ interface AudioContextType {
   ) => void;
   addToQueue: (track: Track) => void;
   playQueueTracks: (tracks: Track[]) => void;
+  playQueueAt: (index: number) => void;
   removeFromQueue: (trackId: number) => void;
   clearQueue: () => void;
   reorderQueue: (startIndex: number, endIndex: number) => void;
@@ -2395,6 +2396,22 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     void playTrack(tracks[0]);
   };
 
+  /** Jump to an existing Now Playing index without replacing the queue. */
+  const playQueueAt = (index: number) => {
+    const queue = playQueueRef.current;
+    if (index < 0 || index >= queue.length) return;
+    if (
+      index === currentQueueIndexRef.current &&
+      currentTrackRef.current?.id === queue[index].id
+    ) {
+      togglePlay();
+      return;
+    }
+    currentQueueIndexRef.current = index;
+    setCurrentQueueIndex(index);
+    void playTrack(queue[index]);
+  };
+
   const removeFromQueue = (trackId: number) => {
     setPlayQueue(prev => {
       const next = prev.filter(t => t.id !== trackId);
@@ -2570,6 +2587,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setRadioProgramReaction,
       addToQueue,
       playQueueTracks,
+      playQueueAt,
       removeFromQueue,
       clearQueue,
       reorderQueue,
@@ -2622,6 +2640,7 @@ export const AudioProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setRadioProgramReaction,
       addToQueue,
       playQueueTracks,
+      playQueueAt,
       removeFromQueue,
       clearQueue,
       reorderQueue,

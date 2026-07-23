@@ -179,6 +179,7 @@ services:
     container_name: verisonic_nginx
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./broadcaster/dist:/var/www/broadcaster:ro
     ports:
       - "3000:80"
     extra_hosts:

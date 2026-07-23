@@ -2,12 +2,13 @@ name: Build Broadcaster
 
 on:
   push:
-    branches:
-      - master
     paths:
       - 'broadcaster/**'
       - '.github/workflows/build-broadcaster.yml'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -94,3 +95,25 @@ jobs:
         with:
           name: ${{ matrix.artifact_name }}
           path: broadcaster/dist/verisonic-broadcaster_amd64.deb
+
+  publish:
+    name: Commit Installers to Repository
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - name: Download Installers
+        uses: actions/download-artifact@v7
+        with:
+          path: broadcaster/dist
+          merge-multiple: true
+
+      - name: Commit and Push Installers
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f broadcaster/dist/VeriSonic\ Broadcaster\ Setup.exe broadcaster/dist/VeriSonic\ Broadcaster.pkg broadcaster/dist/verisonic-broadcaster_amd64.deb
+          git diff --cached --quiet || git commit -m "build: update broadcaster installers"
+          git push
