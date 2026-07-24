@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Play, Disc, Plus, Trash2, FolderHeart, Loader2, GripVertical, ChevronLeft } from 'lucide-react';
+import { Play, Disc, Plus, Trash2, FolderHeart, Loader2, GripVertical, ChevronLeft, ThumbsUp } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useAudio, Track } from '../context/AudioContext';
 import { TrackRow } from '../components/shared/TrackRow';
@@ -14,6 +14,8 @@ interface PlaylistData {
   tracks: Track[];
 }
 
+type SelectedKey = number | 'liked';
+
 interface PlaylistProps {
   onViewDetails: (track: Track) => void;
 }
@@ -23,7 +25,8 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
   const { playTrack, addToQueue } = useAudio();
 
   const [playlists, setPlaylists] = useState<PlaylistData[]>([]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [likedTracks, setLikedTracks] = useState<Track[]>([]);
+  const [selectedId, setSelectedId] = useState<SelectedKey | null>('liked');
   const [mobileTracksOpen, setMobileTracksOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [newPlaylistName, setNewPlaylistName] = useState('');
@@ -39,26 +42,30 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
   const fetchPlaylists = useCallback(async () => {
     if (!token) {
       setPlaylists([]);
+      setLikedTracks([]);
       setIsLoading(false);
       return;
     }
     setIsLoading(true);
     try {
-      const res = await fetch('/api/playlist', { headers: authHeaders() });
-      if (res.ok) {
-        const data: PlaylistData[] = await res.json();
-        setPlaylists(data);
-        setSelectedId(prev => {
-          if (prev && data.some(p => p.id === prev)) return prev;
-          return data.length > 0 ? data[0].id : null;
-        });
-      } else {
-        setPlaylists([]);
-        setSelectedId(null);
-      }
+      const [playlistRes, likedRes] = await Promise.all([
+        fetch('/api/playlist', { headers: authHeaders() }),
+        fetch('/api/reactions/liked', { headers: authHeaders() }),
+      ]);
+
+      const data: PlaylistData[] = playlistRes.ok ? await playlistRes.json() : [];
+      const liked: Track[] = likedRes.ok ? await likedRes.json() : [];
+      setPlaylists(data);
+      setLikedTracks(liked);
+      setSelectedId(prev => {
+        if (prev === 'liked') return 'liked';
+        if (typeof prev === 'number' && data.some(p => p.id === prev)) return prev;
+        return 'liked';
+      });
     } catch {
       setPlaylists([]);
-      setSelectedId(null);
+      setLikedTracks([]);
+      setSelectedId('liked');
     } finally {
       setIsLoading(false);
     }
@@ -70,7 +77,8 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
 
   useEffect(() => {
     setPlaylists([]);
-    setSelectedId(null);
+    setLikedTracks([]);
+    setSelectedId('liked');
     setMobileTracksOpen(false);
   }, [token]);
 
@@ -80,13 +88,22 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
     }
   }, [mobileTracksOpen]);
 
-  const selected = playlists.find(p => p.id === selectedId) || null;
+  const isLikedSelected = selectedId === 'liked';
+  const selected: PlaylistData | null = isLikedSelected
+    ? {
+        id: -1,
+        name: 'Liked Music',
+        user_id: 0,
+        is_public: false,
+        tracks: likedTracks,
+      }
+    : playlists.find(p => p.id === selectedId) || null;
 
   const updatePlaylistTracks = (playlistId: number, tracks: Track[]) => {
     setPlaylists(prev => prev.map(p => (p.id === playlistId ? { ...p, tracks } : p)));
   };
 
-  const handleSelectPlaylist = (id: number) => {
+  const handleSelectPlaylist = (id: SelectedKey) => {
     setSelectedId(id);
     setMobileTracksOpen(true);
   };
@@ -121,7 +138,7 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
   };
 
   const handleDeletePlaylist = async () => {
-    if (!selected || !token) return;
+    if (!selected || !token || isLikedSelected) return;
     const name = selected.name;
     try {
       const res = await fetch(`/api/playlist/${selected.id}`, {
@@ -141,7 +158,7 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
   };
 
   const handleRemoveTrack = async (trackId: number) => {
-    if (!selected || !token) return;
+    if (!selected || !token || isLikedSelected) return;
     try {
       const res = await fetch(`/api/playlist/${selected.id}/track/${trackId}`, {
         method: 'DELETE',
@@ -160,7 +177,7 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
   };
 
   const handleReorderTracks = async (startIndex: number, endIndex: number) => {
-    if (!selected || startIndex === endIndex) return;
+    if (!selected || isLikedSelected || startIndex === endIndex) return;
     const reordered = [...selected.tracks];
     const [moved] = reordered.splice(startIndex, 1);
     reordered.splice(endIndex, 0, moved);
@@ -245,33 +262,39 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
               <Play className="w-4 h-4 fill-current" />
               <span className="hidden lg:inline">Play All</span>
             </button>
-            <button
-              type="button"
-              onClick={handleDeletePlaylist}
-              className="p-2.5 bg-slate-900 hover:bg-rose-950/40 border border-white/5 text-slate-400 hover:text-rose-400 rounded-xl transition"
-              title="Delete playlist"
-              aria-label="Delete playlist"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
+            {!isLikedSelected && (
+              <button
+                type="button"
+                onClick={handleDeletePlaylist}
+                className="p-2.5 bg-slate-900 hover:bg-rose-950/40 border border-white/5 text-slate-400 hover:text-rose-400 rounded-xl transition"
+                title="Delete playlist"
+                aria-label="Delete playlist"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
 
         {selected.tracks.length === 0 ? (
           <div className="text-center py-12 bg-slate-900/10 border border-dashed border-white/5 rounded-2xl">
-            <p className="text-xs text-slate-500">No tracks yet. Use the folder icon on any track to add it here.</p>
+            <p className="text-xs text-slate-500">
+              {isLikedSelected
+                ? 'No liked tracks yet. Thumbs-up a track while listening.'
+                : 'No tracks yet. Use the folder icon on any track to add it here.'}
+            </p>
           </div>
         ) : (
           <div className="space-y-2">
             {selected.tracks.map((track, idx) => (
               <div
                 key={track.id}
-                onDragOver={handleDragOver}
-                onDragEnter={() => handleDragEnter(idx)}
-                onDragLeave={() => setDragOverIndex(null)}
-                onDrop={(e) => handleDrop(e, idx)}
+                onDragOver={isLikedSelected ? undefined : handleDragOver}
+                onDragEnter={isLikedSelected ? undefined : () => handleDragEnter(idx)}
+                onDragLeave={isLikedSelected ? undefined : () => setDragOverIndex(null)}
+                onDrop={isLikedSelected ? undefined : (e) => handleDrop(e, idx)}
                 className={`flex items-stretch gap-1 rounded-2xl transition-colors ${
-                  dragOverIndex === idx ? 'bg-rose-600/5 ring-1 ring-rose-500/30' : ''
+                  !isLikedSelected && dragOverIndex === idx ? 'bg-rose-600/5 ring-1 ring-rose-500/30' : ''
                 }`}
               >
                 <div className="flex-1 min-w-0">
@@ -279,22 +302,24 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
                     track={track}
                     index={idx}
                     onViewDetails={onViewDetails}
-                    onRemove={() => handleRemoveTrack(track.id)}
+                    onRemove={isLikedSelected ? undefined : () => handleRemoveTrack(track.id)}
                   />
                 </div>
-                <div
-                  draggable
-                  onDragStart={(e) => handleDragStart(e, idx)}
-                  onDragEnd={() => {
-                    setDraggedIndex(null);
-                    setDragOverIndex(null);
-                  }}
-                  className="flex items-center px-1 text-slate-600 hover:text-slate-400 cursor-grab active:cursor-grabbing flex-shrink-0 self-center"
-                  title="Drag to reorder"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <GripVertical className="w-4 h-4" />
-                </div>
+                {!isLikedSelected && (
+                  <div
+                    draggable
+                    onDragStart={(e) => handleDragStart(e, idx)}
+                    onDragEnd={() => {
+                      setDraggedIndex(null);
+                      setDragOverIndex(null);
+                    }}
+                    className="flex items-center px-1 text-slate-600 hover:text-slate-400 cursor-grab active:cursor-grabbing flex-shrink-0 self-center"
+                    title="Drag to reorder"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <GripVertical className="w-4 h-4" />
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -383,10 +408,25 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
           <div className="bg-slate-900/20 border border-white/5 rounded-2xl overflow-hidden">
             {isLoading ? (
               <PlaylistListSkeleton count={4} />
-            ) : playlists.length === 0 ? (
-              <p className="text-xs text-slate-500 text-center py-8 px-4">No playlists yet. Create one above.</p>
             ) : (
               <ul className="divide-y divide-white/5">
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectPlaylist('liked')}
+                    className={`w-full text-left px-4 py-3 transition ${
+                      selectedId === 'liked'
+                        ? 'bg-rose-600/10 text-rose-300'
+                        : 'text-slate-300 hover:bg-slate-900/40'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2 text-xs font-bold truncate">
+                      <ThumbsUp className="w-3.5 h-3.5 flex-shrink-0" />
+                      Liked Music
+                    </span>
+                    <span className="text-[10px] text-slate-500">{likedTracks.length} tracks</span>
+                  </button>
+                </li>
                 {playlists.map((p) => (
                   <li key={p.id}>
                     <button
@@ -403,6 +443,11 @@ export const Playlist: React.FC<PlaylistProps> = ({ onViewDetails }) => {
                     </button>
                   </li>
                 ))}
+                {playlists.length === 0 && (
+                  <li className="px-4 py-6">
+                    <p className="text-xs text-slate-500 text-center">No custom playlists yet. Create one above.</p>
+                  </li>
+                )}
               </ul>
             )}
           </div>

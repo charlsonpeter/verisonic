@@ -55,6 +55,15 @@ frontend/.svelte-kit/
 frontend/.next/
 frontend/out/
 
+# Mobile (Expo)
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/ios/
+mobile/android/
+mobile/.env
+mobile/.env.local
+
 # Docker volumes and files
 .docker/
 postgres_data/
