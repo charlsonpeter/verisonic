@@ -28,9 +28,10 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#0B0F14"
+        "backgroundColor": "#020617"
       },
       "package": "com.verisonic.app",
+      "usesCleartextTraffic": true,
       "permissions": [
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
