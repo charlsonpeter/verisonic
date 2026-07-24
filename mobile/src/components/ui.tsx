@@ -143,16 +143,28 @@ export function TrackTile({
 export function TrackRow({
   track,
   onPress,
+  onLongPress,
+  delayLongPress,
+  disabled,
   right,
   index,
 }: {
   track: Track;
   onPress: () => void;
+  onLongPress?: () => void;
+  delayLongPress?: number;
+  disabled?: boolean;
   right?: React.ReactNode;
   index?: number;
 }) {
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.row, pressed && { opacity: 0.88 }]}>
+    <Pressable
+      onPress={onPress}
+      onLongPress={onLongPress}
+      delayLongPress={delayLongPress}
+      disabled={disabled}
+      style={({ pressed }) => [styles.row, pressed && !disabled && { opacity: 0.88 }]}
+    >
       {typeof index === 'number' ? (
         <Text style={styles.rowIndex}>{String(index + 1).padStart(2, '0')}</Text>
       ) : null}

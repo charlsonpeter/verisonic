@@ -13,6 +13,7 @@ import {
 import * as SplashScreen from 'expo-splash-screen';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { PlayerProvider } from '@/context/PlayerContext';
+import { ConfirmHost } from '@/components/ConfirmDialog';
 import { MiniPlayer } from '@/components/MiniPlayer';
 import { colors } from '@/theme/tokens';
 
@@ -23,6 +24,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
       {children}
       {!isLoading ? <MiniPlayer /> : null}
+      <ConfirmHost />
       {isLoading ? (
         <View style={[StyleSheet.absoluteFillObject, styles.boot]}>
           <ActivityIndicator color={colors.accent} size="large" />

@@ -1,6 +1,5 @@
 import React, { useCallback, useState } from 'react';
 import {
-  Alert,
   FlatList,
   Modal,
   Pressable,
@@ -9,51 +8,30 @@ import {
   Text,
   TextInput,
   View,
+  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect, useRouter } from 'expo-router';
 import {
   createPlaylist,
   fetchLikedTracks,
-  fetchPlaylist,
   fetchPlaylists,
 } from '@/api/endpoints';
-import { DownloadButton } from '@/components/DownloadButton';
-import { FavoriteButton } from '@/components/FavoriteButton';
+import { noticeError } from '@/components/ConfirmDialog';
 import {
   Button,
   EmptyState,
   LoadingBlock,
   Screen,
-  TrackRow,
 } from '@/components/ui';
 import { usePlayer } from '@/context/PlayerContext';
 import { listDownloads } from '@/services/downloads';
 import type { DownloadedTrackMeta, Playlist, Track } from '@/types/models';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 
-type LibraryKind = 'liked' | 'downloads';
-
-type OpenCollection = {
-  kind: 'library' | 'playlist';
-  id: LibraryKind | number;
-  title: string;
-};
-
-function downloadToTrack(d: DownloadedTrackMeta): Track {
-  return {
-    id: d.trackId,
-    title: d.title,
-    artist_name: d.artistName,
-    cover_art_url: d.coverArtUrl,
-    duration: 0,
-  };
-}
-
 export default function PlaylistsScreen() {
-  const insets = useSafeAreaInsets();
-  const { playTrack, refreshLibraryState } = usePlayer();
+  const router = useRouter();
+  const { refreshLibraryState } = usePlayer();
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [likedCount, setLikedCount] = useState(0);
   const [downloadCount, setDownloadCount] = useState(0);
@@ -62,9 +40,6 @@ export default function PlaylistsScreen() {
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
   const [busy, setBusy] = useState(false);
-  const [openCollection, setOpenCollection] = useState<OpenCollection | null>(null);
-  const [openTracks, setOpenTracks] = useState<Track[]>([]);
-  const [opening, setOpening] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -89,47 +64,15 @@ export default function PlaylistsScreen() {
     }, [load]),
   );
 
-  const openLibrary = async (kind: LibraryKind) => {
-    setOpening(true);
-    setOpenCollection({
-      kind: 'library',
-      id: kind,
-      title: kind === 'liked' ? 'Liked Music' : 'Downloaded Music',
+  const openLibrary = (kind: 'liked' | 'downloads') => {
+    router.push(`/playlists/${kind}`);
+  };
+
+  const openPlaylist = (playlist: Playlist) => {
+    router.push({
+      pathname: '/playlists/[id]',
+      params: { id: String(playlist.id), title: playlist.name },
     });
-    try {
-      if (kind === 'liked') {
-        setOpenTracks(await fetchLikedTracks());
-      } else {
-        const downloads = await listDownloads();
-        setOpenTracks(downloads.map(downloadToTrack));
-      }
-    } catch (e) {
-      Alert.alert('Library', e instanceof Error ? e.message : 'Could not open collection');
-      setOpenCollection(null);
-      setOpenTracks([]);
-    } finally {
-      setOpening(false);
-    }
-  };
-
-  const openPlaylist = async (playlist: Playlist) => {
-    setOpening(true);
-    setOpenCollection({ kind: 'playlist', id: playlist.id, title: playlist.name });
-    try {
-      const detail = await fetchPlaylist(playlist.id);
-      setOpenTracks(detail.tracks || []);
-    } catch (e) {
-      Alert.alert('Playlist', e instanceof Error ? e.message : 'Could not open playlist');
-      setOpenCollection(null);
-      setOpenTracks([]);
-    } finally {
-      setOpening(false);
-    }
-  };
-
-  const closeCollection = () => {
-    setOpenCollection(null);
-    setOpenTracks([]);
   };
 
   const onCreate = async () => {
@@ -142,7 +85,7 @@ export default function PlaylistsScreen() {
       setCreating(false);
       await load();
     } catch (e) {
-      Alert.alert('Playlist', e instanceof Error ? e.message : 'Could not create playlist');
+      await noticeError('Playlist', e instanceof Error ? e.message : 'Could not create playlist');
     } finally {
       setBusy(false);
     }
@@ -181,7 +124,7 @@ export default function PlaylistsScreen() {
           <View style={styles.defaults}>
             <Pressable
               style={({ pressed }) => [styles.libCard, pressed && { opacity: 0.9 }]}
-              onPress={() => void openLibrary('liked')}
+              onPress={() => openLibrary('liked')}
             >
               <View style={[styles.libIcon, styles.libIconLiked]}>
                 <Ionicons name="thumbs-up" size={22} color={colors.text} />
@@ -195,7 +138,7 @@ export default function PlaylistsScreen() {
 
             <Pressable
               style={({ pressed }) => [styles.libCard, pressed && { opacity: 0.9 }]}
-              onPress={() => void openLibrary('downloads')}
+              onPress={() => openLibrary('downloads')}
             >
               <View style={[styles.libIcon, styles.libIconDownloads]}>
                 <Ionicons name="download" size={22} color={colors.text} />
@@ -218,7 +161,7 @@ export default function PlaylistsScreen() {
         renderItem={({ item }) => (
           <Pressable
             style={({ pressed }) => [styles.card, pressed && { opacity: 0.9 }]}
-            onPress={() => void openPlaylist(item)}
+            onPress={() => openPlaylist(item)}
           >
             <View style={[styles.libIcon, styles.libIconPlaylist]}>
               <Ionicons name="musical-notes" size={20} color={colors.accent} />
@@ -235,8 +178,15 @@ export default function PlaylistsScreen() {
         contentContainerStyle={{ paddingBottom: 120 }}
       />
 
-      <Modal visible={creating} transparent animationType="fade" onRequestClose={() => setCreating(false)}>
-        <View style={styles.modalBackdrop}>
+      <Modal
+        visible={creating}
+        transparent
+        animationType="none"
+        statusBarTranslucent
+        onRequestClose={() => setCreating(false)}
+      >
+        <View style={styles.modalBackdrop} pointerEvents="box-none">
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setCreating(false)} />
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>New playlist</Text>
             <TextInput
@@ -252,67 +202,6 @@ export default function PlaylistsScreen() {
               <Button label="Create" loading={busy} onPress={() => void onCreate()} />
             </View>
           </View>
-        </View>
-      </Modal>
-
-      <Modal
-        visible={!!openCollection}
-        animationType="slide"
-        onRequestClose={closeCollection}
-      >
-        <View
-          style={[
-            styles.detailRoot,
-            { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 16 },
-          ]}
-        >
-          <View style={styles.detailHeader}>
-            <Pressable onPress={closeCollection} hitSlop={12}>
-              <Text style={styles.back}>Close</Text>
-            </Pressable>
-            {openTracks.length > 0 ? (
-              <Pressable onPress={() => void playTrack(openTracks[0], openTracks)}>
-                <Text style={styles.create}>Play all</Text>
-              </Pressable>
-            ) : null}
-          </View>
-          <Text style={styles.detailTitle}>{openCollection?.title}</Text>
-          <Text style={styles.meta}>{openTracks.length} tracks</Text>
-          {opening ? (
-            <LoadingBlock />
-          ) : (
-            <FlatList
-              data={openTracks}
-              keyExtractor={(item) => String(item.id)}
-              ListEmptyComponent={
-                <EmptyState
-                  message={
-                    openCollection?.id === 'liked'
-                      ? 'No liked tracks yet. Tap thumbs up while listening.'
-                      : openCollection?.id === 'downloads'
-                        ? 'No downloads yet. Save tracks for offline play.'
-                        : 'This playlist has no tracks yet.'
-                  }
-                />
-              }
-              renderItem={({ item, index }) => (
-                <TrackRow
-                  track={item}
-                  index={index}
-                  onPress={() => void playTrack(item, openTracks)}
-                  right={
-                    <View style={styles.rowActions}>
-                      <FavoriteButton trackId={item.id} />
-                      {openCollection?.id !== 'downloads' ? (
-                        <DownloadButton track={item} />
-                      ) : null}
-                    </View>
-                  }
-                />
-              )}
-              contentContainerStyle={{ paddingBottom: 40, paddingTop: 12 }}
-            />
-          )}
         </View>
       </Modal>
     </Screen>
@@ -400,12 +289,14 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    padding: 24,
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(2, 6, 23, 0.72)',
   },
   modalCard: {
+    position: 'absolute',
+    left: Math.max(24, (Dimensions.get('window').width - 340) / 2),
+    top: Math.max(80, Dimensions.get('window').height * 0.32),
+    width: Math.min(340, Dimensions.get('window').width - 48),
     backgroundColor: colors.bgMid,
     borderRadius: radii.xl,
     borderWidth: 1,
@@ -429,24 +320,4 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   modalActions: { gap: 8 },
-  detailRoot: {
-    flex: 1,
-    backgroundColor: colors.bg,
-    paddingHorizontal: spacing.md,
-  },
-  detailHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  back: {
-    color: colors.textMuted,
-    fontFamily: fonts.bold,
-  },
-  detailTitle: {
-    color: colors.text,
-    fontFamily: fonts.extrabold,
-    fontSize: 24,
-  },
-  rowActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
 });

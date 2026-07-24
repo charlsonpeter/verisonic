@@ -20,7 +20,15 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DownloadButton } from '@/components/DownloadButton';
 import { AddToPlaylistButton } from '@/components/AddToPlaylistButton';
+import { confirm } from '@/components/ConfirmDialog';
 import { TrackFileInfoSheet } from '@/components/TrackFileInfoSheet';
+import {
+  TrackOverflowMenu,
+  TrackOverflowTrigger,
+  openTrackMenuFromView,
+  type TrackMenuAnchor,
+  type TrackMenuTarget,
+} from '@/components/TrackOverflowMenu';
 import { useAuth } from '@/context/AuthContext';
 import { usePlayer } from '@/context/PlayerContext';
 import type { Track } from '@/types/models';
@@ -71,11 +79,43 @@ export default function NowPlayingScreen() {
 
   const [lyricsOpen, setLyricsOpen] = useState(false);
   const [listOpen, setListOpen] = useState(false);
-  const [menuTarget, setMenuTarget] = useState<{ track: Track; index: number } | null>(null);
-  const [playlistTrack, setPlaylistTrack] = useState<Track | null>(null);
+  const [menuTarget, setMenuTarget] = useState<TrackMenuTarget | null>(null);
+  const [playlistPicker, setPlaylistPicker] = useState<{
+    track: Track;
+    anchor: TrackMenuAnchor;
+  } | null>(null);
   const [infoTrack, setInfoTrack] = useState<Track | null>(null);
   const lyricsListRef = useRef<ScrollView>(null);
   const lineYRef = useRef<Record<number, number>>({});
+
+  const closeList = () => {
+    setMenuTarget(null);
+    setListOpen(false);
+  };
+
+  const confirmClearQueue = () => {
+    void (async () => {
+      const ok = await confirm({
+        title: 'Clear queue',
+        message: 'Remove all tracks from the Now Playing list?',
+        confirmLabel: 'Clear',
+        destructive: true,
+      });
+      if (ok) clearQueue();
+    })();
+  };
+
+  const confirmRemoveFromList = (track: Track, index: number) => {
+    void (async () => {
+      const ok = await confirm({
+        title: 'Remove from list',
+        message: `Remove "${track.title}" from Now Playing?`,
+        confirmLabel: 'Remove',
+        destructive: true,
+      });
+      if (ok) removeFromQueueAt(index);
+    })();
+  };
 
   const isRadio = mode === 'radio';
   const title = currentTrack?.title || currentStation?.name || '';
@@ -120,12 +160,35 @@ export default function NowPlayingScreen() {
 
   return (
     <View style={[styles.wrap, { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 12 }]}>
-      <LinearGradient colors={['#1e293b', '#0f172a', '#020617']} style={StyleSheet.absoluteFill} />
-      {cover ? (
-        <Image source={{ uri: cover }} style={styles.ambient} blurRadius={40} />
-      ) : null}
-      <View style={styles.ambientScrim} />
+      <View style={styles.ambientRoot} pointerEvents="none">
+        {cover ? (
+          <Image
+            source={{ uri: cover }}
+            style={styles.ambient}
+            blurRadius={64}
+            resizeMode="cover"
+          />
+        ) : (
+          <LinearGradient
+            colors={['#0f172a', '#4c0519', '#020617']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={StyleSheet.absoluteFill}
+          />
+        )}
+        {/* Light glass tint — keep cover color visible through blur */}
+        <LinearGradient
+          colors={[
+            'rgba(255,255,255,0.08)',
+            'rgba(2, 6, 23, 0.22)',
+            'rgba(2, 6, 23, 0.48)',
+          ]}
+          locations={[0, 0.45, 1]}
+          style={styles.ambientTint}
+        />
+      </View>
 
+      <View style={styles.content}>
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={styles.roundBtn} hitSlop={8}>
           <Ionicons name="chevron-down" size={20} color={colors.text} />
@@ -328,17 +391,28 @@ export default function NowPlayingScreen() {
           </View>
         </Pressable>
       </View>
+      </View>
 
       {/* Web-mobile parity: full-screen “Now Playing” list (not a bottom queue sheet). */}
-      <Modal visible={listOpen} animationType="slide" onRequestClose={() => setListOpen(false)}>
+      <Modal
+        visible={listOpen}
+        animationType="slide"
+        statusBarTranslucent
+        onRequestClose={closeList}
+      >
         <GestureHandlerRootView style={{ flex: 1 }}>
-          <View style={[styles.listScreen, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 12 }]}>
+          <View
+            style={[
+              styles.listScreen,
+              { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 8) },
+            ]}
+          >
             <View style={styles.listHeader}>
               <View style={styles.listHeaderLeft}>
                 <Ionicons name="musical-notes" size={16} color={colors.accent} />
                 <Text style={styles.listHeaderTitle}>{isRadio ? 'Programs' : 'Now Playing'}</Text>
               </View>
-              <Pressable onPress={() => setListOpen(false)} hitSlop={12} style={styles.roundBtn}>
+              <Pressable onPress={closeList} hitSlop={12} style={styles.roundBtn}>
                 <Ionicons name="close" size={20} color={colors.textMuted} />
               </Pressable>
             </View>
@@ -348,7 +422,7 @@ export default function NowPlayingScreen() {
                 {isRadio ? 'Scheduled Broadcasts' : `Tracks: ${queue.length}`}
               </Text>
               {!isRadio && queue.length > 0 ? (
-                <Pressable onPress={clearQueue} hitSlop={8} style={styles.clearBtn}>
+                <Pressable onPress={confirmClearQueue} hitSlop={8} style={styles.clearBtn}>
                   <Ionicons name="trash-outline" size={14} color={colors.accent} />
                   <Text style={styles.clearBtnText}>Clear Queue</Text>
                 </Pressable>
@@ -417,16 +491,11 @@ export default function NowPlayingScreen() {
                             {item.artist_name_override || item.artist_name}
                           </Text>
                         </View>
-                        <Pressable
-                          onPress={(e) => {
-                            e.stopPropagation?.();
-                            setMenuTarget({ track: item, index });
-                          }}
-                          hitSlop={10}
-                          style={styles.moreBtn}
-                        >
-                          <Ionicons name="ellipsis-vertical" size={18} color={colors.textMuted} />
-                        </Pressable>
+                        <TrackOverflowTrigger
+                          onPress={(anchorEl) =>
+                            openTrackMenuFromView(item, index, anchorEl, setMenuTarget)
+                          }
+                        />
                       </Pressable>
                     </ScaleDecorator>
                   );
@@ -434,65 +503,28 @@ export default function NowPlayingScreen() {
               />
             )}
           </View>
+
+          <TrackOverflowMenu
+            target={menuTarget}
+            inline
+            topInset={insets.top + 8}
+            onClose={() => setMenuTarget(null)}
+            onAddToPlaylist={(track, anchor) => setPlaylistPicker({ track, anchor })}
+            onFileInfo={setInfoTrack}
+            onRemove={confirmRemoveFromList}
+            removeLabel="Remove from list"
+          />
         </GestureHandlerRootView>
       </Modal>
 
-      {/* Track ⋮ menu */}
-      <Modal
-        visible={!!menuTarget}
-        animationType="fade"
-        transparent
-        onRequestClose={() => setMenuTarget(null)}
-      >
-        <Pressable style={styles.menuBackdrop} onPress={() => setMenuTarget(null)}>
-          <Pressable style={styles.menuCard} onPress={(e) => e.stopPropagation()}>
-            <Text numberOfLines={1} style={styles.menuTrackTitle}>
-              {menuTarget?.track.title}
-            </Text>
-            <Pressable
-              style={styles.menuItem}
-              onPress={() => {
-                const t = menuTarget?.track;
-                setMenuTarget(null);
-                if (t) setPlaylistTrack(t);
-              }}
-            >
-              <Ionicons name="add" size={18} color={colors.text} />
-              <Text style={styles.menuItemText}>Add to playlist</Text>
-            </Pressable>
-            <Pressable
-              style={styles.menuItem}
-              onPress={() => {
-                const t = menuTarget?.track;
-                setMenuTarget(null);
-                if (t) setInfoTrack(t);
-              }}
-            >
-              <Ionicons name="information-circle-outline" size={18} color={colors.text} />
-              <Text style={styles.menuItemText}>File info</Text>
-            </Pressable>
-            <Pressable
-              style={styles.menuItem}
-              onPress={() => {
-                const idx = menuTarget?.index;
-                setMenuTarget(null);
-                if (typeof idx === 'number') removeFromQueueAt(idx);
-              }}
-            >
-              <Ionicons name="trash-outline" size={18} color={colors.accentStrong} />
-              <Text style={[styles.menuItemText, { color: colors.accentStrong }]}>Remove from list</Text>
-            </Pressable>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      {playlistTrack ? (
+      {playlistPicker ? (
         <AddToPlaylistButton
-          track={playlistTrack}
+          track={playlistPicker.track}
+          anchor={playlistPicker.anchor}
           hideTrigger
           open
           onOpenChange={(v) => {
-            if (!v) setPlaylistTrack(null);
+            if (!v) setPlaylistPicker(null);
           }}
         />
       ) : null}
@@ -511,21 +543,31 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
     paddingHorizontal: spacing.md,
+    overflow: 'hidden',
+  },
+  ambientRoot: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 0,
+    overflow: 'hidden',
+    backgroundColor: '#020617',
   },
   ambient: {
     ...StyleSheet.absoluteFillObject,
-    opacity: 0.25,
+    transform: [{ scale: 1.5 }],
+    opacity: 0.95,
   },
-  ambientScrim: {
+  ambientTint: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(2,6,23,0.72)',
+  },
+  content: {
+    flex: 1,
+    zIndex: 2,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: spacing.sm,
-    zIndex: 2,
   },
   headerLabel: {
     color: colors.textMuted,
@@ -553,7 +595,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 220,
-    zIndex: 2,
   },
   artWrap: {
     alignItems: 'center',
@@ -715,7 +756,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.md,
-    paddingBottom: spacing.md,
+    paddingTop: 8,
+    paddingBottom: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
@@ -736,8 +778,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.md,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
+    paddingTop: 10,
+    paddingBottom: 8,
   },
   listMeta: {
     color: colors.textMuted,
@@ -793,43 +835,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(2,6,23,0.7)',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  moreBtn: {
-    padding: 8,
-  },
-  menuBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    justifyContent: 'flex-end',
-    padding: spacing.md,
-  },
-  menuCard: {
-    backgroundColor: colors.bgMid,
-    borderRadius: radii.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-  },
-  menuTrackTitle: {
-    color: colors.textMuted,
-    fontFamily: fonts.semibold,
-    fontSize: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 14,
-    borderRadius: radii.md,
-  },
-  menuItemText: {
-    color: colors.text,
-    fontFamily: fonts.semibold,
-    fontSize: 14,
   },
   listEmpty: {
     alignItems: 'center',

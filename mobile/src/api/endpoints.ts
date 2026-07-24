@@ -127,10 +127,33 @@ export async function createPlaylist(name: string): Promise<Playlist> {
   return apiRequest('/playlist', { method: 'POST', body: { name } });
 }
 
+export async function deletePlaylist(playlistId: number): Promise<void> {
+  await apiRequest(`/playlist/${playlistId}`, { method: 'DELETE' });
+}
+
 export async function addTrackToPlaylist(playlistId: number, trackId: number): Promise<void> {
   await apiRequest(`/playlist/${playlistId}/track`, {
     method: 'POST',
     body: { track_id: trackId },
+  });
+}
+
+export async function removeTrackFromPlaylist(
+  playlistId: number,
+  trackId: number,
+): Promise<Playlist> {
+  return apiRequest(`/playlist/${playlistId}/track/${trackId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function reorderPlaylistTracks(
+  playlistId: number,
+  trackIds: number[],
+): Promise<Playlist> {
+  return apiRequest(`/playlist/${playlistId}/tracks/reorder`, {
+    method: 'PUT',
+    body: { track_ids: trackIds },
   });
 }
 

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert,
+  Dimensions,
   Image,
   Modal,
   Pressable,
@@ -19,6 +19,7 @@ import {
   fetchSubscriptionPlans,
   updateProfile,
 } from '@/api/endpoints';
+import { noticeError, noticeSuccess } from '@/components/ConfirmDialog';
 import { Button } from '@/components/ui';
 import { useAuth } from '@/context/AuthContext';
 import { usePlayer } from '@/context/PlayerContext';
@@ -165,9 +166,9 @@ export default function ProfileScreen() {
     try {
       const message = await purchasePlan(planId, user.email, user.full_name);
       await refreshUser();
-      Alert.alert('Premium', message);
+      await noticeSuccess('Premium', message);
     } catch (e) {
-      Alert.alert('Checkout', e instanceof Error ? e.message : 'Payment failed');
+      await noticeError('Checkout', e instanceof Error ? e.message : 'Payment failed');
     } finally {
       setBusyPlan(null);
     }
@@ -370,11 +371,13 @@ export default function ProfileScreen() {
       <Modal
         visible={passwordOpen}
         transparent
-        animationType="fade"
+        animationType="none"
+        statusBarTranslucent
         onRequestClose={closePassword}
       >
-        <Pressable style={styles.modalBackdrop} onPress={closePassword}>
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+        <View style={styles.modalBackdrop} pointerEvents="box-none">
+          <Pressable style={StyleSheet.absoluteFill} onPress={closePassword} />
+          <View style={styles.modalCard}>
             <View style={styles.modalHead}>
               <Ionicons name="key" size={16} color={colors.accent} />
               <Text style={styles.modalTitle}>Change Password</Text>
@@ -434,8 +437,8 @@ export default function ProfileScreen() {
                 onPress={() => void onChangePassword()}
               />
             </View>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
     </View>
   );
@@ -740,12 +743,14 @@ const styles = StyleSheet.create({
   },
 
   modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
-    justifyContent: 'center',
-    padding: spacing.md,
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(2, 6, 23, 0.72)',
   },
   modalCard: {
+    position: 'absolute',
+    left: Math.max(24, (Dimensions.get('window').width - 340) / 2),
+    top: Math.max(80, Dimensions.get('window').height * 0.28),
+    width: Math.min(340, Dimensions.get('window').width - 48),
     backgroundColor: colors.bgCard,
     borderRadius: 20,
     borderWidth: 1,

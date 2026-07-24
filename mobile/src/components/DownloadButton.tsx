@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable } from 'react-native';
+import { ActivityIndicator, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { confirm, notice, noticeError } from '@/components/ConfirmDialog';
 import { useAuth } from '@/context/AuthContext';
 import {
   downloadTrack,
@@ -27,20 +28,37 @@ export function DownloadButton({ track }: { track: Track }) {
 
   const onPress = async () => {
     if (!canPlayFull) {
-      Alert.alert('Premium required', 'Download and offline playback need Premium or an active free trial.');
+      await notice({
+        title: 'Premium required',
+        message: 'Download and offline playback need Premium or an active free trial.',
+      });
+      return;
+    }
+    if (saved) {
+      const ok = await confirm({
+        title: 'Delete from device',
+        message: `Delete "${track.title}" from this device?`,
+        confirmLabel: 'Delete',
+        destructive: true,
+      });
+      if (!ok) return;
+      setBusy(true);
+      try {
+        await removeDownload(track.id);
+        setSaved(false);
+      } catch (e) {
+        await noticeError('Download', e instanceof Error ? e.message : 'Could not remove download');
+      } finally {
+        setBusy(false);
+      }
       return;
     }
     setBusy(true);
     try {
-      if (saved) {
-        await removeDownload(track.id);
-        setSaved(false);
-      } else {
-        await downloadTrack(track, isPremium);
-        setSaved(true);
-      }
+      await downloadTrack(track, isPremium);
+      setSaved(true);
     } catch (e) {
-      Alert.alert('Download', e instanceof Error ? e.message : 'Could not download track');
+      await noticeError('Download', e instanceof Error ? e.message : 'Could not download track');
     } finally {
       setBusy(false);
     }

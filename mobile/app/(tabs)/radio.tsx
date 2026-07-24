@@ -1,6 +1,5 @@
 import React, { useCallback, useState } from 'react';
 import {
-  Alert,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -8,6 +7,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { fetchRadioStations } from '@/api/endpoints';
+import { notice } from '@/components/ConfirmDialog';
 import { RadioTile } from '@/components/RadioStationViews';
 import { EmptyState, LoadingBlock, Screen } from '@/components/ui';
 import { usePlayer } from '@/context/PlayerContext';
@@ -38,7 +38,10 @@ export default function RadioScreen() {
   const onStationPress = useCallback(
     (station: RadioStation) => {
       if (station.is_online === false) {
-        Alert.alert('Station Offline', 'This radio station is currently offline.');
+        void notice({
+          title: 'Station Offline',
+          message: 'This radio station is currently offline.',
+        });
         return;
       }
       const isCurrent = mode === 'radio' && currentStation?.id === station.id;
