@@ -7,7 +7,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { Audio, AVPlaybackStatus } from 'expo-av';
+import TrackPlayer, { Event, State } from 'react-native-track-player';
 import { useAuth } from '@/context/AuthContext';
 import {
   addFavorite,
@@ -23,16 +23,19 @@ import {
   type ReactionValue,
 } from '@/api/endpoints';
 import { getDownload } from '@/services/downloads';
+import { playbackRemote } from '@/services/playbackRemote';
 import {
   clearPlayerSession,
   loadPlayerSession,
   savePlayerSession,
 } from '@/services/playerSession';
+import { ensureTrackPlayer, loadMedia, unloadMedia } from '@/services/trackPlayer';
 import type { QualityLevelSetting, RadioStation, Track } from '@/types/models';
 import {
   FREE_RADIO_PREVIEW_SECONDS,
   FREE_TRACK_PREVIEW_SECONDS,
 } from '@/utils/constants';
+import { coverUri } from '@/utils/mediaUrl';
 import { getStreamCandidates, radioLiveUrl } from '@/utils/streamQuality';
 
 type PlayerMode = 'idle' | 'track' | 'radio';
@@ -90,7 +93,6 @@ function shuffleArray<T>(items: T[]): T[] {
 
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const { canPlayFull, user, token } = useAuth();
-  const soundRef = useRef<Audio.Sound | null>(null);
   const radioSessionRef = useRef<string | null>(null);
   const radioStationIdRef = useRef<number | null>(null);
   const listenReportedRef = useRef(false);
@@ -98,6 +100,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const repeatModeRef = useRef<RepeatMode>('none');
   const isShuffleRef = useRef(false);
   const playbackSpeedRef = useRef(1);
+  const modeRef = useRef<PlayerMode>('idle');
+  const canPlayFullRef = useRef(canPlayFull);
+  const currentTrackRef = useRef<Track | null>(null);
 
   const [mode, setMode] = useState<PlayerMode>('idle');
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
@@ -123,15 +128,18 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     playbackSpeedRef.current = playbackSpeed;
   }, [playbackSpeed]);
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+  useEffect(() => {
+    canPlayFullRef.current = canPlayFull;
+  }, [canPlayFull]);
+  useEffect(() => {
+    currentTrackRef.current = currentTrack;
+  }, [currentTrack]);
 
   useEffect(() => {
-    Audio.setAudioModeAsync({
-      allowsRecordingIOS: false,
-      playsInSilentModeIOS: true,
-      staysActiveInBackground: true,
-      shouldDuckAndroid: true,
-      playThroughEarpieceAndroid: false,
-    }).catch(() => undefined);
+    void ensureTrackPlayer().catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -165,23 +173,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     void refreshLibraryState();
   }, [refreshLibraryState]);
 
-  const unloadSound = useCallback(async () => {
-    const sound = soundRef.current;
-    soundRef.current = null;
-    if (sound) {
-      try {
-        await sound.stopAsync();
-      } catch {
-        // ignore
-      }
-      try {
-        await sound.unloadAsync();
-      } catch {
-        // ignore
-      }
-    }
-  }, []);
-
   const endRadioSession = useCallback(async () => {
     const stationId = radioStationIdRef.current;
     const session = radioSessionRef.current;
@@ -196,81 +187,74 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  const onStatus = useCallback(
-    (status: AVPlaybackStatus) => {
-      if (!status.isLoaded) {
-        setIsPlaying(false);
-        return;
-      }
-      setIsPlaying(status.isPlaying);
-      setPositionMs(status.positionMillis || 0);
-      setDurationMs(status.durationMillis || 0);
+  const handleProgress = useCallback(async (positionSec: number, durationSec: number) => {
+    const posMs = Math.max(0, positionSec * 1000);
+    const durMs = Math.max(0, durationSec * 1000);
+    setPositionMs(posMs);
+    if (durMs > 0) setDurationMs(durMs);
 
-      const previewLimitMs = FREE_TRACK_PREVIEW_SECONDS * 1000;
-      if (mode === 'track' && !canPlayFull && status.positionMillis >= previewLimitMs) {
-        void soundRef.current?.pauseAsync();
-        void soundRef.current?.setPositionAsync(previewLimitMs);
-        return;
-      }
+    const modeNow = modeRef.current;
+    const full = canPlayFullRef.current;
+    const track = currentTrackRef.current;
 
-      if (
-        mode === 'radio' &&
-        !canPlayFull &&
-        status.positionMillis >= FREE_RADIO_PREVIEW_SECONDS * 1000
-      ) {
-        void soundRef.current?.pauseAsync();
-        return;
-      }
+    if (modeNow === 'track' && !full && posMs >= FREE_TRACK_PREVIEW_SECONDS * 1000) {
+      await TrackPlayer.pause();
+      await TrackPlayer.seekTo(FREE_TRACK_PREVIEW_SECONDS).catch(() => undefined);
+      return;
+    }
 
-      if (
-        mode === 'track' &&
-        currentTrack &&
-        canPlayFull &&
-        !listenReportedRef.current &&
-        status.positionMillis >= 30_000
-      ) {
-        listenReportedRef.current = true;
-        void reportTrackListenProgress(currentTrack.id, status.positionMillis / 1000).catch(
-          () => undefined,
-        );
-      }
+    if (modeNow === 'radio' && !full && posMs >= FREE_RADIO_PREVIEW_SECONDS * 1000) {
+      await TrackPlayer.pause();
+      return;
+    }
 
-      if (status.didJustFinish && mode === 'track') {
+    if (modeNow === 'track' && track && full && !listenReportedRef.current && posMs >= 30_000) {
+      listenReportedRef.current = true;
+      void reportTrackListenProgress(track.id, positionSec).catch(() => undefined);
+    }
+  }, []);
+
+  useEffect(() => {
+    const subState = TrackPlayer.addEventListener(Event.PlaybackState, (e) => {
+      const state = e.state;
+      setIsPlaying(state === State.Playing || state === State.Buffering);
+      if (state === State.Ended) {
         void playNextRef.current?.(true);
       }
-    },
-    [canPlayFull, currentTrack, mode],
-  );
+    });
+    const subProgress = TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, (e) => {
+      void handleProgress(e.position, e.duration);
+    });
+    const subQueueEnded = TrackPlayer.addEventListener(Event.PlaybackQueueEnded, () => {
+      void playNextRef.current?.(true);
+    });
+    return () => {
+      subState.remove();
+      subProgress.remove();
+      subQueueEnded.remove();
+    };
+  }, [handleProgress]);
 
   const loadUri = useCallback(
-    async (uri: string, shouldPlay = true, startPositionMs = 0) => {
-      await unloadSound();
-      const { sound } = await Audio.Sound.createAsync(
-        { uri },
-        {
-          shouldPlay: false,
-          progressUpdateIntervalMillis: 400,
-          rate: playbackSpeedRef.current,
-          shouldCorrectPitch: true,
-          positionMillis: Math.max(0, startPositionMs),
-        },
-        onStatus,
-      );
-      soundRef.current = sound;
-      if (playbackSpeedRef.current !== 1) {
-        await sound.setRateAsync(playbackSpeedRef.current, true).catch(() => undefined);
-      }
-      if (startPositionMs > 0) {
-        await sound.setPositionAsync(startPositionMs).catch(() => undefined);
-        setPositionMs(startPositionMs);
-      }
-      if (shouldPlay) {
-        await sound.playAsync();
-      } else {
-        setIsPlaying(false);
-      }
+    async (
+      uri: string,
+      meta: { title: string; artist: string; artwork?: string; isLive?: boolean },
+      shouldPlay = true,
+      startPositionMs = 0,
+    ) => {
+      await loadMedia({
+        url: uri,
+        title: meta.title,
+        artist: meta.artist,
+        artwork: meta.artwork,
+        isLive: meta.isLive,
+        shouldPlay,
+        startPositionMs,
+        rate: playbackSpeedRef.current,
+      });
+      if (!shouldPlay) setIsPlaying(false);
     },
-    [onStatus, unloadSound],
+    [],
   );
 
   const playTrackAt = useCallback(
@@ -291,9 +275,16 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setQueueIndex(index);
       orderedQueueRef.current = q.length ? q : [track];
 
+      const meta = {
+        title: track.title || 'Track',
+        artist: track.artist_name_override || track.artist_name || 'Unknown artist',
+        artwork: coverUri(track.cover_art_url),
+        isLive: false as const,
+      };
+
       const downloaded = await getDownload(track.id);
       if (downloaded) {
-        await loadUri(downloaded.localUri, autoplay, startMs);
+        await loadUri(downloaded.localUri, meta, autoplay, startMs);
         return;
       }
 
@@ -302,7 +293,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       let lastError: unknown;
       for (const uri of candidates) {
         try {
-          await loadUri(uri, autoplay, startMs);
+          await loadUri(uri, meta, autoplay, startMs);
           return;
         } catch (e) {
           lastError = e;
@@ -341,7 +332,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         ? station.stream_url
         : radioLiveUrl(station.id);
 
-      await loadUri(live, autoplay, 0);
+      await loadUri(
+        live,
+        {
+          title: station.name || 'Live radio',
+          artist: station.current_program_title || station.current_track_artist || 'VeriSonic Radio',
+          artwork: coverUri(station.cover_art_url),
+          isLive: true,
+        },
+        autoplay,
+        0,
+      );
 
       if (autoplay && canPlayFull && user) {
         try {
@@ -363,18 +364,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (mode !== 'track' || queue.length === 0) return;
 
       if (fromNaturalEnd && repeatModeRef.current === 'one') {
-        await soundRef.current?.setPositionAsync(0);
-        await soundRef.current?.playAsync();
+        await TrackPlayer.seekTo(0);
+        await TrackPlayer.play();
         return;
-      }
-
-      if (!fromNaturalEnd && repeatModeRef.current === 'one') {
-        // Manual next still advances
       }
 
       const atEnd = queueIndex >= queue.length - 1;
       if (atEnd && repeatModeRef.current === 'none' && fromNaturalEnd) {
-        await soundRef.current?.pauseAsync();
+        await TrackPlayer.pause();
         return;
       }
 
@@ -391,6 +388,36 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   playTrackAtRef.current = playTrackAt;
   const playRadioRef = useRef(playRadio);
   playRadioRef.current = playRadio;
+
+  const playPrevious = useCallback(async () => {
+    if (mode !== 'track' || queue.length === 0) return;
+    if (positionMs > 3000) {
+      await TrackPlayer.seekTo(0);
+      return;
+    }
+    const prev = (queueIndex - 1 + queue.length) % queue.length;
+    await playTrackAt(queue[prev], queue, prev);
+  }, [mode, playTrackAt, positionMs, queue, queueIndex]);
+
+  const playPreviousRef = useRef(playPrevious);
+  playPreviousRef.current = playPrevious;
+
+  useEffect(() => {
+    const offNext = playbackRemote.on('next', () => {
+      void playNextRef.current?.(false);
+    });
+    const offPrev = playbackRemote.on('previous', () => {
+      void playPreviousRef.current?.();
+    });
+    const offStop = playbackRemote.on('stop', () => {
+      void stopRef.current?.();
+    });
+    return () => {
+      offNext();
+      offPrev();
+      offStop();
+    };
+  }, []);
 
   const restoredRef = useRef(false);
   useEffect(() => {
@@ -421,7 +448,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     };
   }, [token]);
 
-  // Persist now-playing so the mini player can resume after relaunch.
   useEffect(() => {
     if (mode === 'idle' || (!currentTrack && !currentStation)) return;
     const handle = setTimeout(() => {
@@ -438,20 +464,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return () => clearTimeout(handle);
   }, [mode, currentTrack, currentStation, queue, queueIndex, positionMs]);
 
-  const playPrevious = useCallback(async () => {
-    if (mode !== 'track' || queue.length === 0) return;
-    if (positionMs > 3000) {
-      await soundRef.current?.setPositionAsync(0);
-      return;
-    }
-    const prev = (queueIndex - 1 + queue.length) % queue.length;
-    await playTrackAt(queue[prev], queue, prev);
-  }, [mode, playTrackAt, positionMs, queue, queueIndex]);
-
   const ensureLoaded = useCallback(async () => {
-    if (soundRef.current) {
-      const status = await soundRef.current.getStatusAsync();
-      if (status.isLoaded) return true;
+    try {
+      await ensureTrackPlayer();
+      const active = await TrackPlayer.getActiveTrack();
+      if (active) return true;
+    } catch {
+      // fall through and reload
     }
     if (mode === 'track' && currentTrack) {
       await playTrackAt(currentTrack, queue.length ? queue : [currentTrack], queueIndex, {
@@ -470,23 +489,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const togglePlay = useCallback(async () => {
     const ready = await ensureLoaded();
     if (!ready) return;
-    const sound = soundRef.current;
-    if (!sound) return;
-    const status = await sound.getStatusAsync();
-    if (!status.isLoaded) return;
-    if (status.isPlaying) {
-      await sound.pauseAsync();
+    const state = await TrackPlayer.getPlaybackState();
+    const playing = state.state === State.Playing || state.state === State.Buffering;
+    if (playing) {
+      await TrackPlayer.pause();
     } else {
-      if (
-        mode === 'track' &&
-        !canPlayFull &&
-        status.positionMillis >= FREE_TRACK_PREVIEW_SECONDS * 1000
-      ) {
-        await sound.setPositionAsync(0);
+      if (mode === 'track' && !canPlayFull && positionMs >= FREE_TRACK_PREVIEW_SECONDS * 1000) {
+        await TrackPlayer.seekTo(0);
       }
-      await sound.playAsync();
+      await TrackPlayer.play();
     }
-  }, [canPlayFull, ensureLoaded, mode]);
+  }, [canPlayFull, ensureLoaded, mode, positionMs]);
 
   const seekTo = useCallback(
     async (ms: number) => {
@@ -494,7 +507,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const max = canPlayFull ? durationMs : FREE_TRACK_PREVIEW_SECONDS * 1000;
       const clamped = Math.max(0, Math.min(ms, max || ms));
       await ensureLoaded();
-      await soundRef.current?.setPositionAsync(clamped);
+      await TrackPlayer.seekTo(clamped / 1000);
       setPositionMs(clamped);
     },
     [canPlayFull, durationMs, ensureLoaded, mode],
@@ -502,7 +515,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const stop = useCallback(async () => {
     await endRadioSession();
-    await unloadSound();
+    await unloadMedia();
     setMode('idle');
     setCurrentTrack(null);
     setCurrentStation(null);
@@ -513,7 +526,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setPositionMs(0);
     setDurationMs(0);
     void clearPlayerSession();
-  }, [endRadioSession, unloadSound]);
+  }, [endRadioSession]);
+
+  const stopRef = useRef(stop);
+  stopRef.current = stop;
 
   const clearQueue = useCallback(() => {
     if (currentTrack) {
@@ -542,7 +558,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (mode !== 'track' || index < 0 || index >= queue.length) return;
       const next = queue.filter((_, i) => i !== index);
       if (!next.length) {
-        // Keep playing current if it was the only item — don't empty the session.
         if (currentTrack) {
           orderedQueueRef.current = [currentTrack];
           setQueue([currentTrack]);
@@ -608,10 +623,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const applySpeed = useCallback(async (speed: number) => {
     playbackSpeedRef.current = speed;
     setPlaybackSpeedState(speed);
-    const sound = soundRef.current;
-    if (!sound) return;
     try {
-      await sound.setRateAsync(speed, true);
+      await ensureTrackPlayer();
+      await TrackPlayer.setRate(speed);
     } catch {
       // ignore unsupported rates
     }
@@ -684,9 +698,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     return () => {
       void endRadioSession();
-      void unloadSound();
+      void unloadMedia();
     };
-  }, [endRadioSession, unloadSound]);
+  }, [endRadioSession]);
 
   const value = useMemo<PlayerContextValue>(
     () => ({

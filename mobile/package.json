@@ -2,7 +2,7 @@
   "name": "verisonic-mobile",
   "version": "1.0.0",
   "private": true,
-  "main": "expo-router/entry",
+  "main": "index.js",
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
@@ -37,6 +37,7 @@
     "react-native-reanimated": "~3.16.1",
     "react-native-safe-area-context": "4.12.0",
     "react-native-screens": "~4.4.0",
+    "react-native-track-player": "^4.1.2",
     "react-native-web": "~0.19.13"
   },
   "devDependencies": {
