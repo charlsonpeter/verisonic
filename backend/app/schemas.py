@@ -299,6 +299,7 @@ class RadioStationCreate(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     website: Optional[str] = None
+    frequency_band: Optional[str] = None
     broadcast_frequency: Optional[str] = None
     languages: Optional[str] = None
     social_twitter: Optional[str] = None
@@ -323,6 +324,7 @@ class RadioStationUpdate(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     website: Optional[str] = None
+    frequency_band: Optional[str] = None
     broadcast_frequency: Optional[str] = None
     languages: Optional[str] = None
     social_twitter: Optional[str] = None
@@ -364,6 +366,7 @@ class RadioStationResponse(BaseModel):
     phone: Optional[str] = None
     email: Optional[str] = None
     website: Optional[str] = None
+    frequency_band: Optional[str] = None
     broadcast_frequency: Optional[str] = None
     languages: Optional[str] = None
     social_twitter: Optional[str] = None

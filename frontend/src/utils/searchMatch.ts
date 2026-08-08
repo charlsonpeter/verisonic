@@ -142,6 +142,7 @@ type RadioSearchShape = {
   name: string;
   description?: string;
   category?: string;
+  frequency_band?: string;
   broadcast_frequency?: string;
   city?: string;
 };
@@ -164,6 +165,7 @@ export function radioSearchFields<T extends RadioSearchShape>(station: T): Searc
   const fields: SearchField[] = [{ value: station.name, weight: 1.2 }];
   if (station.category) fields.push({ value: station.category, weight: 0.9 });
   if (station.description) fields.push({ value: station.description, weight: 0.75 });
+  if (station.frequency_band) fields.push({ value: station.frequency_band, weight: 0.75 });
   if (station.broadcast_frequency) fields.push({ value: station.broadcast_frequency, weight: 0.7 });
   if (station.city) fields.push({ value: station.city, weight: 0.6 });
   return fields;

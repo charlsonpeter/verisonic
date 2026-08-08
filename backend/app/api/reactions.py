@@ -1,12 +1,14 @@
-from typing import Dict, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.api.auth import get_current_user
+from app.api.music import serialize_track
 from app.db.session import get_db
 from app.models import (
+    Artist,
     Track,
     TrackReaction,
     TrackComment,
@@ -71,6 +73,39 @@ def list_user_radio_program_reactions(
         for row in rows
         if row.reaction in ("like", "dislike")
     }
+
+
+@router.get("/liked", response_model=List[dict])
+def list_liked_tracks(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Return tracks the current user has liked (thumbs-up), newest first."""
+    likes = (
+        db.query(TrackReaction)
+        .filter(
+            TrackReaction.user_id == current_user.id,
+            TrackReaction.reaction == "like",
+        )
+        .order_by(TrackReaction.updated_at.desc())
+        .all()
+    )
+    track_ids = [row.track_id for row in likes]
+    if not track_ids:
+        return []
+    tracks = (
+        db.query(Track)
+        .join(Artist, Track.artist_id == Artist.id)
+        .filter(
+            Track.id.in_(track_ids),
+            Track.approved == True,
+            Track.hls_playlist_path.isnot(None),
+            Artist.is_active == True,
+        )
+        .all()
+    )
+    by_id = {t.id: t for t in tracks}
+    return [serialize_track(by_id[tid], db, viewer=current_user) for tid in track_ids if tid in by_id]
 
 
 @router.put("/{track_id}")

@@ -43,6 +43,7 @@ from app.schemas import (
     RadioProgramEngagementResponse,
 )
 from app.api.auth import get_current_admin, get_current_user, get_current_radio_admin, get_optional_current_user
+from app.core.broadcast_frequency import validate_band_and_frequency
 from app.core.rate_limit import enforce_rate_limit
 from app.core.stream_url import validate_radio_stream_url
 from app.core.user_mode import apply_user_mode
@@ -408,6 +409,7 @@ def serialize_station(
         "phone": station.phone,
         "email": station.email,
         "website": station.website,
+        "frequency_band": station.frequency_band,
         "broadcast_frequency": station.broadcast_frequency,
         "languages": station.languages,
         "social_twitter": station.social_twitter,
@@ -511,6 +513,11 @@ def create_radio_station(
             station_in.postal_code
         )
 
+    frequency_band, broadcast_frequency = validate_band_and_frequency(
+        station_in.frequency_band,
+        station_in.broadcast_frequency,
+    )
+
     station = RadioStation(
         name=station_in.name,
         description=station_in.description,
@@ -528,7 +535,8 @@ def create_radio_station(
         phone=station_in.phone,
         email=station_in.email,
         website=station_in.website,
-        broadcast_frequency=station_in.broadcast_frequency,
+        frequency_band=frequency_band,
+        broadcast_frequency=broadcast_frequency,
         languages=station_in.languages,
         social_twitter=station_in.social_twitter,
         social_instagram=station_in.social_instagram,
@@ -605,8 +613,21 @@ def update_radio_station(
         station.email = station_in.email
     if station_in.website is not None:
         station.website = station_in.website
-    if station_in.broadcast_frequency is not None:
-        station.broadcast_frequency = station_in.broadcast_frequency
+    if station_in.frequency_band is not None or station_in.broadcast_frequency is not None:
+        next_band = (
+            station_in.frequency_band
+            if station_in.frequency_band is not None
+            else station.frequency_band
+        )
+        next_freq = (
+            station_in.broadcast_frequency
+            if station_in.broadcast_frequency is not None
+            else station.broadcast_frequency
+        )
+        # Empty string clears the field; validate the resulting pair together.
+        frequency_band, broadcast_frequency = validate_band_and_frequency(next_band, next_freq)
+        station.frequency_band = frequency_band
+        station.broadcast_frequency = broadcast_frequency
     if station_in.languages is not None:
         station.languages = station_in.languages
     if station_in.social_twitter is not None:
@@ -709,6 +730,7 @@ def _apply_radio_search_filter(query, search: Optional[str]):
         or_(
             RadioStation.name.ilike(pattern),
             RadioStation.category.ilike(pattern),
+            RadioStation.frequency_band.ilike(pattern),
             RadioStation.broadcast_frequency.ilike(pattern),
             RadioStation.licence.ilike(pattern),
             User.full_name.ilike(pattern),

@@ -373,6 +373,9 @@ MIGRATIONS = [
         CREATE INDEX IF NOT EXISTS ix_radio_program_comment_reactions_comment_id
             ON radio_program_comment_reactions (comment_id);
     """),
+    ("030_radio_stations_frequency_band", """
+        ALTER TABLE radio_stations ADD COLUMN IF NOT EXISTS frequency_band VARCHAR;
+    """),
 ]
 
 
