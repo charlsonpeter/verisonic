@@ -183,6 +183,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
+    const onSessionInvalid = () => {
+      // Confirmed auth failure from fetch interceptor — clear local session only.
+      // Refresh cookie was already rejected by the server.
+      beginLogout();
+      clearAuthTokens();
+      setToken(null);
+      setCurrentUser(null);
+      setHasRadioStation(false);
+      setIsLoading(false);
+    };
+    window.addEventListener('verisonic:session-invalid', onSessionInvalid);
+    return () => window.removeEventListener('verisonic:session-invalid', onSessionInvalid);
+  }, []);
+
+  useEffect(() => {
     const bootstrap = async () => {
       if (!getAccessToken()) {
         // After Sign Out, do not silently restore via refresh cookie in this tab.
@@ -191,21 +206,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           return;
         }
         const refreshed = await refreshAccessToken();
-        if (refreshed) {
+        if (refreshed === 'success') {
           setToken(getAccessToken());
           return;
         }
+        // unauthorized or unavailable with no access token → stay signed out
         setIsLoading(false);
         return;
       }
       if (token) {
-        fetchCurrentUser();
+        void fetchCurrentUser();
       } else {
         setCurrentUser(null);
         setIsLoading(false);
       }
     };
-    bootstrap();
+    void bootstrap();
   }, [token]);
 
   const fetchCurrentUser = async () => {
@@ -219,6 +235,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const res = await fetch(`${API_URL}/auth/me`, {
         headers: { Authorization: `Bearer ${accessToken}` },
+        credentials: 'include',
       });
       if (res.ok) {
         const data = await res.json();
@@ -227,12 +244,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if ((userWithSub.real_role || userWithSub.role) === 'radio_admin') {
           await checkRadioStationStatus(userWithSub);
         }
-      } else {
-        logout();
+        return;
       }
+      // Fetch interceptor already tried refresh on 401.
+      // If tokens were cleared → confirmed auth failure. If they remain → transient; stay signed in.
+      if (res.status === 401 || res.status === 403) {
+        if (!getAccessToken()) {
+          beginLogout();
+          setToken(null);
+          setCurrentUser(null);
+          setHasRadioStation(false);
+        } else {
+          setAuthError('Session could not be verified right now. You are still signed in.');
+        }
+        return;
+      }
+      setAuthError('Could not load your profile right now. You are still signed in.');
     } catch {
-      setAuthError('Could not reach the authentication service.');
-      logout();
+      // Network blip — keep tokens so the user stays signed in.
+      setAuthError('Could not reach the authentication service. You are still signed in.');
     } finally {
       setIsLoading(false);
     }

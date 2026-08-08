@@ -6,11 +6,14 @@ export function getAccessToken(): string | null {
 }
 
 export function getRefreshToken(): string | null {
+  // Refresh stays httpOnly-cookie only on web — never persist in JS storage.
   return null;
 }
 
 export function setAuthTokens(accessToken: string, _refreshToken?: string | null): void {
   suppressSessionRestore = false;
+  // Short-lived access token in sessionStorage only. Long-lived session is the
+  // httpOnly refresh cookie set by the server (not readable from JS).
   sessionStorage.setItem(TOKEN_KEY, accessToken);
   localStorage.removeItem(REFRESH_TOKEN_KEY);
   localStorage.removeItem(TOKEN_KEY);
@@ -22,10 +25,12 @@ export function clearAuthTokens(): void {
   localStorage.removeItem(REFRESH_TOKEN_KEY);
 }
 
-let refreshPromise: Promise<boolean> | null = null;
+let refreshPromise: Promise<RefreshResult> | null = null;
 let suppressSessionRestore = false;
 let refreshGeneration = 0;
 let refreshAbort: AbortController | null = null;
+
+export type RefreshResult = 'success' | 'unauthorized' | 'unavailable';
 
 /** Block silent refresh while logout is in progress / until next login. */
 export function beginLogout(): void {
@@ -40,9 +45,15 @@ export function isSessionRestoreSuppressed(): boolean {
   return suppressSessionRestore;
 }
 
-export async function refreshAccessToken(): Promise<boolean> {
+/**
+ * Rotate access token via httpOnly refresh cookie.
+ * - success: new access token stored
+ * - unauthorized: server rejected refresh — local access tokens cleared
+ * - unavailable: network/5xx — keep existing session for retry
+ */
+export async function refreshAccessToken(): Promise<RefreshResult> {
   if (suppressSessionRestore) {
-    return false;
+    return 'unauthorized';
   }
   if (refreshPromise) {
     return refreshPromise;
@@ -52,7 +63,7 @@ export async function refreshAccessToken(): Promise<boolean> {
   const abort = new AbortController();
   refreshAbort = abort;
 
-  refreshPromise = (async () => {
+  refreshPromise = (async (): Promise<RefreshResult> => {
     try {
       const res = await fetch('/api/auth/refresh', {
         method: 'POST',
@@ -62,24 +73,31 @@ export async function refreshAccessToken(): Promise<boolean> {
         signal: abort.signal,
       });
       if (suppressSessionRestore || generation !== refreshGeneration) {
-        return false;
+        return 'unauthorized';
       }
       if (!res.ok) {
-        clearAuthTokens();
-        return false;
+        if (res.status === 401 || res.status === 403 || res.status === 400) {
+          clearAuthTokens();
+          return 'unauthorized';
+        }
+        return 'unavailable';
       }
       const data = await res.json();
       if (suppressSessionRestore || generation !== refreshGeneration) {
-        return false;
+        return 'unauthorized';
       }
-      if (data.access_token) {
+      if (data.access_token && typeof data.access_token === 'string') {
         setAuthTokens(data.access_token, data.refresh_token);
-        return true;
+        return 'success';
       }
       clearAuthTokens();
-      return false;
-    } catch {
-      return false;
+      return 'unauthorized';
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        return 'unauthorized';
+      }
+      // Network / timeout — do not wipe a still-valid session.
+      return 'unavailable';
     } finally {
       if (generation === refreshGeneration) {
         refreshPromise = null;

@@ -8,7 +8,8 @@
     "android": "expo run:android",
     "ios": "expo run:ios",
     "lint": "expo lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:apk": "bash ./scripts/build-apk.sh"
   },
   "dependencies": {
     "@expo-google-fonts/outfit": "^0.4.3",

@@ -8,7 +8,10 @@ import type {
   User,
 } from '@/types/models';
 
-export async function login(email: string, password: string): Promise<{ access_token: string }> {
+export async function login(
+  email: string,
+  password: string,
+): Promise<{ access_token: string; refresh_token?: string }> {
   return apiRequest('/auth/login', {
     method: 'POST',
     auth: false,

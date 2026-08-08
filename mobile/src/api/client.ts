@@ -1,5 +1,10 @@
 import { API_URL } from '@/utils/constants';
-import { clearAccessToken, getAccessToken } from '@/api/tokens';
+import {
+  clearAuthTokens,
+  getAccessToken,
+  getRefreshToken,
+  setAuthTokens,
+} from '@/api/tokens';
 
 export class ApiError extends Error {
   status: number;
@@ -12,6 +17,8 @@ export class ApiError extends Error {
   }
 }
 
+export type RefreshResult = 'success' | 'unauthorized' | 'unavailable';
+
 type RequestOptions = {
   method?: string;
   body?: unknown;
@@ -19,6 +26,8 @@ type RequestOptions = {
   auth?: boolean;
   headers?: Record<string, string>;
   timeoutMs?: number;
+  /** Internal: skip refresh+retry to avoid loops. */
+  _retried?: boolean;
 };
 
 function detailMessage(detail: unknown, fallback: string): string {
@@ -30,8 +39,91 @@ function detailMessage(detail: unknown, fallback: string): string {
   return fallback;
 }
 
+let refreshPromise: Promise<RefreshResult> | null = null;
+const sessionInvalidListeners = new Set<() => void>();
+
+export function onSessionInvalid(listener: () => void): () => void {
+  sessionInvalidListeners.add(listener);
+  return () => {
+    sessionInvalidListeners.delete(listener);
+  };
+}
+
+function emitSessionInvalid() {
+  sessionInvalidListeners.forEach((listener) => {
+    try {
+      listener();
+    } catch {
+      // ignore
+    }
+  });
+}
+
+/**
+ * Rotate tokens using the SecureStore refresh token (body-based; no cookies on native).
+ */
+export async function refreshAccessToken(): Promise<RefreshResult> {
+  if (refreshPromise) return refreshPromise;
+
+  refreshPromise = (async (): Promise<RefreshResult> => {
+    const refreshToken = await getRefreshToken();
+    if (!refreshToken) {
+      await clearAuthTokens();
+      return 'unauthorized';
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    try {
+      const res = await fetch(`${API_URL}/auth/refresh`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        if (res.status === 401 || res.status === 403 || res.status === 400) {
+          await clearAuthTokens();
+          return 'unauthorized';
+        }
+        return 'unavailable';
+      }
+
+      const data = (await res.json()) as {
+        access_token?: string;
+        refresh_token?: string;
+      };
+      if (!data.access_token) {
+        await clearAuthTokens();
+        return 'unauthorized';
+      }
+      // Server rotates refresh tokens — always persist the new pair.
+      await setAuthTokens(data.access_token, data.refresh_token ?? refreshToken);
+      return 'success';
+    } catch {
+      return 'unavailable';
+    } finally {
+      clearTimeout(timer);
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
+}
+
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = 'GET', body, auth = true, headers = {}, timeoutMs = 12000 } = options;
+  const {
+    method = 'GET',
+    body,
+    auth = true,
+    headers = {},
+    timeoutMs = 12000,
+    _retried = false,
+  } = options;
   let token = options.token;
   if (auth && token === undefined) {
     token = await getAccessToken();
@@ -69,8 +161,15 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     clearTimeout(timer);
   }
 
-  if (res.status === 401 && auth) {
-    await clearAccessToken();
+  if (res.status === 401 && auth && !_retried) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed === 'success') {
+      return apiRequest<T>(path, { ...options, token: undefined, _retried: true });
+    }
+    if (refreshed === 'unauthorized') {
+      emitSessionInvalid();
+    }
+    // unavailable: fall through and surface the 401 without wiping tokens
   }
 
   const text = await res.text();
