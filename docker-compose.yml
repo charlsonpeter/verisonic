@@ -71,6 +71,8 @@ services:
       - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET:-}
       - LYRICS_EXTRACTION_ENABLED=${LYRICS_EXTRACTION_ENABLED:-false}
       - LYRICS_API_URL=${LYRICS_API_URL:-https://lrclib.net/api}
+      - LYRICS_SERVICE_URL=${LYRICS_SERVICE_URL:-http://host.docker.internal:8002}
+      - LYRICS_SERVICE_API_KEY=${LYRICS_SERVICE_API_KEY:-lsk_live_dev_bootstrap_change_me}
       - LALAL_API_KEY=${LALAL_API_KEY:-}
       - GOOGLE_CLOUD_PROJECT_ID=${GOOGLE_CLOUD_PROJECT_ID:-}
       - GOOGLE_VERTEX_LOCATION=${GOOGLE_VERTEX_LOCATION:-us-central1}
@@ -78,6 +80,8 @@ services:
       - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
       - TZ=${TZ:-UTC}
       - WEBRTC_BUFFER_SEC=${WEBRTC_BUFFER_SEC:-3}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - db
       - redis
@@ -110,12 +114,16 @@ services:
       - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-http://minio:9000}
       - LYRICS_EXTRACTION_ENABLED=${LYRICS_EXTRACTION_ENABLED:-false}
       - LYRICS_API_URL=${LYRICS_API_URL:-https://lrclib.net/api}
+      - LYRICS_SERVICE_URL=${LYRICS_SERVICE_URL:-http://host.docker.internal:8002}
+      - LYRICS_SERVICE_API_KEY=${LYRICS_SERVICE_API_KEY:-lsk_live_dev_bootstrap_change_me}
       - LALAL_API_KEY=${LALAL_API_KEY:-}
       - GOOGLE_CLOUD_PROJECT_ID=${GOOGLE_CLOUD_PROJECT_ID:-}
       - GOOGLE_VERTEX_LOCATION=${GOOGLE_VERTEX_LOCATION:-us-central1}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
       - GOOGLE_APPLICATION_CREDENTIALS=${GOOGLE_APPLICATION_CREDENTIALS:-}
       - TZ=${TZ:-UTC}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - db
       - redis
