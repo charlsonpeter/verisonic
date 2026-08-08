@@ -65,6 +65,7 @@ VeriSonic is a high-fidelity audio platform for **lossless music streaming**, **
 graph TD
     subgraph Clients
         Browser[React Web Portal]
+        Mobile[Expo Mobile Listener]
         Broadcaster[PyQt5 Broadcaster]
         Razorpay[Razorpay Checkout]
     end
@@ -81,8 +82,10 @@ graph TD
     end
 
     Browser --> Nginx
+    Mobile -->|HTTPS /api| Backend
     Broadcaster -->|WebSocket MP3| Backend
     Browser --> Razorpay
+    Mobile --> Razorpay
     Razorpay -->|Payment verify| Backend
     Nginx --> Frontend
     Nginx --> Backend
@@ -129,6 +132,9 @@ verisonic/
 │       ├── components/      # player, layout, wallet, subscription, engagement UI
 │       ├── context/         # AuthContext, AudioContext
 │       └── utils/           # searchMatch, navigation, subscriptionCheckout, …
+├── mobile/                  # Expo React Native listener app (iOS + Android)
+│   ├── app/                 # Expo Router screens (auth, tabs, now-playing)
+│   └── src/                 # API client, player, downloads, Razorpay
 ├── broadcaster/             # PyQt5 desktop live broadcaster + installers
 ├── .github/workflows/       # backend-tests.yml, build-broadcaster.yml
 ├── docker-compose.yml       # db, redis, minio, backend, worker, beat, frontend, nginx
@@ -227,6 +233,16 @@ npm run dev
 ```
 
 The Vite dev server proxies `/api` to the backend.
+
+### Mobile listener app (Expo)
+
+```bash
+cd mobile
+npm install
+npx expo start
+```
+
+See [mobile/README.md](mobile/README.md) for API URL setup (simulator vs device), offline downloads, and Razorpay notes.
 
 ### Environment variables
 

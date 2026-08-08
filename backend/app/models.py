@@ -240,6 +240,7 @@ class RadioStation(Base):
     phone = Column(String, nullable=True)
     email = Column(String, nullable=True)
     website = Column(String, nullable=True)
+    frequency_band = Column(String, nullable=True)  # FM | AM | SW | LW
     broadcast_frequency = Column(String, nullable=True)
     languages = Column(String, nullable=True)
     social_twitter = Column(String, nullable=True)

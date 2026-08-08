@@ -27,11 +27,14 @@ window.fetch = async (input, init) => {
 
   if (response.status === 401 && shouldAttemptTokenRefresh(url)) {
     const refreshed = await refreshAccessToken();
-    if (refreshed) {
+    if (refreshed === 'success') {
       const retryHeaders = new Headers(init.headers || {});
       retryHeaders.set('Authorization', `Bearer ${getAccessToken()}`);
       response = await originalFetch(input, { ...init, headers: retryHeaders });
+    } else if (refreshed === 'unauthorized') {
+      window.dispatchEvent(new CustomEvent('verisonic:session-invalid'));
     }
+    // 'unavailable' — leave response as 401; caller can retry later without logout
   }
 
   return response;

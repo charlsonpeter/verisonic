@@ -2,6 +2,7 @@ import React from 'react';
 import { Radio, Play, Pause, MapPin } from 'lucide-react';
 import { useAudio, RadioStation } from '../../context/AudioContext';
 import { showError } from '../../utils/swal';
+import { formatBroadcastFrequency } from '../../utils/broadcastFrequency';
 
 interface RadioCardProps {
   station: RadioStation;
@@ -39,6 +40,11 @@ export const RadioTile: React.FC<RadioCardProps> = ({ station }) => {
   const isLive = station.is_online !== false && !!station.stream_url?.includes('/live');
   const isOffline = station.is_online === false;
   const location = formatStationLocation(station);
+  const frequencyLabel = formatBroadcastFrequency(
+    station.frequency_band,
+    station.broadcast_frequency,
+    '',
+  );
 
   return (
     <button
@@ -86,12 +92,12 @@ export const RadioTile: React.FC<RadioCardProps> = ({ station }) => {
           >
             {station.name}
           </span>
-          {station.broadcast_frequency && (
+          {frequencyLabel && (
             <span
-              className="text-[9px] text-slate-500 font-semibold tabular-nums leading-none text-right max-w-[2.25rem] truncate shrink-0"
-              title={station.broadcast_frequency}
+              className="text-[9px] text-slate-500 font-semibold tabular-nums leading-none text-right max-w-[4.5rem] truncate shrink-0"
+              title={frequencyLabel}
             >
-              {station.broadcast_frequency}
+              {frequencyLabel}
             </span>
           )}
         </div>
@@ -112,6 +118,11 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
   const isCurrent = activeRadioStation?.id === station.id;
   const isCurrentlyPlaying = isCurrent && isPlaying;
   const isLive = station.is_online !== false && !!station.stream_url?.includes('/live');
+  const frequencyLabel = formatBroadcastFrequency(
+    station.frequency_band,
+    station.broadcast_frequency,
+    '',
+  );
 
   const handlePlayClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -204,9 +215,9 @@ export const RadioCard: React.FC<RadioCardProps> = ({ station }) => {
             {formatStationLocation(station) || 'No location set'}
           </span>
         </div>
-        {station.broadcast_frequency && (
+        {frequencyLabel && (
           <span className="bg-slate-900 border border-white/5 text-slate-400 font-bold px-2 py-0.5 rounded-md text-[8px] uppercase flex-shrink-0">
-            {station.broadcast_frequency}
+            {frequencyLabel}
           </span>
         )}
       </div>
@@ -220,7 +231,12 @@ export const RadioSearchRow: React.FC<RadioCardProps> = ({ station }) => {
   const isCurrent = activeRadioStation?.id === station.id;
   const isCurrentlyPlaying = isCurrent && isPlaying;
   const location = formatStationLocation(station);
-  const subtitle = [station.broadcast_frequency, location].filter(Boolean).join(' · ') || 'Radio station';
+  const frequencyLabel = formatBroadcastFrequency(
+    station.frequency_band,
+    station.broadcast_frequency,
+    '',
+  );
+  const subtitle = [frequencyLabel, location].filter(Boolean).join(' · ') || 'Radio station';
 
   const onPlay = () => {
     handleStationPlay(station, isCurrent, playRadioStation, togglePlay);

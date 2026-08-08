@@ -8,6 +8,12 @@ import { LicenceDocumentLink } from '../components/shared/LicenceDocumentUpload'
 import { useLazyList, DEFAULT_LAZY_PAGE_SIZE } from '../hooks/useLazyList';
 import { LazyListSentinel } from '../components/shared/LazyListSentinel';
 import { ListSearchInput } from '../components/shared/ListSearchInput';
+import {
+  FREQUENCY_BANDS,
+  formatBroadcastFrequency,
+  frequencyPlaceholder,
+  validateBroadcastFrequency,
+} from '../utils/broadcastFrequency';
 
 interface RadioStationRow {
   id: number;
@@ -30,6 +36,7 @@ interface RadioStationRow {
   phone?: string;
   email?: string;
   website?: string;
+  frequency_band?: string;
   broadcast_frequency?: string;
   languages?: string;
   social_twitter?: string;
@@ -51,6 +58,7 @@ const emptyForm = {
   phone: '',
   email: '',
   website: '',
+  frequency_band: '',
   broadcast_frequency: '',
   languages: '',
   social_twitter: '',
@@ -125,6 +133,7 @@ export const RadioStationsManagement: React.FC = () => {
       phone: station.phone || '',
       email: station.email || '',
       website: station.website || '',
+      frequency_band: station.frequency_band || '',
       broadcast_frequency: station.broadcast_frequency || '',
       languages: station.languages || '',
       social_twitter: station.social_twitter || '',
@@ -136,15 +145,29 @@ export const RadioStationsManagement: React.FC = () => {
     setViewMode('edit');
   };
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    setFormValues((prev) => ({ ...prev, [name]: value }));
+    setFormValues((prev) => {
+      const next = { ...prev, [name]: value };
+      if (name === 'frequency_band' && !value) {
+        next.broadcast_frequency = '';
+      }
+      return next;
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formValues.name.trim() || !formValues.description.trim()) {
       setMessage({ type: 'error', text: 'Station Name and Description are required.' });
+      return;
+    }
+    const frequencyError = validateBroadcastFrequency(
+      formValues.frequency_band,
+      formValues.broadcast_frequency,
+    );
+    if (frequencyError) {
+      setMessage({ type: 'error', text: frequencyError });
       return;
     }
     setIsSaving(true);
@@ -314,7 +337,7 @@ export const RadioStationsManagement: React.FC = () => {
                         <div className="font-bold text-slate-200">{station.name}</div>
                       </td>
                       <td className="p-5 text-slate-300">
-                        {station.broadcast_frequency || 'Web Station'}
+                        {formatBroadcastFrequency(station.frequency_band, station.broadcast_frequency)}
                       </td>
                       <td className="p-5 text-slate-300">
                         {station.city ? `${station.city}, ${station.country || ''}` : '—'}
@@ -395,7 +418,7 @@ export const RadioStationsManagement: React.FC = () => {
                     </span>
                   </div>
                   <div className="grid grid-cols-1 gap-2 text-[10px] text-slate-400">
-                    <div><span className="text-slate-550 font-bold uppercase">Frequency: </span>{station.broadcast_frequency || 'Web Station'}</div>
+                    <div><span className="text-slate-550 font-bold uppercase">Frequency: </span>{formatBroadcastFrequency(station.frequency_band, station.broadcast_frequency)}</div>
                     <div><span className="text-slate-550 font-bold uppercase">Location: </span>{station.city ? `${station.city}, ${station.country || ''}` : '—'}</div>
                     <div><span className="text-slate-550 font-bold uppercase">Category: </span>{station.category || '—'}</div>
                     <div><span className="text-slate-550 font-bold uppercase">Owner: </span>{station.owner_name || 'Unassigned'} · {station.owner_email || '—'}</div>
@@ -464,9 +487,32 @@ export const RadioStationsManagement: React.FC = () => {
                       <input type="text" name="category" value={formValues.category} onChange={handleInputChange} className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 outline-none focus:border-rose-500 text-slate-200 transition" />
                     </div>
                     <div className="space-y-1.5">
-                      <label className="font-bold text-slate-400 uppercase tracking-wider block">Frequency</label>
-                      <input type="text" name="broadcast_frequency" value={formValues.broadcast_frequency} onChange={handleInputChange} className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 outline-none focus:border-rose-500 text-slate-200 transition" />
+                      <label className="font-bold text-slate-400 uppercase tracking-wider block">Frequency Band</label>
+                      <select
+                        name="frequency_band"
+                        value={formValues.frequency_band}
+                        onChange={handleInputChange}
+                        className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 outline-none focus:border-rose-500 text-slate-200 transition"
+                      >
+                        <option value="">Web only</option>
+                        {FREQUENCY_BANDS.map((band) => (
+                          <option key={band} value={band}>{band}</option>
+                        ))}
+                      </select>
                     </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="font-bold text-slate-400 uppercase tracking-wider block">Frequency</label>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      name="broadcast_frequency"
+                      value={formValues.broadcast_frequency}
+                      onChange={handleInputChange}
+                      placeholder={frequencyPlaceholder(formValues.frequency_band)}
+                      disabled={!formValues.frequency_band}
+                      className="w-full bg-slate-950 border border-white/5 rounded-xl p-3 outline-none focus:border-rose-500 text-slate-200 transition disabled:opacity-50"
+                    />
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1.5">

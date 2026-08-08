@@ -13,6 +13,7 @@ export function stationsNeedRerender(prev: RadioStation[], next: RadioStation[])
     if (a.name !== b.name) return true;
     if (a.description !== b.description) return true;
     if (a.cover_art_url !== b.cover_art_url) return true;
+    if (a.frequency_band !== b.frequency_band) return true;
     if (a.broadcast_frequency !== b.broadcast_frequency) return true;
     if (a.city !== b.city) return true;
     if (a.country !== b.country) return true;

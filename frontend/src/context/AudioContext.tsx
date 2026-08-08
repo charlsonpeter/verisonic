@@ -98,6 +98,7 @@ export interface RadioStation {
   phone?: string;
   email?: string;
   website?: string;
+  frequency_band?: string;
   broadcast_frequency?: string;
   languages?: string;
   social_twitter?: string;
