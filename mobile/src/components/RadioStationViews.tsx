@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import type { RadioStation } from '@/types/models';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { coverUri } from '@/utils/mediaUrl';
+import { formatBroadcastFrequency } from '@/utils/broadcastFrequency';
 
 const TILE_W = 108;
 
@@ -30,6 +31,10 @@ export function RadioTile({ station, isCurrent, isPlaying, onPress }: TileProps)
   const offline = station.is_online === false;
   const live = isLiveBroadcast(station);
   const location = formatLocation(station);
+  const frequencyLabel = formatBroadcastFrequency(
+    station.frequency_band,
+    station.broadcast_frequency,
+  );
 
   return (
     <Pressable
@@ -57,9 +62,9 @@ export function RadioTile({ station, isCurrent, isPlaying, onPress }: TileProps)
         <Text numberOfLines={1} style={styles.tileName}>
           {station.name}
         </Text>
-        {station.broadcast_frequency ? (
+        {frequencyLabel ? (
           <Text numberOfLines={1} style={styles.tileFreq}>
-            {station.broadcast_frequency}
+            {frequencyLabel}
           </Text>
         ) : null}
       </View>
@@ -82,6 +87,10 @@ export function RadioStationCard({ station, isCurrent, isPlaying, onPress }: Car
   const offline = station.is_online === false;
   const live = isLiveBroadcast(station);
   const location = formatLocation(station);
+  const frequencyLabel = formatBroadcastFrequency(
+    station.frequency_band,
+    station.broadcast_frequency,
+  );
 
   return (
     <Pressable
@@ -161,9 +170,9 @@ export function RadioStationCard({ station, isCurrent, isPlaying, onPress }: Car
             {location || 'No location set'}
           </Text>
         </View>
-        {station.broadcast_frequency ? (
+        {frequencyLabel ? (
           <View style={styles.freqChip}>
-            <Text style={styles.freqChipText}>{station.broadcast_frequency}</Text>
+            <Text style={styles.freqChipText}>{frequencyLabel}</Text>
           </View>
         ) : null}
       </View>

@@ -22,6 +22,7 @@ import {
   rankSearchResults,
   trackSearchFields,
 } from '../../utils/searchMatch';
+import { formatBroadcastFrequency } from '../../utils/broadcastFrequency';
 import { SEARCH_INPUT_WIDTH_CLASS } from '../shared/ListSearchInput';
 
 interface HeaderSearchProps {
@@ -140,7 +141,7 @@ export const HeaderSearch: React.FC<HeaderSearchProps> = ({
                 kind: 'radio',
                 key: `radio-${station.id}`,
                 title: station.name,
-                subtitle: station.broadcast_frequency || 'Radio station',
+                subtitle: formatBroadcastFrequency(station.frequency_band, station.broadcast_frequency, 'Radio station'),
                 station,
               },
             });

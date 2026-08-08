@@ -18,6 +18,7 @@ import type { RadioStation, Track } from '@/types/models';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 import { formatDuration } from '@/utils/accountTier';
 import { coverUri } from '@/utils/mediaUrl';
+import { formatBroadcastFrequency } from '@/utils/broadcastFrequency';
 
 export function Screen({
   children,
@@ -208,7 +209,11 @@ export function StationRow({
           ) : null}
         </View>
         <Text numberOfLines={2} style={styles.rowMeta}>
-          {[station.current_program_title, station.city, station.broadcast_frequency]
+          {[
+            station.current_program_title,
+            station.city,
+            formatBroadcastFrequency(station.frequency_band, station.broadcast_frequency),
+          ]
             .filter(Boolean)
             .join(' · ') || station.category || 'Radio station'}
         </Text>

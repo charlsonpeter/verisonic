@@ -73,6 +73,7 @@ export interface RadioStation {
   current_program_title?: string;
   city?: string;
   country?: string;
+  frequency_band?: string;
   broadcast_frequency?: string;
 }
 

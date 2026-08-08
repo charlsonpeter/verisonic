@@ -12,6 +12,12 @@ import { fetchBroadcastKey, getAccessToken } from '../utils/authTokens';
 import { RadioPageSkeleton } from '../components/shared/skeleton';
 import { patchRadioNowPlayingDom, stationsNeedRerender } from '../utils/radioDomPatch';
 import { subscribeRadioMetadataPoll } from '../utils/radioMetadataPoll';
+import {
+  FREQUENCY_BANDS,
+  formatBroadcastFrequency,
+  frequencyPlaceholder,
+  validateBroadcastFrequency,
+} from '../utils/broadcastFrequency';
 
 const API_URL = '/api';
 
@@ -54,6 +60,7 @@ export const Radio: React.FC = () => {
   const [newStationEmail, setNewStationEmail] = useState('');
   const [newStationWebsite, setNewStationWebsite] = useState('');
   const [newStationBroadcastFrequency, setNewStationBroadcastFrequency] = useState('');
+  const [newStationFrequencyBand, setNewStationFrequencyBand] = useState('');
   const [newStationLanguages, setNewStationLanguages] = useState('');
   const [newStationSocialTwitter, setNewStationSocialTwitter] = useState('');
   const [newStationSocialInstagram, setNewStationSocialInstagram] = useState('');
@@ -484,13 +491,21 @@ export const Radio: React.FC = () => {
     setNewStationCategory(''); setNewStationLicence(''); setNewStationLicenceFile(null); setNewStationStreetAddress('');
     setNewStationCity(''); setNewStationStateProvince(''); setNewStationPostalCode('');
     setNewStationCountry(''); setNewStationPhone(''); setNewStationEmail('');
-    setNewStationWebsite(''); setNewStationBroadcastFrequency(''); setNewStationLanguages('');
+    setNewStationWebsite(''); setNewStationFrequencyBand(''); setNewStationBroadcastFrequency(''); setNewStationLanguages('');
     setNewStationSocialTwitter(''); setNewStationSocialInstagram('');
   };
 
   const handleCreateStation = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newStationName || !newStationDesc) return;
+    const frequencyError = validateBroadcastFrequency(
+      newStationFrequencyBand,
+      newStationBroadcastFrequency,
+    );
+    if (frequencyError) {
+      showError('Invalid frequency', frequencyError);
+      return;
+    }
     setIsCreating(true);
     try {
       const res = await fetch(`${API_URL}/radio`, {
@@ -504,6 +519,7 @@ export const Radio: React.FC = () => {
           state_province: newStationStateProvince || null, postal_code: newStationPostalCode || null,
           country: newStationCountry || null, phone: newStationPhone || null,
           email: newStationEmail || null, website: newStationWebsite || null,
+          frequency_band: newStationFrequencyBand || null,
           broadcast_frequency: newStationBroadcastFrequency || null,
           languages: newStationLanguages || null,
           social_twitter: newStationSocialTwitter || null,
@@ -538,6 +554,7 @@ export const Radio: React.FC = () => {
         state_province: newStationStateProvince || undefined, postal_code: newStationPostalCode || undefined,
         country: newStationCountry || undefined, phone: newStationPhone || undefined,
         email: newStationEmail || undefined, website: newStationWebsite || undefined,
+        frequency_band: newStationFrequencyBand || undefined,
         broadcast_frequency: newStationBroadcastFrequency || undefined,
         languages: newStationLanguages || undefined,
         social_twitter: newStationSocialTwitter || undefined,
@@ -592,7 +609,6 @@ export const Radio: React.FC = () => {
                         { label: 'Description *', placeholder: 'Acoustic description', value: newStationDesc, onChange: setNewStationDesc, required: true },
                         { label: 'Category', placeholder: 'e.g. Chillout, Pop, Classical', value: newStationCategory, onChange: setNewStationCategory },
                         { label: 'Licence', placeholder: 'License/Permit number', value: newStationLicence, onChange: setNewStationLicence },
-                        { label: 'Frequency', placeholder: 'e.g. 98.1 FM, Web Only', value: newStationBroadcastFrequency, onChange: setNewStationBroadcastFrequency },
                         { label: 'Stream URL (Optional)', placeholder: 'Stream URL (Optional)', value: newStationStreamUrl, onChange: setNewStationStreamUrl },
                       ].map(field => (
                         <div key={field.label} className="space-y-1">
@@ -603,6 +619,35 @@ export const Radio: React.FC = () => {
                             required={field.required} />
                         </div>
                       ))}
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Frequency Band</label>
+                        <select
+                          value={newStationFrequencyBand}
+                          onChange={(e) => {
+                            const band = e.target.value;
+                            setNewStationFrequencyBand(band);
+                            if (!band) setNewStationBroadcastFrequency('');
+                          }}
+                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans"
+                        >
+                          <option value="">Web only</option>
+                          {FREQUENCY_BANDS.map((band) => (
+                            <option key={band} value={band}>{band}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Frequency</label>
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          placeholder={frequencyPlaceholder(newStationFrequencyBand)}
+                          value={newStationBroadcastFrequency}
+                          onChange={(e) => setNewStationBroadcastFrequency(e.target.value)}
+                          disabled={!newStationFrequencyBand}
+                          className="w-full bg-slate-950 border border-white/5 text-xs p-3 rounded-xl outline-none focus:border-rose-500 text-slate-300 transition font-sans disabled:opacity-50"
+                        />
+                      </div>
                       <div className="space-y-1">
                         <label className="text-[9px] font-bold text-slate-500 uppercase tracking-wider block font-sans">Languages</label>
                         <input type="text" placeholder="e.g. English, Spanish" value={newStationLanguages}
@@ -774,7 +819,7 @@ export const Radio: React.FC = () => {
                         </div>
                         <div className="p-4 space-y-0.5">
                           <p className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">Frequency</p>
-                          <p className="text-sm font-extrabold text-white truncate">{(st as any).broadcast_frequency || '—'}</p>
+                          <p className="text-sm font-extrabold text-white truncate">{formatBroadcastFrequency((st as any).frequency_band, (st as any).broadcast_frequency, '—')}</p>
                         </div>
                       </div>
 
