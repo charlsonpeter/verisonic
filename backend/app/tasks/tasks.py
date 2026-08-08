@@ -588,7 +588,7 @@ def extract_lyrics_task(
 ):
     """
     Manually triggered hybrid lyrics extraction for a track.
-    Downloads the original audio, runs the pipeline, and stores LRC + timed segments.
+    Downloads the original audio, runs local pipeline or LyricSync, stores LRC + timed segments.
     """
     from app.services.lyrics_pipeline import (
         LyricsPipelineError,
@@ -597,6 +597,11 @@ def extract_lyrics_task(
     )
     from app.core.config import settings
     from app.services.storage import s3_client
+    from app.services.lyricsync_client import (
+        LyricSyncClientError,
+        create_and_wait_job,
+        lyrics_service_configured,
+    )
 
     def update_progress(stage: str, progress: int, message: str) -> None:
         self.update_state(
@@ -640,38 +645,61 @@ def extract_lyrics_task(
             else (track.artist.stage_name if track.artist else "Unknown Artist")
         )
         album_name = track.album.title if track.album else None
+        mode = "sync" if (lyrics_text and lyrics_text.strip()) else "extract"
 
-        update_progress("pipeline", 20, "Running lyrics pipeline...")
-        result = run_hybrid_lyrics_pipeline(
-            input_file_path,
-            track.title,
-            artist_name,
-            output_script=script_mode,
-            lyrics_api_url=settings.LYRICS_API_URL,
-            album_name=album_name,
-            duration=track.duration,
-            existing_lyrics=lyrics_text,
-            lalal_api_key=settings.LALAL_API_KEY,
-            google_project_id=settings.GOOGLE_CLOUD_PROJECT_ID,
-            google_vertex_location=settings.GOOGLE_VERTEX_LOCATION,
-            google_credentials_path=settings.GOOGLE_APPLICATION_CREDENTIALS,
-            gemini_model=settings.GEMINI_MODEL,
-            progress_callback=update_progress,
-        )
+        if lyrics_service_configured():
+            update_progress("pipeline", 20, "Running LyricSync remote pipeline...")
+            remote = create_and_wait_job(
+                title=track.title,
+                artist=artist_name,
+                mode=mode,
+                script_mode=script_mode,
+                album=album_name,
+                duration=track.duration,
+                lyrics_text=lyrics_text,
+                audio_file_path=input_file_path,
+                progress_callback=update_progress,
+            )
+            lrc_text = remote.lrc_text
+            timed = remote.timed
+            language = remote.language
+            source = remote.source
+        else:
+            update_progress("pipeline", 20, "Running lyrics pipeline...")
+            result = run_hybrid_lyrics_pipeline(
+                input_file_path,
+                track.title,
+                artist_name,
+                output_script=script_mode,
+                lyrics_api_url=settings.LYRICS_API_URL,
+                album_name=album_name,
+                duration=track.duration,
+                existing_lyrics=lyrics_text,
+                lalal_api_key=settings.LALAL_API_KEY,
+                google_project_id=settings.GOOGLE_CLOUD_PROJECT_ID,
+                google_vertex_location=settings.GOOGLE_VERTEX_LOCATION,
+                google_credentials_path=settings.GOOGLE_APPLICATION_CREDENTIALS,
+                gemini_model=settings.GEMINI_MODEL,
+                progress_callback=update_progress,
+            )
+            lrc_text = result.lrc_text
+            timed = result.timed
+            language = result.language
+            source = result.source
 
         update_progress("saving", 95, "Saving lyrics to track...")
-        track.lyrics = result.lrc_text
-        track.lyrics_timed = result.timed
-        if result.language:
-            track.lyrics_language = result.language
+        track.lyrics = lrc_text
+        track.lyrics_timed = timed
+        if language:
+            track.lyrics_language = language
         db.commit()
 
         return {
             "status": "success",
             "track_id": track_id,
-            "source": result.source,
+            "source": source,
         }
-    except LyricsPipelineError as exc:
+    except (LyricsPipelineError, LyricSyncClientError) as exc:
         db.rollback()
         print(f"Lyrics pipeline error for track {track_id}: {exc}")
         return {"status": "error", "error": str(exc)}
