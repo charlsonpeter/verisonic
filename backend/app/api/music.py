@@ -1062,12 +1062,14 @@ def queue_lyrics_extraction(
         validate_pipeline_config,
         validate_sync_pipeline_config,
     )
+    from app.services.lyricsync_client import lyrics_service_configured
 
     sync_mode = bool(lyrics_text and lyrics_text.strip())
 
     try:
         validate_pipeline_config(settings)
-        if sync_mode:
+        # Remote LyricSync holds Google credentials; skip local sync prechecks when configured.
+        if sync_mode and not lyrics_service_configured():
             validate_sync_pipeline_config(
                 google_project_id=settings.GOOGLE_CLOUD_PROJECT_ID,
             )
