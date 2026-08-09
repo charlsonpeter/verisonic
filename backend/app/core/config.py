@@ -53,9 +53,9 @@ class Settings(BaseSettings):
     GOOGLE_VERTEX_LOCATION: str = "us-central1"
     GEMINI_MODEL: str = "gemini-2.5-flash"
     GOOGLE_APPLICATION_CREDENTIALS: str = ""
-    # When set, Verisonic delegates extraction to LyricSync instead of the local pipeline
-    LYRICS_SERVICE_URL: str = ""
-    LYRICS_SERVICE_API_KEY: str = ""
+    # When set, Verisonic delegates extraction to Findlio instead of the local pipeline
+    FINDLIO_SERVICE_URL: str = ""
+    FINDLIO_SERVICE_API_KEY: str = ""
 
 
     class Config:

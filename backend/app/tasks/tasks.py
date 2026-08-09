@@ -588,7 +588,7 @@ def extract_lyrics_task(
 ):
     """
     Manually triggered hybrid lyrics extraction for a track.
-    Downloads the original audio, runs local pipeline or LyricSync, stores LRC + timed segments.
+    Downloads the original audio, runs local pipeline or Findlio, stores LRC + timed segments.
     """
     from app.services.lyrics_pipeline import (
         LyricsPipelineError,
@@ -597,10 +597,10 @@ def extract_lyrics_task(
     )
     from app.core.config import settings
     from app.services.storage import s3_client
-    from app.services.lyricsync_client import (
-        LyricSyncClientError,
+    from app.services.findlio_client import (
+        FindlioClientError,
         create_and_wait_job,
-        lyrics_service_configured,
+        findlio_service_configured,
     )
 
     def update_progress(stage: str, progress: int, message: str) -> None:
@@ -647,8 +647,8 @@ def extract_lyrics_task(
         album_name = track.album.title if track.album else None
         mode = "sync" if (lyrics_text and lyrics_text.strip()) else "extract"
 
-        if lyrics_service_configured():
-            update_progress("pipeline", 20, "Running LyricSync remote pipeline...")
+        if findlio_service_configured():
+            update_progress("pipeline", 20, "Running Findlio remote pipeline...")
             remote = create_and_wait_job(
                 title=track.title,
                 artist=artist_name,
@@ -661,6 +661,7 @@ def extract_lyrics_task(
                 progress_callback=update_progress,
             )
             lrc_text = remote.lrc_text
+            plain_lyrics = remote.plain_lyrics
             timed = remote.timed
             language = remote.language
             source = remote.source
@@ -683,13 +684,18 @@ def extract_lyrics_task(
                 progress_callback=update_progress,
             )
             lrc_text = result.lrc_text
+            plain_lyrics = result.lrc_text
             timed = result.timed
             language = result.language
             source = result.source
 
         update_progress("saving", 95, "Saving lyrics to track...")
-        track.lyrics = lrc_text
-        track.lyrics_timed = timed
+        if timed:
+            track.lyrics = lrc_text
+            track.lyrics_timed = timed
+        else:
+            track.lyrics = plain_lyrics or lrc_text
+            track.lyrics_timed = timed or None
         if language:
             track.lyrics_language = language
         db.commit()
@@ -699,7 +705,7 @@ def extract_lyrics_task(
             "track_id": track_id,
             "source": source,
         }
-    except (LyricsPipelineError, LyricSyncClientError) as exc:
+    except (LyricsPipelineError, FindlioClientError) as exc:
         db.rollback()
         print(f"Lyrics pipeline error for track {track_id}: {exc}")
         return {"status": "error", "error": str(exc)}

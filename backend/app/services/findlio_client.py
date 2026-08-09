@@ -1,4 +1,4 @@
-"""HTTP client for the external LyricSync lyrics/subtitle service."""
+"""HTTP client for the external Findlio lyrics/subtitle service."""
 
 from __future__ import annotations
 
@@ -16,31 +16,32 @@ logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[str, int, str], None]
 
 
-class LyricSyncClientError(Exception):
+class FindlioClientError(Exception):
     pass
 
 
 @dataclass
-class LyricSyncResult:
+class FindlioResult:
     lrc_text: str
+    plain_lyrics: str
     timed: list[dict[str, Any]]
     language: Optional[str] = None
-    source: str = "lyricsync"
+    source: str = "findlio"
 
 
-def lyrics_service_configured() -> bool:
+def findlio_service_configured() -> bool:
     return bool(
-        (settings.LYRICS_SERVICE_URL or "").strip()
-        and (settings.LYRICS_SERVICE_API_KEY or "").strip()
+        (settings.FINDLIO_SERVICE_URL or "").strip()
+        and (settings.FINDLIO_SERVICE_API_KEY or "").strip()
     )
 
 
 def _base_url() -> str:
-    return settings.LYRICS_SERVICE_URL.rstrip("/")
+    return settings.FINDLIO_SERVICE_URL.rstrip("/")
 
 
 def _headers() -> dict[str, str]:
-    return {"Authorization": f"Bearer {settings.LYRICS_SERVICE_API_KEY}"}
+    return {"Authorization": f"Bearer {settings.FINDLIO_SERVICE_API_KEY}"}
 
 
 def create_and_wait_job(
@@ -57,19 +58,20 @@ def create_and_wait_job(
     progress_callback: Optional[ProgressCallback] = None,
     poll_interval_sec: float = 2.5,
     timeout_sec: float = 900,
-) -> LyricSyncResult:
-    """Create a LyricSync job (file upload or audio_url) and poll until complete."""
-    if not lyrics_service_configured():
-        raise LyricSyncClientError("LYRICS_SERVICE_URL and LYRICS_SERVICE_API_KEY are required")
+) -> FindlioResult:
+    """Create a Findlio job (file upload or audio_url) and poll until complete."""
+    if not findlio_service_configured():
+        raise FindlioClientError("FINDLIO_SERVICE_URL and FINDLIO_SERVICE_API_KEY are required")
     if not audio_file_path and not audio_url:
-        raise LyricSyncClientError("audio_file_path or audio_url is required")
+        raise FindlioClientError("audio_file_path or audio_url is required")
 
     data: dict[str, Any] = {
+        "media_type": "music",
         "mode": mode,
         "script_mode": script_mode,
         "title": title,
         "artist": artist,
-        "formats": "lrc,json",
+        "formats": "lyrics,lrc,json",
     }
     if album:
         data["album"] = album
@@ -81,7 +83,7 @@ def create_and_wait_job(
         data["audio_url"] = audio_url
 
     if progress_callback:
-        progress_callback("queue", 10, "Submitting job to LyricSync...")
+        progress_callback("queue", 10, "Submitting job to Findlio...")
 
     files = None
     file_handle = None
@@ -98,18 +100,18 @@ def create_and_wait_job(
             timeout=300,
         )
     except requests.RequestException as exc:
-        raise LyricSyncClientError(f"Failed to reach LyricSync: {exc}") from exc
+        raise FindlioClientError(f"Failed to reach Findlio: {exc}") from exc
     finally:
         if file_handle is not None:
             file_handle.close()
 
     if resp.status_code >= 400:
-        raise LyricSyncClientError(_error_message(resp))
+        raise FindlioClientError(_error_message(resp))
 
     created = resp.json()
     job_id = created.get("id")
     if not job_id:
-        raise LyricSyncClientError("LyricSync did not return a job id")
+        raise FindlioClientError("Findlio did not return a job id")
 
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
@@ -120,10 +122,10 @@ def create_and_wait_job(
                 timeout=30,
             )
         except requests.RequestException as exc:
-            raise LyricSyncClientError(f"Failed to poll LyricSync: {exc}") from exc
+            raise FindlioClientError(f"Failed to poll Findlio: {exc}") from exc
 
         if status_resp.status_code >= 400:
-            raise LyricSyncClientError(_error_message(status_resp))
+            raise FindlioClientError(_error_message(status_resp))
 
         body = status_resp.json()
         status = body.get("status")
@@ -132,21 +134,21 @@ def create_and_wait_job(
             progress_callback(
                 progress.get("stage") or status or "running",
                 int(progress.get("percent") or 20),
-                progress.get("message") or f"LyricSync status: {status}",
+                progress.get("message") or f"Findlio status: {status}",
             )
 
         if status == "succeeded":
             break
         if status in ("failed", "cancelled"):
             err = body.get("error") or {}
-            raise LyricSyncClientError(err.get("message") or f"LyricSync job {status}")
+            raise FindlioClientError(err.get("message") or f"Findlio job {status}")
 
         time.sleep(poll_interval_sec)
     else:
-        raise LyricSyncClientError("Timed out waiting for LyricSync job")
+        raise FindlioClientError("Timed out waiting for Findlio job")
 
     if progress_callback:
-        progress_callback("result", 90, "Fetching LyricSync result...")
+        progress_callback("result", 90, "Fetching Findlio result...")
 
     try:
         result_resp = requests.get(
@@ -155,23 +157,25 @@ def create_and_wait_job(
             timeout=60,
         )
     except requests.RequestException as exc:
-        raise LyricSyncClientError(f"Failed to fetch LyricSync result: {exc}") from exc
+        raise FindlioClientError(f"Failed to fetch Findlio result: {exc}") from exc
 
     if result_resp.status_code >= 400:
-        raise LyricSyncClientError(_error_message(result_resp))
+        raise FindlioClientError(_error_message(result_resp))
 
     payload = result_resp.json()
     formats = payload.get("formats") or {}
+    plain = formats.get("lyrics") or ""
     lrc = formats.get("lrc") or ""
     timed = formats.get("json") or []
-    if not lrc and not timed:
-        raise LyricSyncClientError("LyricSync returned empty lyrics")
+    if not plain and not lrc and not timed:
+        raise FindlioClientError("Findlio returned empty lyrics")
 
-    return LyricSyncResult(
+    return FindlioResult(
         lrc_text=lrc,
+        plain_lyrics=plain or lrc,
         timed=timed if isinstance(timed, list) else [],
         language=payload.get("language"),
-        source=payload.get("source") or "lyricsync",
+        source=payload.get("source") or "findlio",
     )
 
 
