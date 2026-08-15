@@ -177,14 +177,14 @@ def _format_lrc_timestamp(seconds: float) -> str:
     minutes = int(clamped // 60)
     total_secs = clamped % 60
     secs = int(total_secs)
-    centis = int(round((total_secs - secs) * 100))
-    if centis >= 100:
+    millis = int(round((total_secs - secs) * 1000))
+    if millis >= 1000:
         secs += 1
-        centis = 0
+        millis = 0
     if secs >= 60:
         minutes += secs // 60
         secs = secs % 60
-    return f"[{minutes:02d}:{secs:02d}.{centis:02d}]"
+    return f"[{minutes:02d}:{secs:02d}.{millis:03d}]"
 
 
 def _is_mostly_non_latin(text: str) -> bool:
