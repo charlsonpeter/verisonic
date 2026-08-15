@@ -14,7 +14,7 @@ import { AddToPlaylistButton } from '../shared/AddToPlaylistButton';
 import {
   isSynchronizedLyrics,
   lineIndexForTime,
-  parseLyricsFromText,
+  parseTrackLyrics,
 } from '../../utils/lrc';
 import { patchPlayerRadioDom } from '../../utils/radioDomPatch';
 import { subscribeRadioMetadataPoll } from '../../utils/radioMetadataPoll';
@@ -153,9 +153,9 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   };
 
   const mobileParsedLyrics = React.useMemo(() => {
-    if (!currentTrack?.lyrics) return [];
-    return parseLyricsFromText(currentTrack.lyrics);
-  }, [currentTrack?.lyrics]);
+    if (!currentTrack?.lyrics && !currentTrack?.lyrics_timed?.length) return [];
+    return parseTrackLyrics(currentTrack);
+  }, [currentTrack]);
 
   const mobileLyricsSynced = React.useMemo(
     () => isSynchronizedLyrics(mobileParsedLyrics),
@@ -448,11 +448,14 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     `transition disabled:opacity-30 ${active ? 'text-rose-400 scale-110' : 'text-slate-500 hover:text-slate-350'}`;
 
   const hasLyrics = !!(
-    currentTrack && 
-    currentTrack.lyrics && 
-    currentTrack.lyrics.trim() !== "" && 
-    currentTrack.lyrics !== "None" && 
-    currentTrack.lyrics !== "null"
+    currentTrack &&
+    (
+      (currentTrack.lyrics &&
+        currentTrack.lyrics.trim() !== "" &&
+        currentTrack.lyrics !== "None" &&
+        currentTrack.lyrics !== "null") ||
+      (currentTrack.lyrics_timed && currentTrack.lyrics_timed.length > 0)
+    )
   );
 
   // Determine Badge colors based on track stats
@@ -947,19 +950,23 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
                   <div className={`text-center ${mobileLyricsSynced ? 'space-y-6 py-[30vh]' : 'space-y-3 py-4'}`}>
                     {mobileParsedLyrics.length > 0 ? (
                       mobileParsedLyrics.map((line, idx) => (
-                        <p
-                          key={idx}
-                          ref={(el) => {
-                            mobileLyricsLineRefs.current[idx] = el;
-                          }}
-                          className={`mobile-lyrics-line text-sm leading-relaxed transition-all duration-300 [text-shadow:0_2px_12px_rgba(0,0,0,0.85)] ${
-                            mobileLyricsSynced
-                              ? 'mobile-lyrics-line--synced text-white/80 font-semibold opacity-90'
-                              : 'text-slate-100 font-semibold'
-                          }`}
-                        >
-                          {line.text}
-                        </p>
+                        line.stanzaBreak ? (
+                          <div key={`stanza-${idx}`} className="h-8" aria-hidden />
+                        ) : (
+                          <p
+                            key={idx}
+                            ref={(el) => {
+                              mobileLyricsLineRefs.current[idx] = el;
+                            }}
+                            className={`mobile-lyrics-line text-sm leading-relaxed transition-all duration-300 [text-shadow:0_2px_12px_rgba(0,0,0,0.85)] ${
+                              mobileLyricsSynced
+                                ? 'mobile-lyrics-line--synced text-white/80 font-semibold opacity-90'
+                                : 'text-slate-100 font-semibold'
+                            }`}
+                          >
+                            {line.text}
+                          </p>
+                        )
                       ))
                     ) : (
                       <p className="text-sm text-slate-400">No lyrics available.</p>

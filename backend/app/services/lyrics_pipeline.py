@@ -149,14 +149,20 @@ def lyrics_have_timestamps(lyrics_text: str) -> bool:
 
 def strip_lrc_to_plain_lines(lyrics_text: str) -> str:
     lines: list[str] = []
-    for raw_line in lyrics_text.strip().splitlines():
+    for raw_line in (lyrics_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         line = raw_line.strip()
         if not line:
+            if lines and lines[-1] != "":
+                lines.append("")
             continue
         match = _LRC_PREFIX_RE.match(line)
         text = match.group(2) if match else line
         if text.strip():
             lines.append(text.strip())
+        elif lines and lines[-1] != "":
+            lines.append("")
+    while lines and not lines[-1]:
+        lines.pop()
     return "\n".join(lines)
 
 
@@ -244,15 +250,23 @@ def _lrc_time_to_seconds(minutes: int, seconds: int, fraction: str = "") -> floa
 
 def parse_lrc_to_timed(lrc_text: str) -> list[dict[str, Any]]:
     lines: list[dict[str, Any]] = []
-    for raw_line in lrc_text.strip().splitlines():
-        line = raw_line.strip()
-        if not line:
+    raw_lines = (lrc_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    while raw_lines and not raw_lines[0].strip():
+        raw_lines.pop(0)
+    while raw_lines and not raw_lines[-1].strip():
+        raw_lines.pop()
+
+    for raw_line in raw_lines:
+        if not raw_line.strip():
+            if lines and str(lines[-1].get("text") or "").strip():
+                lines.append({"start": 0.0, "end": 0.0, "text": ""})
             continue
+        line = raw_line.strip()
         match = _LRC_LINE_RE.match(line)
         if not match:
             fallback_start = (
                 lines[-1]["start"] + _MIN_LINE_GAP_SEC
-                if lines
+                if lines and str(lines[-1].get("text") or "").strip()
                 else 0.0
             )
             lines.append({"start": fallback_start, "end": None, "text": line})
@@ -262,16 +276,10 @@ def parse_lrc_to_timed(lrc_text: str) -> list[dict[str, Any]]:
         text = match.group(4).strip()
         if text:
             lines.append({"start": start, "end": None, "text": text})
-        else:
-            fallback_start = lines[-1]["start"] + _MIN_LINE_GAP_SEC if lines else start
-            lines.append({"start": fallback_start, "end": None, "text": line})
+        elif lines and str(lines[-1].get("text") or "").strip():
+            lines.append({"start": 0.0, "end": 0.0, "text": ""})
 
-    for idx, segment in enumerate(lines):
-        if idx + 1 < len(lines):
-            segment["end"] = lines[idx + 1]["start"]
-        else:
-            segment["end"] = segment["start"] + _DEFAULT_LINE_DURATION_SEC
-    return lines
+    return _assign_cue_end_times(lines)
 
 
 def _lrclib_headers() -> dict[str, str]:
@@ -726,15 +734,23 @@ def transliterate_lyrics_to_latin(
 
 
 def _normalize_ai_lyrics_text(lyrics_text: str) -> str:
+    """Keep stanza breaks (blank lines); drop leading/trailing and duplicate blanks."""
     lines: list[str] = []
+    blank_pending = False
     for raw_line in lyrics_text.strip().splitlines():
         line = raw_line.strip()
         if not line:
+            if lines:
+                blank_pending = True
             continue
         line = re.sub(r"^\d+\.\s*", "", line)
         line = re.sub(r"^[-*•]\s*", "", line)
-        if line:
-            lines.append(line)
+        if not line:
+            continue
+        if blank_pending:
+            lines.append("")
+            blank_pending = False
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -742,6 +758,9 @@ def get_original_lyrics_from_ai(
     rough_text: str,
     output_script: Literal["native", "latin"] = "native",
     *,
+    track_name: str = "",
+    artist_name: str = "",
+    album_name: Optional[str] = None,
     google_project_id: str,
     google_vertex_location: str,
     google_credentials_path: str = "",
@@ -757,11 +776,34 @@ def get_original_lyrics_from_ai(
             "Malayalam script; if it is Tamil, use Tamil script."
         )
     )
+    context_lines = []
+    if (track_name or "").strip():
+        context_lines.append(f"Title: {track_name.strip()}")
+    if (artist_name or "").strip():
+        context_lines.append(f"Artist: {artist_name.strip()}")
+    if (album_name or "").strip():
+        context_lines.append(f"Album: {album_name.strip()}")
+    context_block = (
+        "Recording metadata (hints only; the track may be original or unpublished):\n"
+        + "\n".join(context_lines)
+        + "\n\n"
+        if context_lines
+        else ""
+    )
     prompt = (
-        f"Identify the song from this rough text: '{rough_text}'. "
-        "Provide the exact correct lyrics of the song, line by line. "
-        "Include every sung line in full, including repeated choruses, bridges, and refrains. "
-        "Do not skip, merge, or summarize duplicate sections. "
+        "You are restoring the lyrics that were actually sung in this recording.\n\n"
+        f"{context_block}"
+        "Rough speech-to-text transcript (source of truth for what was sung):\n"
+        f"{rough_text}\n\n"
+        "Rules:\n"
+        "- Output the lyrics sung in THIS recording, line by line.\n"
+        "- Use title/artist/album only as hints. If the transcript does not clearly match a "
+        "known published song, do not substitute that song's lyrics.\n"
+        "- Correct obvious speech-recognition errors and keep repeated choruses, bridges, "
+        "and refrains as sung.\n"
+        "- Do not skip, merge, or summarize duplicate sections.\n"
+        "- Do not invent verses that the transcript does not support.\n"
+        "- Separate each stanza, verse, and chorus with a single blank line.\n"
         f"{script_instruction} "
         "Do not include any English translations, explanations, or introductory text. Just the pure lyrics."
     )
@@ -1801,32 +1843,102 @@ def _build_timed_lrc(
     return "\n".join(lrc_lines), timed
 
 
+def _assign_cue_end_times(timed: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for idx, segment in enumerate(timed):
+        if not str(segment.get("text") or "").strip():
+            segment["start"] = 0.0
+            segment["end"] = 0.0
+            continue
+        next_start = None
+        for later in timed[idx + 1 :]:
+            if str(later.get("text") or "").strip():
+                next_start = later.get("start")
+                break
+        if next_start is not None:
+            segment["end"] = next_start
+        else:
+            segment["end"] = float(segment.get("start") or 0.0) + _DEFAULT_LINE_DURATION_SEC
+    return timed
+
+
+def lrc_text_from_timed(timed: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for row in timed:
+        text = str(row.get("text") or "")
+        if not text.strip():
+            lines.append("")
+            continue
+        start = float(row.get("start") or 0.0)
+        lines.append(f"{_format_lrc_timestamp(start)}{text}")
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return "\n".join(lines)
+
+
+def _structured_lyric_lines(lyrics_text: str) -> list[str]:
+    """Split lyrics into lines, keeping blank lines as stanza breaks."""
+    lines = (lyrics_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines
+
+
+def _inject_stanza_breaks_into_timed(
+    structured_lines: list[str],
+    timed: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Re-insert blank stanza markers into timed cues after alignment."""
+    out: list[dict[str, Any]] = []
+    cue_i = 0
+    for raw in structured_lines:
+        if not raw.strip():
+            out.append({"start": 0.0, "end": 0.0, "text": ""})
+            continue
+        text = raw.strip()
+        if cue_i < len(timed):
+            src = timed[cue_i]
+            cue_i += 1
+            out.append(
+                {
+                    "start": src.get("start"),
+                    "end": src.get("end"),
+                    "text": text,
+                }
+            )
+        else:
+            out.append({"start": 0.0, "end": 2.0, "text": text})
+    return _assign_cue_end_times(out)
+
+
 def _merge_transliterated_timed(
     timed: list[dict[str, Any]],
     transliterated_lrc: str,
 ) -> tuple[str, list[dict[str, Any]]]:
     parsed = parse_lrc_to_timed(transliterated_lrc)
+    parsed_sung = [row for row in parsed if str(row.get("text") or "").strip()]
     merged: list[dict[str, Any]] = []
+    sung_i = 0
 
-    for idx, segment in enumerate(timed):
-        text = parsed[idx]["text"] if idx < len(parsed) else segment["text"]
+    for segment in timed:
+        if not str(segment.get("text") or "").strip():
+            merged.append({**segment, "text": "", "start": 0.0, "end": 0.0})
+            continue
+        text = parsed_sung[sung_i]["text"] if sung_i < len(parsed_sung) else segment["text"]
+        sung_i += 1
         merged.append({**segment, "text": text})
 
-    if len(parsed) > len(timed):
+    if sung_i < len(parsed_sung):
         logger.warning(
             "Transliteration added %s extra lyric lines; preserving timestamps for original lines",
-            len(parsed) - len(timed),
+            len(parsed_sung) - sung_i,
         )
-        for extra in parsed[len(timed):]:
+        for extra in parsed_sung[sung_i:]:
             merged.append(extra)
 
-    lrc_lines = [f"{_format_lrc_timestamp(segment['start'])}{segment['text']}" for segment in merged]
-    for idx, segment in enumerate(merged):
-        if idx + 1 < len(merged):
-            segment["end"] = merged[idx + 1]["start"]
-        else:
-            segment["end"] = segment["start"] + _DEFAULT_LINE_DURATION_SEC
-    return "\n".join(lrc_lines), merged
+    merged = _assign_cue_end_times(merged)
+    return lrc_text_from_timed(merged), merged
 
 
 def _timed_from_alignment(
@@ -1840,11 +1952,8 @@ def _timed_from_alignment(
     google_credentials_path: str = "",
     gemini_model: str = "gemini-2.5-flash",
 ) -> tuple[str, list[dict[str, Any]]]:
-    lyric_lines = [
-        line.strip()
-        for line in original_lyrics_text.strip().splitlines()
-        if line.strip()
-    ]
+    structured_lines = _structured_lyric_lines(original_lyrics_text)
+    lyric_lines = [line.strip() for line in structured_lines if line.strip()]
     if not lyric_lines:
         raise LyricsPipelineError("No lyric lines to align")
 
@@ -1887,11 +1996,13 @@ def _timed_from_alignment(
         len(transcript_words),
         len(_extract_transcript_phrases(google_response) if google_response else []),
     )
-    return _build_timed_lrc(
+    lrc_text, timed = _build_timed_lrc(
         lyric_lines,
         line_starts,
         audio_duration=audio_duration,
     )
+    timed = _inject_stanza_breaks_into_timed(structured_lines, timed)
+    return lrc_text_from_timed(timed), timed
 
 
 def _detect_language_from_transcript(google_response: Any) -> Optional[str]:
@@ -2096,6 +2207,9 @@ def run_hybrid_lyrics_pipeline(
         original_lyrics = get_original_lyrics_from_ai(
             full_rough_text,
             output_script,
+            track_name=track_name,
+            artist_name=artist_name,
+            album_name=album_name,
             google_project_id=google_project_id,
             google_vertex_location=google_vertex_location,
             google_credentials_path=google_credentials_path,

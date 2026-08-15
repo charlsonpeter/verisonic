@@ -62,6 +62,7 @@ export interface Track {
   file_format?: string;
   approved?: boolean;
   lyrics?: string;
+  lyrics_timed?: Array<{ start?: number; end?: number; text?: string }>;
   composer?: string;
   lyricist?: string;
   year?: number;

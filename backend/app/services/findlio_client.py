@@ -107,8 +107,11 @@ def result_from_payload(payload: dict[str, Any], *, source: Optional[str] = None
 
 
 def apply_result_to_track(track: Any, result: FindlioResult) -> None:
+    from app.services.lyrics_pipeline import lrc_text_from_timed
+
     if result.timed:
-        track.lyrics = result.lrc_text or result.plain_lyrics
+        rebuilt = lrc_text_from_timed(result.timed)
+        track.lyrics = rebuilt or result.lrc_text or result.plain_lyrics
         track.lyrics_timed = result.timed
     else:
         track.lyrics = result.plain_lyrics or result.lrc_text

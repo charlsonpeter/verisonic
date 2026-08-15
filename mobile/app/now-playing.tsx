@@ -38,7 +38,7 @@ import { coverUri } from '@/utils/mediaUrl';
 import {
   isSynchronizedLyrics,
   lineIndexForTime,
-  parseLyricsFromText,
+  parseTrackLyrics,
   trackHasLyrics,
 } from '@/utils/lrc';
 
@@ -126,10 +126,10 @@ export default function NowPlayingScreen() {
     'Live radio';
   const cover = coverUri(currentTrack?.cover_art_url || currentStation?.cover_art_url);
   const ratio = durationMs > 0 ? Math.min(1, positionMs / durationMs) : 0;
-  const hasLyrics = !isRadio && trackHasLyrics(currentTrack?.lyrics);
+  const hasLyrics = !isRadio && trackHasLyrics(currentTrack?.lyrics, currentTrack?.lyrics_timed);
   const parsedLyrics = useMemo(
-    () => (hasLyrics && currentTrack?.lyrics ? parseLyricsFromText(currentTrack.lyrics) : []),
-    [currentTrack?.lyrics, hasLyrics],
+    () => (hasLyrics && currentTrack ? parseTrackLyrics(currentTrack) : []),
+    [currentTrack, hasLyrics],
   );
   const synced = isSynchronizedLyrics(parsedLyrics);
   const activeLyricIdx = synced
@@ -221,19 +221,23 @@ export default function NowPlayingScreen() {
               contentContainerStyle={{ paddingVertical: synced ? 100 : 16 }}
             >
               {parsedLyrics.map((line, idx) => (
-                <Text
-                  key={`${idx}-${line.time}`}
-                  onLayout={(e) => {
-                    lineYRef.current[idx] = e.nativeEvent.layout.y;
-                  }}
-                  style={[
-                    styles.lyricLine,
-                    synced && styles.lyricSynced,
-                    idx === activeLyricIdx && styles.lyricActive,
-                  ]}
-                >
-                  {line.text}
-                </Text>
+                line.stanzaBreak ? (
+                  <View key={`stanza-${idx}`} style={{ height: 28 }} />
+                ) : (
+                  <Text
+                    key={`${idx}-${line.time}`}
+                    onLayout={(e) => {
+                      lineYRef.current[idx] = e.nativeEvent.layout.y;
+                    }}
+                    style={[
+                      styles.lyricLine,
+                      synced && styles.lyricSynced,
+                      idx === activeLyricIdx && styles.lyricActive,
+                    ]}
+                  >
+                    {line.text}
+                  </Text>
+                )
               ))}
               {!parsedLyrics.length ? (
                 <Text style={styles.lyricLine}>No lyrics available.</Text>

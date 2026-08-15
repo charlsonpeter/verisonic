@@ -55,6 +55,7 @@ export interface Track {
   file_format?: string;
   quality_level?: string;
   lyrics?: string;
+  lyrics_timed?: Array<{ start?: number; end?: number; text?: string }>;
   genres?: Array<string | { name?: string }>;
 }
 

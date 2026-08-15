@@ -5,7 +5,7 @@ import { AppModal } from './AppModal';
 import {
   isSynchronizedLyrics,
   lineIndexForTime,
-  parseLyricsFromText,
+  parseTrackLyrics,
 } from '../../utils/lrc';
 
 interface LyricsModalProps {
@@ -20,8 +20,8 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
   const [activeLineIndex, setActiveLineIndex] = useState(-1);
 
   const parsedLines = useMemo(() => {
-    if (!currentTrack?.lyrics || currentTrack.lyrics.trim() === '') return [];
-    return parseLyricsFromText(currentTrack.lyrics);
+    if (!currentTrack?.lyrics && !currentTrack?.lyrics_timed?.length) return [];
+    return parseTrackLyrics(currentTrack);
   }, [currentTrack]);
 
   const isSynchronized = useMemo(() => isSynchronizedLyrics(parsedLines), [parsedLines]);
@@ -164,6 +164,9 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
               </div>
             ) : (
               parsedLines.map((line, idx) => {
+                if (line.stanzaBreak) {
+                  return <div key={`stanza-${idx}`} className="h-8 md:h-12" aria-hidden />;
+                }
                 const isActive = isSynchronized && idx === activeLineIndex;
 
                 return (

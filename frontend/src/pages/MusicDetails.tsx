@@ -6,6 +6,7 @@ import {
 import { useAudio, Track } from '../context/AudioContext';
 import { useAuth } from '../context/AuthContext';
 import { CommentThread } from '../components/shared/CommentThread';
+import { parseTrackLyrics } from '../utils/lrc';
 
 interface MusicDetailsProps {
   track: Track | null;
@@ -121,6 +122,9 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate, o
   const displayTrack = resolvedTrack;
   const genreTags = normalizeGenreTags(displayTrack.genres);
   const isFav = favorites.includes(displayTrack.id);
+  const lyricsDisplay = parseTrackLyrics(displayTrack)
+    .map((line) => (line.stanzaBreak ? '' : line.text))
+    .join('\n');
 
   const metadataRows = buildTrackMetadata(displayTrack);
 
@@ -234,7 +238,7 @@ export const MusicDetails: React.FC<MusicDetailsProps> = ({ track, onNavigate, o
               <AlignLeft className="w-4 h-4" /> Lyrics
             </h3>
             <div className="flex-1 min-h-0 text-xs font-medium text-slate-350 leading-relaxed whitespace-pre-line overflow-y-auto">
-              {displayTrack.lyrics ? displayTrack.lyrics : (
+              {lyricsDisplay ? lyricsDisplay : (
                 <p className="text-slate-500 italic">Lyrics not available for this track.</p>
               )}
             </div>
