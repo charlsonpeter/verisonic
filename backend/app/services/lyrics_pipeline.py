@@ -283,7 +283,7 @@ def parse_lrc_to_timed(lrc_text: str) -> list[dict[str, Any]]:
         if text and not _is_stanza_marker_text(text):
             lines.append({"start": start, "end": None, "text": text})
         elif lines and not _is_stanza_marker_text(str(lines[-1].get("text") or "")):
-            lines.append({"start": 0.0, "end": 0.0, "text": ""})
+            lines.append({"start": start, "end": start, "text": ""})
 
     return _assign_cue_end_times(lines)
 
@@ -340,6 +340,7 @@ def _pick_lrclib_search_result(
                 picked = _lrclib_result_from_item(item, prefer_synced=prefer_synced)
                 if picked:
                     return picked
+        return None
 
     for item in ordered_items:
         picked = _lrclib_result_from_item(item, prefer_synced=prefer_synced)
@@ -797,21 +798,24 @@ def get_original_lyrics_from_ai(
         else ""
     )
     prompt = (
-        "You are restoring the lyrics that were actually sung in this recording.\n\n"
+        "You are producing the complete lyrics for THIS recording.\n\n"
         f"{context_block}"
-        "Rough speech-to-text transcript (source of truth for what was sung):\n"
+        "Rough speech-to-text transcript of this recording. It is noisy and often incomplete; "
+        "use it to stay on the correct song and version, not as a line-by-line limit:\n"
         f"{rough_text}\n\n"
         "Rules:\n"
-        "- Output the lyrics sung in THIS recording, line by line.\n"
-        "- Use title/artist/album only as hints. If the transcript does not clearly match a "
-        "known published song, do not substitute that song's lyrics.\n"
-        "- Correct obvious speech-recognition errors and keep repeated choruses, bridges, "
-        "and refrains as sung.\n"
+        "- Output every sung line in this recording, including repeated choruses, bridges, "
+        "and refrains.\n"
+        "- If title/artist plus the transcript identify a known song, write that song's full "
+        "lyrics as sung here. Do not omit verses the transcript missed.\n"
+        "- If the recording appears original or unpublished, reconstruct the full sung lyrics "
+        "from the transcript and fill obvious speech-recognition gaps.\n"
+        "- Do not substitute a different song.\n"
         "- Do not skip, merge, or summarize duplicate sections.\n"
-        "- Do not invent verses that the transcript does not support.\n"
+        "- Do not add unsung verses, translations, section labels, or timestamps.\n"
         "- Separate each stanza, verse, and chorus with a single blank line.\n"
         f"{script_instruction} "
-        "Do not include any English translations, explanations, or introductory text. Just the pure lyrics."
+        "Return only the pure lyrics."
     )
     lyrics_text = _gemini_generate_text(
         prompt,
@@ -820,7 +824,7 @@ def get_original_lyrics_from_ai(
         google_credentials_path=google_credentials_path,
         gemini_model=gemini_model,
     )
-    return _normalize_ai_lyrics_text(lyrics_text)
+    return strip_lrc_to_plain_lines(_normalize_ai_lyrics_text(lyrics_text))
 
 
 def _line_alignment_weight(line: str) -> float:
@@ -1714,6 +1718,22 @@ def _align_line_starts_combined(
         gemini_confidences,
         audio_duration=audio_duration,
     )
+    confident = sum(1 for item in merged_confidences if item in {"high", "medium"})
+    if transcript_words and confident < max(2, len(lyric_lines) // 4):
+        logger.info(
+            "Alignment confidence too low (%s/%s); using word-partition timestamps",
+            confident,
+            len(lyric_lines),
+        )
+        return (
+            _align_line_starts_by_word_partition(
+                lyric_lines,
+                transcript_words,
+                audio_duration=audio_duration,
+            ),
+            ["medium"] * len(lyric_lines),
+            f"{alignment_method}+word_partition",
+        )
     vocal_regions = _detect_vocal_regions(
         transcript_words,
         audio_duration=audio_duration,
@@ -1852,8 +1872,9 @@ def _build_timed_lrc(
 def _assign_cue_end_times(timed: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for idx, segment in enumerate(timed):
         if _is_stanza_marker_text(str(segment.get("text") or "")):
-            segment["start"] = 0.0
-            segment["end"] = 0.0
+            gap_at = float(segment.get("start") or 0.0)
+            segment["start"] = gap_at
+            segment["end"] = gap_at
             segment["text"] = ""
             continue
         next_start = None

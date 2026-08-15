@@ -26,9 +26,13 @@ export function parseLrcTimestamp(line: string): { time: number; text: string } 
 
   const mins = parseInt(match[1], 10);
   const secs = parseInt(match[2], 10);
-  const centis = match[3] ? parseInt(match[3], 10) : 0;
+  const frac = match[3] || '';
+  let fraction = 0;
+  if (frac.length === 3) fraction = parseInt(frac, 10) / 1000;
+  else if (frac.length === 2) fraction = parseInt(frac, 10) / 100;
+  else if (frac.length === 1) fraction = parseInt(frac, 10) / 10;
   return {
-    time: mins * 60 + secs + centis / 100,
+    time: mins * 60 + secs + fraction,
     text: match[4].trim(),
   };
 }
