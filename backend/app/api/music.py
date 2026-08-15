@@ -590,8 +590,10 @@ class MusicCapabilitiesResponse(BaseModel):
 def get_music_capabilities(
     current_user=Depends(get_current_studio_admin),
 ):
+    from app.services.findlio_client import lyrics_extraction_available
+
     return MusicCapabilitiesResponse(
-        lyrics_extraction_enabled=settings.LYRICS_EXTRACTION_ENABLED,
+        lyrics_extraction_enabled=lyrics_extraction_available(),
     )
 
 

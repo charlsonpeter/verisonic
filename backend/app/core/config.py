@@ -56,6 +56,10 @@ class Settings(BaseSettings):
     # When set, Verisonic delegates extraction to Findlio instead of the local pipeline
     FINDLIO_SERVICE_URL: str = ""
     FINDLIO_SERVICE_API_KEY: str = ""
+    # Use {track_id} as a placeholder. Requires FINDLIO_WEBHOOK_SECRET.
+    FINDLIO_WEBHOOK_URL: str = ""
+    FINDLIO_WEBHOOK_SECRET: str = ""
+    FINDLIO_AUTO_PUBLISH: bool = False
 
 
     class Config:

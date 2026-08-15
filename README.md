@@ -201,7 +201,19 @@ Without keys, plan listing works but checkout returns a configuration error.
 
 ### 5. Hybrid lyrics (optional)
 
-Set `LYRICS_EXTRACTION_ENABLED=true` and configure `LALAL_API_KEY` / Google Cloud vars (see `.env.example`). Mount a service-account JSON under `./cert` and set `GOOGLE_APPLICATION_CREDENTIALS`.
+Preferred: run Findlio on port 8002 and point Verisonic at it (skips local Google/LALAL):
+
+```
+LYRICS_EXTRACTION_ENABLED=true
+FINDLIO_SERVICE_URL=http://host.docker.internal:8002
+FINDLIO_SERVICE_API_KEY=flk_live_dev_bootstrap_change_me
+FINDLIO_WEBHOOK_URL=http://host.docker.internal:8001/api/internal/findlio/tracks/{track_id}/jobs
+FINDLIO_WEBHOOK_SECRET=dev-findlio-webhook-change-me
+```
+
+Use the same API key and webhook secret as Findlio `BOOTSTRAP_API_KEY` / `JOB_WEBHOOK_SECRET`. Studio **Generate lyrics** then creates a Findlio job (catalog reuse first, `auto_publish=false`).
+
+Fallback without Findlio: set `LALAL_API_KEY` / Google Cloud vars (see `.env.example`). Mount a service-account JSON under `./cert` and set `GOOGLE_APPLICATION_CREDENTIALS`.
 
 ### 6. Accounts demo data (optional)
 
@@ -257,7 +269,7 @@ Key settings (see `.env.example`, `docker-compose.yml`, `backend/app/core/config
 - `ENVIRONMENT` — set to `production` in deployed environments (forces Redis for refresh tokens)
 - `CORS_ORIGINS` — comma-separated allowed web origins
 - `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` — Premium checkout (INR)
-- `LYRICS_*`, `LALAL_API_KEY`, `GOOGLE_*` — optional lyrics pipeline
+- `LYRICS_*`, `FINDLIO_*`, `LALAL_API_KEY`, `GOOGLE_*` — optional lyrics pipeline (Findlio preferred)
 - SMTP settings — optional withdrawal CSV email export
 
 **Production checklist:** set `ENVIRONMENT=production`, a strong `SECRET_KEY`, strong database/MinIO credentials, Razorpay live keys, restrict service ports, and keep Celery **beat** running for settlement.

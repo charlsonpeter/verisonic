@@ -79,8 +79,13 @@ def _report_progress(
 
 
 def validate_pipeline_config(cfg: Settings = settings) -> None:
-    if not cfg.LYRICS_EXTRACTION_ENABLED:
-        raise LyricsPipelineError("Lyrics extraction is disabled. Set LYRICS_EXTRACTION_ENABLED=true.")
+    from app.services.findlio_client import lyrics_extraction_available
+
+    if not lyrics_extraction_available():
+        raise LyricsPipelineError(
+            "Lyrics extraction is disabled. Set LYRICS_EXTRACTION_ENABLED=true "
+            "or configure FINDLIO_SERVICE_URL and FINDLIO_SERVICE_API_KEY."
+        )
 
 
 def validate_ai_pipeline_config(

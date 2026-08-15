@@ -276,6 +276,35 @@ def analyze_audio_task(track_id: int, temp_file_path: str):
         db.close()
 
 
+def _compress_audio_for_findlio(input_file_path: str, temp_dir: str) -> str:
+    """Transcode to a compact MP3 so Findlio does not receive lossless masters."""
+    dest = os.path.join(temp_dir, "findlio-upload.mp3")
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-y",
+                "-i",
+                input_file_path,
+                "-ac",
+                "2",
+                "-ar",
+                "44100",
+                "-b:a",
+                "192k",
+                dest,
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if os.path.isfile(dest) and os.path.getsize(dest) > 0:
+            return dest
+    except Exception as exc:
+        print(f"Findlio audio compress failed, using original file: {exc}")
+    return input_file_path
+
+
 def _ffmpeg_hls(
     input_file_path: str,
     out_dir: str,
@@ -599,6 +628,7 @@ def extract_lyrics_task(
     from app.services.storage import s3_client
     from app.services.findlio_client import (
         FindlioClientError,
+        apply_result_to_track,
         create_and_wait_job,
         findlio_service_configured,
     )
@@ -648,6 +678,8 @@ def extract_lyrics_task(
         mode = "sync" if (lyrics_text and lyrics_text.strip()) else "extract"
 
         if findlio_service_configured():
+            update_progress("compress", 18, "Preparing a smaller audio copy for Findlio...")
+            findlio_audio_path = _compress_audio_for_findlio(input_file_path, temp_dir)
             update_progress("pipeline", 20, "Running Findlio remote pipeline...")
             remote = create_and_wait_job(
                 title=track.title,
@@ -657,13 +689,11 @@ def extract_lyrics_task(
                 album=album_name,
                 duration=track.duration,
                 lyrics_text=lyrics_text,
-                audio_file_path=input_file_path,
+                audio_file_path=findlio_audio_path,
+                track_id=track_id,
                 progress_callback=update_progress,
             )
-            lrc_text = remote.lrc_text
-            plain_lyrics = remote.plain_lyrics
-            timed = remote.timed
-            language = remote.language
+            apply_result_to_track(track, remote)
             source = remote.source
         else:
             update_progress("pipeline", 20, "Running lyrics pipeline...")
@@ -683,21 +713,17 @@ def extract_lyrics_task(
                 gemini_model=settings.GEMINI_MODEL,
                 progress_callback=update_progress,
             )
-            lrc_text = result.lrc_text
-            plain_lyrics = result.lrc_text
-            timed = result.timed
-            language = result.language
+            if result.timed:
+                track.lyrics = result.lrc_text
+                track.lyrics_timed = result.timed
+            else:
+                track.lyrics = result.lrc_text
+                track.lyrics_timed = None
+            if result.language:
+                track.lyrics_language = result.language
             source = result.source
 
         update_progress("saving", 95, "Saving lyrics to track...")
-        if timed:
-            track.lyrics = lrc_text
-            track.lyrics_timed = timed
-        else:
-            track.lyrics = plain_lyrics or lrc_text
-            track.lyrics_timed = timed or None
-        if language:
-            track.lyrics_language = language
         db.commit()
 
         return {
