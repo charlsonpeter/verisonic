@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 _LRC_LINE_RE = re.compile(r"^\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]\s*(.*)$")
 _LRC_PREFIX_RE = re.compile(r"^(\[\d{1,2}:\d{2}(?:\.\d{1,3})?\]\s*)(.*)$")
+_BARE_LRC_TS_RE = re.compile(r"^\[\d{1,2}:\d{2}(?:\.\d{1,3})?\]$")
 _DEFAULT_LINE_DURATION_SEC = 3.5
 _MIN_LINE_GAP_SEC = 0.2
 _GEMINI_ALIGN_SNAP_WINDOW_SEC = 1.0
@@ -139,6 +140,11 @@ def validate_sync_pipeline_config(
         )
 
 
+def _is_stanza_marker_text(text: str) -> bool:
+    value = (text or "").strip()
+    return not value or bool(_BARE_LRC_TS_RE.match(value))
+
+
 def lyrics_have_timestamps(lyrics_text: str) -> bool:
     return any(
         _LRC_LINE_RE.match(line.strip())
@@ -151,13 +157,13 @@ def strip_lrc_to_plain_lines(lyrics_text: str) -> str:
     lines: list[str] = []
     for raw_line in (lyrics_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         line = raw_line.strip()
-        if not line:
+        if not line or _BARE_LRC_TS_RE.match(line):
             if lines and lines[-1] != "":
                 lines.append("")
             continue
         match = _LRC_PREFIX_RE.match(line)
         text = match.group(2) if match else line
-        if text.strip():
+        if text.strip() and not _is_stanza_marker_text(text):
             lines.append(text.strip())
         elif lines and lines[-1] != "":
             lines.append("")
@@ -257,8 +263,8 @@ def parse_lrc_to_timed(lrc_text: str) -> list[dict[str, Any]]:
         raw_lines.pop()
 
     for raw_line in raw_lines:
-        if not raw_line.strip():
-            if lines and str(lines[-1].get("text") or "").strip():
+        if not raw_line.strip() or _is_stanza_marker_text(raw_line):
+            if lines and not _is_stanza_marker_text(str(lines[-1].get("text") or "")):
                 lines.append({"start": 0.0, "end": 0.0, "text": ""})
             continue
         line = raw_line.strip()
@@ -266,7 +272,7 @@ def parse_lrc_to_timed(lrc_text: str) -> list[dict[str, Any]]:
         if not match:
             fallback_start = (
                 lines[-1]["start"] + _MIN_LINE_GAP_SEC
-                if lines and str(lines[-1].get("text") or "").strip()
+                if lines and not _is_stanza_marker_text(str(lines[-1].get("text") or ""))
                 else 0.0
             )
             lines.append({"start": fallback_start, "end": None, "text": line})
@@ -274,9 +280,9 @@ def parse_lrc_to_timed(lrc_text: str) -> list[dict[str, Any]]:
         centis = match.group(3) or ""
         start = _lrc_time_to_seconds(int(match.group(1)), int(match.group(2)), centis)
         text = match.group(4).strip()
-        if text:
+        if text and not _is_stanza_marker_text(text):
             lines.append({"start": start, "end": None, "text": text})
-        elif lines and str(lines[-1].get("text") or "").strip():
+        elif lines and not _is_stanza_marker_text(str(lines[-1].get("text") or "")):
             lines.append({"start": 0.0, "end": 0.0, "text": ""})
 
     return _assign_cue_end_times(lines)
@@ -1845,13 +1851,14 @@ def _build_timed_lrc(
 
 def _assign_cue_end_times(timed: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for idx, segment in enumerate(timed):
-        if not str(segment.get("text") or "").strip():
+        if _is_stanza_marker_text(str(segment.get("text") or "")):
             segment["start"] = 0.0
             segment["end"] = 0.0
+            segment["text"] = ""
             continue
         next_start = None
         for later in timed[idx + 1 :]:
-            if str(later.get("text") or "").strip():
+            if not _is_stanza_marker_text(str(later.get("text") or "")):
                 next_start = later.get("start")
                 break
         if next_start is not None:
@@ -1865,7 +1872,7 @@ def lrc_text_from_timed(timed: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     for row in timed:
         text = str(row.get("text") or "")
-        if not text.strip():
+        if _is_stanza_marker_text(text):
             lines.append("")
             continue
         start = float(row.get("start") or 0.0)

@@ -12,7 +12,13 @@ export interface TimedLyricCue {
   text?: string;
 }
 
-const LRC_TIMESTAMP_REGEX = /^\[(\d{1,2}):(\d{2})(?:\.(\d{2}))?\]\s*(.*)$/;
+const LRC_TIMESTAMP_REGEX = /^\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]\s*(.*)$/;
+const BARE_LRC_TIMESTAMP_REGEX = /^\[\d{1,2}:\d{2}(?:\.\d{1,3})?\]$/;
+
+function isStanzaMarkerText(text: string): boolean {
+  const value = text.trim();
+  return !value || BARE_LRC_TIMESTAMP_REGEX.test(value);
+}
 
 export function parseLrcTimestamp(line: string): { time: number; text: string } | null {
   const match = line.match(LRC_TIMESTAMP_REGEX);
@@ -40,7 +46,7 @@ function collapseLyricSourceLines(lyricsText: string): string[] {
   const lines: string[] = [];
   for (const raw of rawLines) {
     const trimmed = raw.trim();
-    if (!trimmed) {
+    if (!trimmed || isStanzaMarkerText(trimmed)) {
       if (lines.length && lines[lines.length - 1] !== '') {
         lines.push('');
       }
@@ -59,7 +65,7 @@ export function parseLyricsFromTimed(timed: TimedLyricCue[]): ParsedLyricLine[] 
   const parsed: ParsedLyricLine[] = [];
   for (const row of timed) {
     const text = String(row.text || '').trim();
-    if (!text) {
+    if (isStanzaMarkerText(text)) {
       if (parsed.length && !parsed[parsed.length - 1].stanzaBreak) {
         parsed.push(stanzaBreakLine());
       }
@@ -116,7 +122,7 @@ function parseLyricsLines(lines: string[]): ParsedLyricLine[] {
 
     const timestamped = parseLrcTimestamp(line);
     if (timestamped) {
-      if (!timestamped.text) {
+      if (isStanzaMarkerText(timestamped.text)) {
         if (parsed.length && !parsed[parsed.length - 1].stanzaBreak) {
           parsed.push(stanzaBreakLine());
         }
