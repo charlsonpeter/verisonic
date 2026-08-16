@@ -556,14 +556,8 @@ function DashboardContent() {
 
                     <div className="flex flex-col sm:flex-row gap-6 sm:gap-8 items-center sm:items-start">
                       {(() => {
-                        const breakdownTotal = activeReport?.score_breakdown?.reduce(
-                          (sum: number, item: { points_achieved?: number }) => sum + (item.points_achieved ?? 0),
-                          0,
-                        ) ?? 0;
                         const reportScore =
-                          breakdownTotal > 0
-                            ? breakdownTotal
-                            : (activeReport?.final_score ?? selectedReportTrack.quality_score) || 0;
+                          activeReport?.final_score ?? selectedReportTrack.quality_score ?? 0;
                         return (
                           <>
                             <div className="flex flex-col items-center shrink-0 sm:pt-1">

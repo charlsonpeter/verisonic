@@ -966,12 +966,12 @@ def get_quality_report(
         "authenticity_score": report.authenticity_score,
         "true_quality_tier": report.true_quality_tier,
     }
-    breakdown, computed_score = build_score_breakdown(metadata, spectral)
+    breakdown, _checklist_score = build_score_breakdown(metadata, spectral)
     quality = calculate_quality_score(metadata, spectral)
 
     _resolve_quality_score(track, db, persist=True)
     db.commit()
-    computed_score, quality_level = _resolve_quality_score(track, db)
+    resolved_score, quality_level = _resolve_quality_score(track, db)
 
     return QualityReportDetailResponse(
         id=report.id,
@@ -986,7 +986,7 @@ def get_quality_report(
         spectrogram_path=spectrogram_path,
         created_at=report.created_at,
         base_score=100,
-        final_score=computed_score,
+        final_score=resolved_score,
         quality_level=quality_level or track.quality_level,
         score_breakdown=[ScoreBreakdownItem(**item) for item in breakdown],
         rejection_reasons=quality["rejection_reasons"],

@@ -25,11 +25,11 @@ interface AcousticScoreBreakdownProps {
 }
 
 export const AcousticScoreBreakdown: React.FC<AcousticScoreBreakdownProps> = ({
-  finalScore = 0,
+  finalScore,
   breakdown = [],
 }) => {
   const totalFromRows = breakdown.reduce((sum, item) => sum + (item.points_achieved ?? 0), 0);
-  const displayTotal = breakdown.length > 0 ? totalFromRows : finalScore;
+  const displayTotal = finalScore ?? totalFromRows;
 
   return (
     <div className="flex-1 min-w-0 w-full font-sans">
