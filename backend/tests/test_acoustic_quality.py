@@ -66,7 +66,7 @@ def test_classify_high_lossy_ignores_nyquist_decoder_junk():
     assert score < 100
 
 
-def test_authenticity_drives_published_score():
+def test_authenticity_affects_tier_not_checklist_score():
     result = calculate_quality_score(
         {
             "codec": "mp3",
@@ -87,13 +87,16 @@ def test_authenticity_drives_published_score():
             "spectral_entropy_high_band": 0.4,
         },
     )
-    assert result["quality_score"] == 91
+    breakdown_total = sum(item["points_achieved"] for item in result["score_breakdown"])
+    assert result["quality_score"] == breakdown_total
+    assert result["quality_score"] == 100
     assert result["quality_level"] == "Good"
     assert result["is_lossless"] is False
     assert result["approved"] is True
-    breakdown_total = sum(item["points_achieved"] for item in result["score_breakdown"])
-    assert breakdown_total == result["quality_score"]
-    assert any(item["check"] == "PCM Authenticity Analysis" for item in result["score_breakdown"])
+    assert not any(
+        item["check"].startswith("PCM Authenticity")
+        for item in result["score_breakdown"]
+    )
 
 
 def test_checklist_caps_authenticity_when_checks_fail():
@@ -121,12 +124,13 @@ def test_checklist_caps_authenticity_when_checks_fail():
     assert breakdown_total == 45
     assert result["quality_score"] == 45
     assert result["quality_score"] == breakdown_total
-    pcm_rows = [item for item in result["score_breakdown"] if item["check"] == "PCM Authenticity Analysis"]
-    assert len(pcm_rows) == 1
-    assert "71%" in pcm_rows[0]["value"]
+    assert not any(
+        item["check"].startswith("PCM Authenticity")
+        for item in result["score_breakdown"]
+    )
 
 
-def test_pcm_authenticity_adjustment_when_stricter_than_checklist():
+def test_score_breakdown_excludes_pcm_adjustment_rows():
     result = calculate_quality_score(
         {
             "codec": "flac",
@@ -143,9 +147,12 @@ def test_pcm_authenticity_adjustment_when_stricter_than_checklist():
         },
     )
     breakdown_total = sum(item["points_achieved"] for item in result["score_breakdown"])
-    assert result["quality_score"] == 18
-    assert breakdown_total == 18
-    assert any(item["check"] == "PCM Authenticity Adjustment" for item in result["score_breakdown"])
+    assert result["quality_score"] == 45
+    assert breakdown_total == 45
+    assert not any(
+        item["check"].startswith("PCM Authenticity")
+        for item in result["score_breakdown"]
+    )
 
 
 def test_classify_true_lossless():
