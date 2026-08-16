@@ -56,6 +56,14 @@ class LyricsPipelineResult:
     source: str = "ai_pipeline"
 
 
+def lyrics_payload_from_pipeline(result: LyricsPipelineResult) -> dict[str, Any]:
+    return {
+        "lyrics": result.lrc_text,
+        "lyrics_timed": result.timed or None,
+        "lyrics_language": result.language,
+    }
+
+
 @dataclass
 class LrclibLyrics:
     text: str

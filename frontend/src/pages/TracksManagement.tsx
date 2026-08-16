@@ -773,6 +773,14 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
   const [isLyricsModalOpen, setIsLyricsModalOpen] = useState(false);
   const [lyricsDraft, setLyricsDraft] = useState('');
   const [lyricsScriptMode, setLyricsScriptMode] = useState<LyricsScriptMode>('native');
+  const [pendingGeneratedLyrics, setPendingGeneratedLyrics] = useState<{
+    lyrics_timed: Array<{ start?: number; end?: number; text?: string }> | null;
+    lyrics_language: string | null;
+  } | null>(null);
+  const [generatedLyricsPreview, setGeneratedLyricsPreview] = useState<{
+    lyrics_timed: Array<{ start?: number; end?: number; text?: string }> | null;
+    lyrics_language: string | null;
+  } | null>(null);
   const [isGeneratingLyrics, setIsGeneratingLyrics] = useState(false);
   const [lyricsExtractionProgress, setLyricsExtractionProgress] = useState<LyricsExtractionProgress | null>(null);
   const lyricsPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -817,6 +825,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     setEditGenres('');
     setEditLyrics('');
     setEditLanguage('');
+    setPendingGeneratedLyrics(null);
     setEditCoverFile(null);
     setEditCoverPreview('');
     setEditError(null);
@@ -837,6 +846,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     setEditLanguage(track.language || '');
     setEditGenres(genreNamesFromTrack(track));
     setEditLyrics(track.lyrics || '');
+    setPendingGeneratedLyrics(null);
     setEditCoverFile(null);
     setEditCoverPreview(track.cover_art_url || '');
     setEditError(null);
@@ -889,11 +899,20 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     setLyricsDraft(editLyrics === KEEP_SAME ? '' : editLyrics);
     setLyricsScriptMode('native');
     if (!isGeneratingLyrics) setLyricsExtractionProgress(null);
+    setGeneratedLyricsPreview(null);
     setIsLyricsModalOpen(true);
   };
 
   const applyLyricsDraft = () => {
     setEditLyrics(lyricsDraft);
+    setPendingGeneratedLyrics(generatedLyricsPreview);
+    setGeneratedLyricsPreview(null);
+    setIsLyricsModalOpen(false);
+  };
+
+  const cancelLyricsModal = () => {
+    setLyricsDraft(editLyrics === KEEP_SAME ? '' : editLyrics);
+    setGeneratedLyricsPreview(null);
     setIsLyricsModalOpen(false);
   };
 
@@ -906,7 +925,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
 
   useEffect(() => () => stopLyricsPolling(), [stopLyricsPolling]);
 
-  const startLyricsPolling = useCallback((trackId: number, baselineLyrics: string, taskId?: string, syncMode = false) => {
+  const startLyricsPolling = useCallback((taskId?: string, syncMode = false) => {
     stopLyricsPolling();
     let attempts = 0;
     const maxAttempts = 120;
@@ -917,73 +936,71 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
         stopLyricsPolling();
         setIsGeneratingLyrics(false);
         setLyricsExtractionProgress({
-          message: 'Timed out waiting for lyrics. Try refreshing the page.',
+          message: 'Timed out waiting for lyrics. Try again.',
           progress: 100,
         });
         return;
       }
 
-      try {
-        if (taskId) {
-          const statusRes = await fetch(`/api/music/extract-lyrics/status/${taskId}`, {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (statusRes.ok) {
-            const statusData = await statusRes.json();
-            if (statusData.status === 'error') {
-              stopLyricsPolling();
-              setIsGeneratingLyrics(false);
-              setLyricsExtractionProgress(null);
-              toastError(statusData.error || 'Lyrics extraction failed.');
-              return;
-            }
-            if (statusData.status === 'progress') {
-              setLyricsExtractionProgress({
-                message: statusData.message || 'Processing...',
-                progress: Math.max(0, Math.min(100, statusData.progress ?? 0)),
-                stage: statusData.stage,
-              });
-              return;
-            }
-            if (statusData.status === 'pending') {
-              setLyricsExtractionProgress({
-                message: statusData.message || 'Queued — waiting for worker...',
-                progress: statusData.progress ?? 2,
-                stage: 'queued',
-              });
-              return;
-            }
-            if (statusData.status === 'success') {
-              setLyricsExtractionProgress({
-                message: 'Finalizing lyrics...',
-                progress: 98,
-                stage: 'finalizing',
-              });
-              // Fall through to fetch updated lyrics below.
-            }
-          }
-        }
+      if (!taskId) return;
 
-        const res = await fetch(`/api/music/${trackId}`, {
+      try {
+        const statusRes = await fetch(`/api/music/extract-lyrics/status/${taskId}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
-        if (!res.ok) return;
-        const data = await res.json();
-        const newLyrics = (data.lyrics || '').trim();
-        if (newLyrics && newLyrics !== baselineLyrics.trim()) {
+        if (!statusRes.ok) return;
+
+        const statusData = await statusRes.json();
+        if (statusData.status === 'error') {
           stopLyricsPolling();
-          setEditLyrics(newLyrics);
-          setLyricsDraft(newLyrics);
           setIsGeneratingLyrics(false);
           setLyricsExtractionProgress(null);
-          toastSuccess(syncMode ? 'Timestamps generated successfully.' : 'Lyrics generated successfully.');
-          fetchTracks();
+          toastError(statusData.error || 'Lyrics extraction failed.');
+          return;
+        }
+        if (statusData.status === 'progress') {
+          setLyricsExtractionProgress({
+            message: statusData.message || 'Processing...',
+            progress: Math.max(0, Math.min(100, statusData.progress ?? 0)),
+            stage: statusData.stage,
+          });
+          return;
+        }
+        if (statusData.status === 'pending') {
+          setLyricsExtractionProgress({
+            message: statusData.message || 'Queued — waiting for worker...',
+            progress: statusData.progress ?? 2,
+            stage: 'queued',
+          });
+          return;
+        }
+        if (statusData.status === 'success') {
+          stopLyricsPolling();
+          setIsGeneratingLyrics(false);
+          setLyricsExtractionProgress(null);
+
+          const newLyrics = (statusData.lyrics || '').trim();
+          if (!newLyrics) {
+            toastError('Lyrics extraction finished but returned empty lyrics.');
+            return;
+          }
+
+          setLyricsDraft(newLyrics);
+          setGeneratedLyricsPreview({
+            lyrics_timed: Array.isArray(statusData.lyrics_timed) ? statusData.lyrics_timed : null,
+            lyrics_language: statusData.lyrics_language ?? null,
+          });
+          toastSuccess(
+            syncMode
+              ? 'Timestamps generated. Review in the editor, then click Done.'
+              : 'Lyrics generated. Review in the editor, then click Done.'
+          );
         }
       } catch {
         // Keep polling on transient errors
       }
     }, 3000);
-  }, [fetchTracks, stopLyricsPolling, token]);
+  }, [stopLyricsPolling, token]);
 
   const handleGenerateLyrics = async () => {
     if (!isSingleEdit || !editingTrack || !token) return;
@@ -1029,7 +1046,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
       }
 
       toastSuccess(data.message || (syncMode ? 'Timestamp sync queued.' : 'Lyrics extraction queued.'));
-      startLyricsPolling(editingTrack.id, lyricsDraft, data.task_id, syncMode);
+      startLyricsPolling(data.task_id, syncMode);
     } catch {
       setIsGeneratingLyrics(false);
       setLyricsExtractionProgress(null);
@@ -1056,6 +1073,14 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
     formData.append('language', editLanguage);
     formData.append('genres', editGenres);
     formData.append('lyrics', editLyrics);
+    if (pendingGeneratedLyrics) {
+      if (pendingGeneratedLyrics.lyrics_timed?.length) {
+        formData.append('lyrics_timed', JSON.stringify(pendingGeneratedLyrics.lyrics_timed));
+      }
+      if (pendingGeneratedLyrics.lyrics_language) {
+        formData.append('lyrics_language', pendingGeneratedLyrics.lyrics_language);
+      }
+    }
     if (editCoverFile) {
       formData.append('cover_image', editCoverFile);
     }
@@ -1173,6 +1198,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
         if (res.ok) {
           const updatedTrack = await res.json();
           toastSuccess('Track tags updated.');
+          setPendingGeneratedLyrics(null);
           fetchTracks();
           fetchSuggestions();
           if (updateTrackMetadata) {
@@ -1939,7 +1965,10 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
                         label="Lyrics"
                         hideLabel
                         value={editLyrics}
-                        onChange={setEditLyrics}
+                        onChange={(value) => {
+                          setEditLyrics(value);
+                          setPendingGeneratedLyrics(null);
+                        }}
                         options={isMultiEdit ? multiOptions.lyrics : [editLyrics === KEEP_SAME ? '' : editLyrics]}
                         multiline
                         rows={4}
@@ -2058,7 +2087,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
 
       <AppModal
         open={isLyricsModalOpen}
-        onClose={() => setIsLyricsModalOpen(false)}
+        onClose={cancelLyricsModal}
         maxWidth="3xl"
         align="start"
         showGradient={false}
@@ -2079,7 +2108,7 @@ export const TracksManagement: React.FC<TracksManagementProps> = ({ onViewReport
           <div className="flex justify-end gap-2">
             <button
               type="button"
-              onClick={() => setIsLyricsModalOpen(false)}
+              onClick={cancelLyricsModal}
               className="px-4 py-2.5 bg-slate-900 border border-white/5 hover:border-slate-800 rounded-xl text-xs font-bold text-slate-300 transition"
             >
               Cancel

@@ -621,6 +621,7 @@ def extract_lyrics_task(
     """
     from app.services.lyrics_pipeline import (
         LyricsPipelineError,
+        lyrics_payload_from_pipeline,
         run_hybrid_lyrics_pipeline,
         validate_pipeline_config,
     )
@@ -628,9 +629,9 @@ def extract_lyrics_task(
     from app.services.storage import s3_client
     from app.services.findlio_client import (
         FindlioClientError,
-        apply_result_to_track,
         create_and_wait_job,
         findlio_service_configured,
+        lyrics_payload_from_findlio,
     )
 
     def update_progress(stage: str, progress: int, message: str) -> None:
@@ -692,8 +693,9 @@ def extract_lyrics_task(
                 audio_file_path=findlio_audio_path,
                 track_id=track_id,
                 progress_callback=update_progress,
+                send_webhook=False,
             )
-            apply_result_to_track(track, remote)
+            lyrics_payload = lyrics_payload_from_findlio(remote)
             source = remote.source
         else:
             update_progress("pipeline", 20, "Running lyrics pipeline...")
@@ -713,23 +715,16 @@ def extract_lyrics_task(
                 gemini_model=settings.GEMINI_MODEL,
                 progress_callback=update_progress,
             )
-            if result.timed:
-                track.lyrics = result.lrc_text
-                track.lyrics_timed = result.timed
-            else:
-                track.lyrics = result.lrc_text
-                track.lyrics_timed = None
-            if result.language:
-                track.lyrics_language = result.language
+            lyrics_payload = lyrics_payload_from_pipeline(result)
             source = result.source
 
-        update_progress("saving", 95, "Saving lyrics to track...")
-        db.commit()
+        update_progress("finalizing", 95, "Lyrics ready for review...")
 
         return {
             "status": "success",
             "track_id": track_id,
             "source": source,
+            **lyrics_payload,
         }
     except (LyricsPipelineError, FindlioClientError) as exc:
         db.rollback()

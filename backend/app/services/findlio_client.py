@@ -120,6 +120,20 @@ def apply_result_to_track(track: Any, result: FindlioResult) -> None:
         track.lyrics_language = result.language
 
 
+def lyrics_payload_from_findlio(result: FindlioResult) -> dict[str, Any]:
+    from app.services.lyrics_pipeline import lrc_text_from_timed
+
+    if result.timed:
+        lyrics = lrc_text_from_timed(result.timed) or result.lrc_text or result.plain_lyrics
+    else:
+        lyrics = result.plain_lyrics or result.lrc_text
+    return {
+        "lyrics": lyrics,
+        "lyrics_timed": result.timed or None,
+        "lyrics_language": result.language,
+    }
+
+
 def lookup_catalog_lyrics(
     *,
     title: str,
@@ -205,6 +219,7 @@ def create_and_wait_job(
     progress_callback: Optional[ProgressCallback] = None,
     poll_interval_sec: float = 2.5,
     timeout_sec: float = 900,
+    send_webhook: bool = True,
 ) -> FindlioResult:
     """Create a Findlio job (file upload or audio_url) and poll until complete."""
     if not findlio_service_configured():
@@ -246,9 +261,10 @@ def create_and_wait_job(
             script_mode=script_mode,
             lyrics_text=lyrics_text,
         )
-        hook = webhook_url_for_track(track_id)
-        if hook:
-            data["webhook_url"] = hook
+        if send_webhook:
+            hook = webhook_url_for_track(track_id)
+            if hook:
+                data["webhook_url"] = hook
 
     if progress_callback:
         progress_callback("queue", 10, "Submitting job to Findlio...")

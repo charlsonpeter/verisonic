@@ -2,6 +2,7 @@ import os
 import shutil
 import tempfile
 import asyncio
+import json
 from fastapi import Request, APIRouter, Depends, HTTPException, UploadFile, File, Form, status, WebSocket, WebSocketDisconnect, Query
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -1039,6 +1040,9 @@ class LyricsExtractionStatusResponse(BaseModel):
     stage: Optional[str] = None
     progress: Optional[int] = None
     message: Optional[str] = None
+    lyrics: Optional[str] = None
+    lyrics_timed: Optional[List[dict]] = None
+    lyrics_language: Optional[str] = None
 
 
 LyricsScriptMode = Literal["native", "latin"]
@@ -1140,6 +1144,9 @@ def get_lyrics_extraction_status(
                 status="success",
                 track_id=payload.get("track_id"),
                 source=payload.get("source"),
+                lyrics=payload.get("lyrics"),
+                lyrics_timed=payload.get("lyrics_timed"),
+                lyrics_language=payload.get("lyrics_language"),
             )
         return LyricsExtractionStatusResponse(
             status="error",
@@ -1423,6 +1430,8 @@ async def update_track(
     language: Optional[str] = Form(None),
     genres: Optional[str] = Form(None),
     lyrics: Optional[str] = Form(None),
+    lyrics_timed: Optional[str] = Form(None),
+    lyrics_language: Optional[str] = Form(None),
     cover_image: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
@@ -1453,6 +1462,22 @@ async def update_track(
             
     if "lyrics" in form_data:
         track.lyrics = normalize_optional_string(lyrics)
+
+    if "lyrics_timed" in form_data:
+        timed_norm = normalize_optional_string(lyrics_timed)
+        if timed_norm is None:
+            track.lyrics_timed = None
+        else:
+            try:
+                parsed = json.loads(timed_norm)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(status_code=400, detail="Invalid lyrics_timed JSON.") from exc
+            if parsed is not None and not isinstance(parsed, list):
+                raise HTTPException(status_code=400, detail="lyrics_timed must be a JSON array.")
+            track.lyrics_timed = parsed
+
+    if "lyrics_language" in form_data:
+        track.lyrics_language = normalize_optional_string(lyrics_language)
         
     if "artist_name" in form_data:
         track.artist_name_override = normalize_optional_string(artist_name)
