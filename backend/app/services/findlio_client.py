@@ -38,6 +38,8 @@ class FindlioResult:
     timed: list[dict[str, Any]]
     language: Optional[str] = None
     source: str = "findlio"
+    job_id: Optional[str] = None
+    catalog_id: Optional[str] = None
 
 
 def findlio_service_configured() -> bool:
@@ -103,6 +105,8 @@ def result_from_payload(payload: dict[str, Any], *, source: Optional[str] = None
         timed=timed,
         language=payload.get("language"),
         source=source or payload.get("source") or "findlio",
+        job_id=payload.get("job_id"),
+        catalog_id=payload.get("catalog_id") or (payload.get("id") if not payload.get("job_id") else None),
     )
 
 
@@ -118,6 +122,10 @@ def apply_result_to_track(track: Any, result: FindlioResult) -> None:
         track.lyrics_timed = result.timed or None
     if result.language:
         track.lyrics_language = result.language
+    if result.job_id:
+        track.findlio_job_id = result.job_id
+    if result.catalog_id:
+        track.findlio_catalog_id = result.catalog_id
 
 
 def lyrics_payload_from_findlio(result: FindlioResult) -> dict[str, Any]:
@@ -183,9 +191,12 @@ def lookup_catalog_lyrics(
     except ValueError:
         return None
     try:
-        return result_from_payload(payload, source="findlio_catalog")
+        result = result_from_payload(payload, source="findlio_catalog")
     except FindlioClientError:
         return None
+    result.catalog_id = entry_id
+    result.job_id = None
+    return result
 
 
 def fetch_job_result(job_id: str) -> FindlioResult:
@@ -201,7 +212,11 @@ def fetch_job_result(job_id: str) -> FindlioResult:
         raise FindlioClientError(f"Failed to fetch Findlio result: {exc}") from exc
     if result_resp.status_code >= 400:
         _raise_http(result_resp)
-    return result_from_payload(result_resp.json())
+    payload = result_resp.json()
+    result = result_from_payload(payload)
+    result.job_id = payload.get("job_id") or result.job_id
+    result.catalog_id = payload.get("catalog_id") or result.catalog_id
+    return result
 
 
 def create_and_wait_job(
@@ -337,7 +352,9 @@ def create_and_wait_job(
     if progress_callback:
         progress_callback("result", 90, "Fetching Findlio result...")
 
-    return fetch_job_result(job_id)
+    result = fetch_job_result(job_id)
+    result.job_id = job_id
+    return result
 
 
 def _raise_http(resp: requests.Response) -> None:
@@ -363,3 +380,79 @@ def _raise_http(resp: requests.Response) -> None:
     elif resp.status_code == 403 or code in ("subscription_required", "developer_required"):
         message = message or "Findlio generation requires an active plan or wallet."
     raise FindlioClientError(message, code=code, status_code=resp.status_code)
+
+
+def approve_track_lyrics(track: Any) -> Optional[str]:
+    """Push edited lyrics to Findlio as approved. Only for lyrics that came from Findlio."""
+    if not findlio_service_configured():
+        return None
+    if not getattr(track, "findlio_job_id", None) and not getattr(track, "findlio_catalog_id", None):
+        return None
+    lyrics = (getattr(track, "lyrics", None) or "").strip()
+    timed = getattr(track, "lyrics_timed", None)
+    if not lyrics and not timed:
+        return None
+
+    artist_name = (
+        getattr(track, "artist_name_override", None)
+        or (track.artist.stage_name if getattr(track, "artist", None) else None)
+        or ""
+    )
+    album_name = track.album.title if getattr(track, "album", None) else None
+    payload: dict[str, Any] = {
+        "media_type": "music",
+        "title": track.title,
+        "artist": artist_name,
+        "lyrics": lyrics,
+    }
+    if timed:
+        payload["timed"] = timed
+    if album_name:
+        payload["album"] = album_name
+    if getattr(track, "lyricist", None):
+        payload["lyricist"] = track.lyricist
+    if getattr(track, "year", None) is not None:
+        payload["year"] = track.year
+    if getattr(track, "lyrics_language", None):
+        payload["language"] = track.lyrics_language
+    if getattr(track, "duration", None) is not None:
+        payload["duration"] = track.duration
+    if getattr(track, "findlio_catalog_id", None):
+        payload["catalog_id"] = track.findlio_catalog_id
+    if getattr(track, "findlio_job_id", None):
+        payload["job_id"] = track.findlio_job_id
+
+    try:
+        resp = requests.post(
+            f"{_base_url()}/v1/developer/catalog/approve",
+            headers={**_headers(), "Content-Type": "application/json"},
+            json=payload,
+            timeout=30,
+        )
+        if resp.status_code == 404 and payload.get("job_id"):
+            payload.pop("job_id", None)
+            resp = requests.post(
+                f"{_base_url()}/v1/developer/catalog/approve",
+                headers={**_headers(), "Content-Type": "application/json"},
+                json=payload,
+                timeout=30,
+            )
+    except requests.RequestException as exc:
+        logger.warning("Findlio approve failed for track %s: %s", getattr(track, "id", None), exc)
+        return None
+    if resp.status_code >= 400:
+        logger.warning(
+            "Findlio approve HTTP %s for track %s: %s",
+            resp.status_code,
+            getattr(track, "id", None),
+            resp.text[:300],
+        )
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+    catalog_id = data.get("id")
+    if catalog_id:
+        track.findlio_catalog_id = catalog_id
+    return catalog_id

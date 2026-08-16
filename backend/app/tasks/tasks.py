@@ -697,6 +697,12 @@ def extract_lyrics_task(
             )
             lyrics_payload = lyrics_payload_from_findlio(remote)
             source = remote.source
+            if remote.job_id:
+                track.findlio_job_id = remote.job_id
+            if remote.catalog_id:
+                track.findlio_catalog_id = remote.catalog_id
+            db.add(track)
+            db.commit()
         else:
             update_progress("pipeline", 20, "Running lyrics pipeline...")
             result = run_hybrid_lyrics_pipeline(

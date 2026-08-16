@@ -158,6 +158,8 @@ class Track(Base):
     lyrics_timed = Column(JSON, nullable=True)  # [{start, end, text}, ...]
     lyrics_language = Column(String, nullable=True)
     lyrics_language_probability = Column(Float, nullable=True)
+    findlio_job_id = Column(String, nullable=True)
+    findlio_catalog_id = Column(String, nullable=True)
     composer = Column(String, nullable=True)
     lyricist = Column(String, nullable=True)
     year = Column(Integer, nullable=True)

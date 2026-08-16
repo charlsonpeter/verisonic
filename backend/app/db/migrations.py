@@ -376,6 +376,10 @@ MIGRATIONS = [
     ("030_radio_stations_frequency_band", """
         ALTER TABLE radio_stations ADD COLUMN IF NOT EXISTS frequency_band VARCHAR;
     """),
+    ("031_tracks_findlio_ids", """
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS findlio_job_id VARCHAR;
+        ALTER TABLE tracks ADD COLUMN IF NOT EXISTS findlio_catalog_id VARCHAR;
+    """),
 ]
 
 

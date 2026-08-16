@@ -49,6 +49,7 @@ async def findlio_job_webhook(
     except FindlioClientError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    result.job_id = job_id
     apply_result_to_track(track, result)
     db.commit()
     return {"ok": True, "track_id": track_id, "source": result.source}

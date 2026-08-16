@@ -1,5 +1,5 @@
-import React, { useRef, useEffect, useMemo, useState } from 'react';
-import { X, Music } from 'lucide-react';
+import React, { useRef, useEffect, useLayoutEffect, useMemo, useState, useCallback } from 'react';
+import { X, Music, Play, Pause, SkipBack, SkipForward } from 'lucide-react';
 import { useAudio } from '../../context/AudioContext';
 import { AppModal } from './AppModal';
 import {
@@ -12,6 +12,154 @@ interface LyricsModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
+
+function formatTime(time: number) {
+  if (isNaN(time) || time === Infinity) return '0:00';
+  const mins = Math.floor(time / 60);
+  const secs = Math.floor(time % 60);
+  return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+}
+
+const LyricsPlayerWidget: React.FC = () => {
+  const {
+    isPlaying,
+    duration,
+    getCurrentTime,
+    subscribeTime,
+    togglePlay,
+    seek,
+    playNext,
+    playPrevious,
+    isRadioSync,
+    activeRadioStation,
+  } = useAudio();
+
+  const isOffline = !!(
+    activeRadioStation &&
+    (activeRadioStation.is_online === false || activeRadioStation.is_active === false)
+  );
+  const seekMax = duration || 100;
+  const seekMaxRef = useRef(seekMax);
+  seekMaxRef.current = seekMax;
+
+  const sliderRef = useRef<HTMLInputElement | null>(null);
+  const elapsedRef = useRef<HTMLSpanElement | null>(null);
+  const isSeekingRef = useRef(false);
+  const seekDraftRef = useRef(0);
+  const [isSeeking, setIsSeeking] = useState(false);
+
+  const paintSeekUi = useCallback((time: number, opts?: { forceSlider?: boolean }) => {
+    if (elapsedRef.current) elapsedRef.current.textContent = formatTime(time);
+    if ((opts?.forceSlider || !isSeekingRef.current) && sliderRef.current) {
+      sliderRef.current.max = String(seekMaxRef.current);
+      sliderRef.current.value = String(time);
+    }
+  }, []);
+
+  const finishSeek = useCallback(() => {
+    if (!isSeekingRef.current || isRadioSync) return;
+    isSeekingRef.current = false;
+    setIsSeeking(false);
+    seek(seekDraftRef.current);
+  }, [isRadioSync, seek]);
+
+  useEffect(() => {
+    if (isRadioSync) return undefined;
+    return subscribeTime((t) => {
+      if (isSeekingRef.current) return;
+      paintSeekUi(t);
+    });
+  }, [isRadioSync, subscribeTime, paintSeekUi]);
+
+  useEffect(() => {
+    if (!isSeeking) return;
+    const onPointerUp = () => { finishSeek(); };
+    window.addEventListener('pointerup', onPointerUp);
+    return () => window.removeEventListener('pointerup', onPointerUp);
+  }, [isSeeking, finishSeek]);
+
+  useLayoutEffect(() => {
+    paintSeekUi(getCurrentTime(), { forceSlider: true });
+  }, [getCurrentTime, paintSeekUi, duration]);
+
+  return (
+    <div className="w-full max-w-sm md:mt-auto rounded-2xl border border-white/10 bg-white/5 backdrop-blur-md px-4 py-3.5">
+      <div className="flex items-center justify-center gap-6">
+        <button
+          type="button"
+          onClick={playPrevious}
+          disabled={isRadioSync}
+          className="text-slate-400 hover:text-white transition disabled:opacity-30"
+          title="Previous"
+        >
+          <SkipBack className="w-5 h-5 fill-current" />
+        </button>
+
+        <button
+          type="button"
+          onClick={togglePlay}
+          disabled={isOffline}
+          className="w-11 h-11 bg-white hover:bg-rose-50 disabled:opacity-30 disabled:pointer-events-none active:scale-95 rounded-full flex items-center justify-center text-slate-950 font-bold shadow-md hover:shadow-rose-500/10 transition-all duration-300"
+          title={isOffline ? 'Station Offline' : isPlaying ? 'Pause' : 'Play'}
+        >
+          {isPlaying ? (
+            <Pause className="w-5 h-5 fill-current text-slate-950" />
+          ) : (
+            <Play className="w-5 h-5 fill-current text-slate-950 ml-0.5" />
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={playNext}
+          disabled={isRadioSync}
+          className="text-slate-400 hover:text-white transition disabled:opacity-30"
+          title="Next"
+        >
+          <SkipForward className="w-5 h-5 fill-current" />
+        </button>
+      </div>
+
+      <div className="flex items-center gap-1.5 text-slate-500 font-bold font-sans w-full min-w-0 mt-3">
+        <span
+          ref={elapsedRef}
+          className="shrink-0 w-9 text-right tabular-nums text-[10px]"
+        >
+          0:00
+        </span>
+        <input
+          ref={sliderRef}
+          type="range"
+          min="0"
+          max={seekMax}
+          defaultValue={0}
+          disabled={isRadioSync}
+          onPointerDown={() => {
+            if (isRadioSync) return;
+            isSeekingRef.current = true;
+            setIsSeeking(true);
+          }}
+          onChange={(e) => {
+            const value = parseFloat(e.target.value);
+            seekDraftRef.current = value;
+            paintSeekUi(value, { forceSlider: true });
+          }}
+          onKeyDown={(e) => {
+            if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
+              isSeekingRef.current = true;
+              setIsSeeking(true);
+            }
+          }}
+          onKeyUp={finishSeek}
+          className="flex-1 min-w-0 accent-rose-500 h-1 bg-slate-800 rounded-lg outline-none cursor-pointer audio-knob disabled:opacity-40 disabled:cursor-not-allowed"
+        />
+        <span className="shrink-0 w-9 text-left tabular-nums text-[10px]">
+          {formatTime(duration)}
+        </span>
+      </div>
+    </div>
+  );
+};
 
 export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => {
   const { currentTrack, subscribeTime, activeRadioStation, isPlaying } = useAudio();
@@ -111,8 +259,8 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
         <X className="w-5 h-5" />
       </button>
 
-      <div className="max-w-6xl w-full mx-auto my-auto flex flex-col md:grid md:grid-cols-12 gap-6 md:gap-16 items-center z-10 h-full max-h-[85vh] overflow-hidden md:overflow-visible">
-        <div className="w-full md:col-span-5 flex flex-col items-center md:items-start text-center md:text-left space-y-4 md:space-y-6">
+      <div className="max-w-6xl w-full mx-auto my-auto flex flex-col md:grid md:grid-cols-12 gap-6 md:gap-16 items-center md:items-stretch z-10 h-full max-h-[85vh] overflow-hidden md:overflow-visible">
+        <div className="w-full md:col-span-5 flex flex-col items-center md:items-start text-center md:text-left gap-4 md:gap-6 md:h-full">
           {currentTrack?.cover_art_url ? (
             <div className="relative group hidden md:block">
               <div className="absolute -inset-1 bg-gradient-to-r from-rose-500 to-pink-500 rounded-[2rem] blur-xl opacity-30 group-hover:opacity-45 transition duration-500" />
@@ -145,6 +293,8 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
               <span className="ml-1">Studio Synced</span>
             </div>
           )}
+
+          <LyricsPlayerWidget />
         </div>
 
         <div className="flex-1 w-full md:col-span-7 flex flex-col h-full overflow-hidden relative min-h-[45vh] md:min-h-0">
@@ -153,7 +303,7 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
 
           <div
             ref={containerRef}
-            className={`flex-1 overflow-y-auto px-4 space-y-12 scrollbar-hide scroll-smooth relative z-10 ${
+            className={`flex-1 overflow-y-auto px-4 flex flex-col gap-2 md:gap-2.5 scrollbar-hide scroll-smooth relative z-10 ${
               isSynchronized ? 'py-[35vh]' : 'py-6'
             }`}
             style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
@@ -165,7 +315,11 @@ export const LyricsModal: React.FC<LyricsModalProps> = ({ isOpen, onClose }) => 
             ) : (
               parsedLines.map((line, idx) => {
                 if (line.stanzaBreak) {
-                  return <div key={`stanza-${idx}`} className="h-8 md:h-12" aria-hidden />;
+                  return (
+                    <div key={`stanza-${idx}`} className="text-left" aria-hidden>
+                      <p className="text-base md:text-xl leading-relaxed max-w-xl font-bold">&nbsp;</p>
+                    </div>
+                  );
                 }
                 const isActive = isSynchronized && idx === activeLineIndex;
 

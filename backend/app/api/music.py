@@ -1551,7 +1551,18 @@ async def update_track(
         if track.album and not track.album.cover_art_url:
             track.album.cover_art_url = cover_key
             db.add(track.album)
-        
+
+    lyrics_changed = "lyrics" in form_data or "lyrics_timed" in form_data
+    if lyrics_changed and (track.findlio_job_id or track.findlio_catalog_id):
+        try:
+            from app.services.findlio_client import approve_track_lyrics
+
+            catalog_id = approve_track_lyrics(track)
+            if catalog_id:
+                track.findlio_catalog_id = catalog_id
+        except Exception as exc:
+            print(f"Findlio approve skipped for track {track.id}: {exc}")
+
     db.commit()
     db.refresh(track)
     return serialize_track(track, db, viewer=current_user)

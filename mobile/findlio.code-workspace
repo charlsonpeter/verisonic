@@ -1,8 +1,10 @@
 {
-	"folders": [
-		{
-			"path": "../../findlio"
-		}
-	],
-	"settings": {}
+    "folders": [
+        {
+            "path": "../../findlio"
+        },
+        {
+            "path": ".."
+        }
+    ]
 }
