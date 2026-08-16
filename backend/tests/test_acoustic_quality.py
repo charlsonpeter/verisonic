@@ -91,6 +91,61 @@ def test_authenticity_drives_published_score():
     assert result["quality_level"] == "Good"
     assert result["is_lossless"] is False
     assert result["approved"] is True
+    breakdown_total = sum(item["points_achieved"] for item in result["score_breakdown"])
+    assert breakdown_total == result["quality_score"]
+    assert any(item["check"] == "PCM Authenticity Analysis" for item in result["score_breakdown"])
+
+
+def test_checklist_caps_authenticity_when_checks_fail():
+    """PCM authenticity can exceed checklist when spectral/upscale checks fail."""
+    result = calculate_quality_score(
+        {
+            "codec": "flac",
+            "sample_rate": 48000,
+            "bit_depth": 24,
+            "bitrate": 1411200,
+            "duration": 180.0,
+            "channels": 2,
+        },
+        {
+            "max_frequency": 15200.0,
+            "cutoff_frequency": 15000.0,
+            "high_frequency_energy": 0.01,
+            "is_fake_upscaled": True,
+            "true_quality_tier": "NORMAL",
+            "authenticity_score": 71.0,
+            "spectral_entropy_high_band": 0.1,
+        },
+    )
+    breakdown_total = sum(item["points_achieved"] for item in result["score_breakdown"])
+    assert breakdown_total == 45
+    assert result["quality_score"] == 45
+    assert result["quality_score"] == breakdown_total
+    pcm_rows = [item for item in result["score_breakdown"] if item["check"] == "PCM Authenticity Analysis"]
+    assert len(pcm_rows) == 1
+    assert "71%" in pcm_rows[0]["value"]
+
+
+def test_pcm_authenticity_adjustment_when_stricter_than_checklist():
+    result = calculate_quality_score(
+        {
+            "codec": "flac",
+            "sample_rate": 48000,
+            "bit_depth": 24,
+        },
+        {
+            "max_frequency": 15200.0,
+            "cutoff_frequency": 15000.0,
+            "is_fake_upscaled": True,
+            "true_quality_tier": "FAKE_LOSSLESS",
+            "authenticity_score": 18.0,
+            "spectral_entropy_high_band": 0.1,
+        },
+    )
+    breakdown_total = sum(item["points_achieved"] for item in result["score_breakdown"])
+    assert result["quality_score"] == 18
+    assert breakdown_total == 18
+    assert any(item["check"] == "PCM Authenticity Adjustment" for item in result["score_breakdown"])
 
 
 def test_classify_true_lossless():

@@ -966,7 +966,7 @@ def get_quality_report(
         "authenticity_score": report.authenticity_score,
         "true_quality_tier": report.true_quality_tier,
     }
-    breakdown, _checklist_score = build_score_breakdown(metadata, spectral)
+    breakdown, checklist_score = build_score_breakdown(metadata, spectral)
     quality = calculate_quality_score(metadata, spectral)
 
     _resolve_quality_score(track, db, persist=True)
@@ -988,7 +988,7 @@ def get_quality_report(
         base_score=100,
         final_score=resolved_score,
         quality_level=quality_level or track.quality_level,
-        score_breakdown=[ScoreBreakdownItem(**item) for item in breakdown],
+        score_breakdown=[ScoreBreakdownItem(**item) for item in quality["score_breakdown"]],
         rejection_reasons=quality["rejection_reasons"],
         quality_tiers=[QualityScoreTier(**tier) for tier in QUALITY_SCORE_TIERS],
     )

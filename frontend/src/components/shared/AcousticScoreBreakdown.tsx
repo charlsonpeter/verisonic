@@ -19,17 +19,22 @@ const SPLIT_WEIGHTS: Record<string, number> = {
   'Upscale / Transcode Detection': 20,
 };
 
+function pcmAuthenticityDisplayScore(value: string): string {
+  const match = value.match(/^(\d+)%/);
+  return match ? match[1] : '—';
+}
+
 interface AcousticScoreBreakdownProps {
-  finalScore?: number;
   breakdown?: ScoreBreakdownItem[];
+  finalScore?: number;
 }
 
 export const AcousticScoreBreakdown: React.FC<AcousticScoreBreakdownProps> = ({
-  finalScore,
   breakdown = [],
+  finalScore,
 }) => {
-  const totalFromRows = breakdown.reduce((sum, item) => sum + (item.points_achieved ?? 0), 0);
-  const displayTotal = finalScore ?? totalFromRows;
+  const summedTotal = breakdown.reduce((sum, item) => sum + (item.points_achieved ?? 0), 0);
+  const displayTotal = finalScore ?? summedTotal;
 
   return (
     <div className="flex-1 min-w-0 w-full font-sans">
@@ -43,14 +48,34 @@ export const AcousticScoreBreakdown: React.FC<AcousticScoreBreakdownProps> = ({
         <tbody className="divide-y divide-white/5">
           {breakdown.map((item) => {
             const weight = item.max_points ?? SPLIT_WEIGHTS[item.check] ?? 0;
-            const achieved = item.points_achieved ?? 0;
+            const isPcmFactor = item.check === 'PCM Authenticity Analysis';
+            const achieved = isPcmFactor
+              ? pcmAuthenticityDisplayScore(item.value)
+              : (item.points_achieved ?? 0);
+            const numericAchieved = typeof achieved === 'number' ? achieved : Number(achieved);
+            const scoreClass = isPcmFactor
+              ? 'text-slate-400'
+              : numericAchieved < 0
+                ? 'text-rose-400'
+                : numericAchieved === weight
+                  ? 'text-emerald-400'
+                  : numericAchieved > 0
+                    ? 'text-cyan-400'
+                    : 'text-rose-400';
+
             return (
               <tr key={item.check}>
-                <td className="py-2.5 pr-3 font-semibold text-slate-300 align-top">{item.check}</td>
+                <td className="py-2.5 pr-3 align-top">
+                  <div className="font-semibold text-slate-300">{item.check}</div>
+                  {item.value && isPcmFactor && (
+                    <div className="text-[10px] text-slate-500 mt-0.5">{item.value}</div>
+                  )}
+                  {item.calculation && (
+                    <div className="text-[10px] text-slate-600 mt-0.5 leading-snug">{item.calculation}</div>
+                  )}
+                </td>
                 <td className="py-2.5 text-right font-bold align-top whitespace-nowrap">
-                  <span className={achieved === weight ? 'text-emerald-400' : achieved > 0 ? 'text-cyan-400' : 'text-rose-400'}>
-                    {achieved}
-                  </span>
+                  <span className={scoreClass}>{achieved}</span>
                 </td>
               </tr>
             );

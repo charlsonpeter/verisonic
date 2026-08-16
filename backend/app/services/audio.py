@@ -356,6 +356,78 @@ def build_score_breakdown(metadata: dict, spectral: dict) -> tuple[list[dict], i
     return breakdown, final_score
 
 
+def _format_quality_tier_label(tier: str | None) -> str:
+    if not tier:
+        return "Unclassified"
+    return str(tier).replace("_", " ").title()
+
+
+def _append_scoring_factor_rows(
+    breakdown: list[dict],
+    *,
+    checklist_score: int,
+    spectral: dict,
+    published_score: int,
+) -> list[dict]:
+    """Add cap/adjustment rows so every scoring factor is visible in the report."""
+    rows = list(breakdown)
+    raw_checklist = sum(item["points_achieved"] for item in rows)
+
+    if raw_checklist > checklist_score:
+        rows.append(
+            {
+                "check": "Fake Upscale Score Cap",
+                "description": "Upscaled or transcoded sources cannot exceed 50 checklist points",
+                "value": f"{raw_checklist} → {checklist_score}",
+                "threshold": "Max 50 when upscale detected",
+                "passed": False,
+                "deduction": raw_checklist - checklist_score,
+                "max_points": 50,
+                "points_achieved": checklist_score - raw_checklist,
+                "calculation": f"{raw_checklist} capped to {checklist_score}",
+            }
+        )
+
+    authenticity = spectral.get("authenticity_score")
+    if authenticity is not None:
+        auth_score = max(0, min(100, int(round(float(authenticity)))))
+        tier_label = _format_quality_tier_label(spectral.get("true_quality_tier"))
+        auth_limits = auth_score < checklist_score
+        rows.append(
+            {
+                "check": "PCM Authenticity Analysis",
+                "description": "PCM spectral fingerprint rating",
+                "value": f"{auth_score}% · {tier_label}",
+                "threshold": "Published score uses the lower of checklist and PCM",
+                "passed": auth_score >= 51 and not auth_limits,
+                "deduction": 0,
+                "max_points": 100,
+                "points_achieved": 0,
+                "calculation": (
+                    f"Applied — min({checklist_score}, {auth_score}) = {published_score}"
+                    if auth_limits
+                    else f"Checklist total is lower ({checklist_score})"
+                ),
+            }
+        )
+        if auth_limits:
+            rows.append(
+                {
+                    "check": "PCM Authenticity Adjustment",
+                    "description": "PCM analysis caps the published score",
+                    "value": f"{checklist_score} → {published_score}",
+                    "threshold": f"PCM score {auth_score}",
+                    "passed": False,
+                    "deduction": checklist_score - published_score,
+                    "max_points": 100,
+                    "points_achieved": published_score - checklist_score,
+                    "calculation": f"{checklist_score} adjusted to {published_score}",
+                }
+            )
+
+    return rows
+
+
 QUALITY_SCORE_TIERS = [
     {"min_score": 86, "label": "Studio Quality", "description": "Lossless or hi-res master with full spectral integrity."},
     {"min_score": 71, "label": "Good", "description": "Minor high-frequency loss; acceptable for most listeners."},
@@ -377,9 +449,18 @@ def calculate_quality_score(metadata: dict, spectral: dict) -> dict:
     authenticity = spectral.get("authenticity_score")
     tier = spectral.get("true_quality_tier")
     if authenticity is not None:
-        score = max(0, min(100, int(round(float(authenticity)))))
+        auth_score = max(0, min(100, int(round(float(authenticity)))))
+        # Checklist failures cap the published score so report rows sum to the gauge.
+        score = min(auth_score, checklist_score)
     else:
         score = checklist_score
+
+    breakdown = _append_scoring_factor_rows(
+        breakdown,
+        checklist_score=checklist_score,
+        spectral=spectral,
+        published_score=score,
+    )
 
     if score >= 86:
         level = "Studio Quality"

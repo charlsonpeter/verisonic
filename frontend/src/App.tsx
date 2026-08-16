@@ -576,8 +576,8 @@ function DashboardContent() {
                             </div>
                             {activeReport?.score_breakdown?.length > 0 && (
                               <AcousticScoreBreakdown
-                                finalScore={reportScore}
                                 breakdown={activeReport.score_breakdown}
+                                finalScore={reportScore}
                               />
                             )}
                           </>
