@@ -15,6 +15,7 @@ import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { PlayerProvider } from '@/context/PlayerContext';
 import { ConfirmHost } from '@/components/ConfirmDialog';
 import { MiniPlayer } from '@/components/MiniPlayer';
+import { PremiumModal } from '@/components/PremiumModal';
 import { colors } from '@/theme/tokens';
 
 function AppShell({ children }: { children: React.ReactNode }) {
@@ -25,6 +26,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
       {children}
       {!isLoading ? <MiniPlayer /> : null}
       <ConfirmHost />
+      {!isLoading ? <PremiumModal /> : null}
       {isLoading ? (
         <View style={[StyleSheet.absoluteFillObject, styles.boot]}>
           <ActivityIndicator color={colors.accent} size="large" />

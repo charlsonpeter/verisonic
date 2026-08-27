@@ -78,6 +78,8 @@ type PlayerContextValue = {
   toggleFavorite: (trackId: number) => Promise<void>;
   toggleReaction: (trackId: number, reaction: ReactionValue) => Promise<void>;
   refreshLibraryState: () => Promise<void>;
+  showPremiumModal: boolean;
+  setShowPremiumModal: (open: boolean) => void;
 };
 
 const PlayerContext = createContext<PlayerContextValue | undefined>(undefined);
@@ -103,6 +105,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const modeRef = useRef<PlayerMode>('idle');
   const canPlayFullRef = useRef(canPlayFull);
   const currentTrackRef = useRef<Track | null>(null);
+  const previewPromptedRef = useRef(false);
 
   const [mode, setMode] = useState<PlayerMode>('idle');
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
@@ -118,6 +121,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [playbackSpeed, setPlaybackSpeedState] = useState(1);
   const [favoriteIds, setFavoriteIds] = useState<Set<number>>(new Set());
   const [reactions, setReactions] = useState<Record<number, ReactionValue>>({});
+  const [showPremiumModal, setShowPremiumModal] = useState(false);
 
   useEffect(() => {
     isShuffleRef.current = isShuffle;
@@ -133,6 +137,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [mode]);
   useEffect(() => {
     canPlayFullRef.current = canPlayFull;
+    if (canPlayFull) {
+      previewPromptedRef.current = false;
+      setShowPremiumModal(false);
+    }
   }, [canPlayFull]);
   useEffect(() => {
     currentTrackRef.current = currentTrack;
@@ -200,11 +208,19 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (modeNow === 'track' && !full && posMs >= FREE_TRACK_PREVIEW_SECONDS * 1000) {
       await TrackPlayer.pause();
       await TrackPlayer.seekTo(FREE_TRACK_PREVIEW_SECONDS).catch(() => undefined);
+      if (!previewPromptedRef.current) {
+        previewPromptedRef.current = true;
+        setShowPremiumModal(true);
+      }
       return;
     }
 
     if (modeNow === 'radio' && !full && posMs >= FREE_RADIO_PREVIEW_SECONDS * 1000) {
       await TrackPlayer.pause();
+      if (!previewPromptedRef.current) {
+        previewPromptedRef.current = true;
+        setShowPremiumModal(true);
+      }
       return;
     }
 
@@ -268,6 +284,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const startMs = opts?.startMs ?? 0;
       await endRadioSession();
       listenReportedRef.current = false;
+      previewPromptedRef.current = false;
       setMode('track');
       setCurrentStation(null);
       setCurrentTrack(track);
@@ -320,6 +337,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const autoplay = opts?.autoplay !== false;
       await endRadioSession();
       listenReportedRef.current = false;
+      previewPromptedRef.current = false;
       setMode('radio');
       setCurrentTrack(null);
       setCurrentStation(station);
@@ -495,7 +513,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       await TrackPlayer.pause();
     } else {
       if (mode === 'track' && !canPlayFull && positionMs >= FREE_TRACK_PREVIEW_SECONDS * 1000) {
-        await TrackPlayer.seekTo(0);
+        setShowPremiumModal(true);
+        return;
+      }
+      if (mode === 'radio' && !canPlayFull && positionMs >= FREE_RADIO_PREVIEW_SECONDS * 1000) {
+        setShowPremiumModal(true);
+        return;
       }
       await TrackPlayer.play();
     }
@@ -738,6 +761,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       toggleFavorite,
       toggleReaction,
       refreshLibraryState,
+      showPremiumModal,
+      setShowPremiumModal,
     }),
     [
       mode,
@@ -773,6 +798,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       toggleFavorite,
       toggleReaction,
       refreshLibraryState,
+      showPremiumModal,
     ],
   );
 

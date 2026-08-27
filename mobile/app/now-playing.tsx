@@ -75,6 +75,7 @@ export default function NowPlayingScreen() {
     clearQueue,
     removeFromQueueAt,
     reorderQueue,
+    setShowPremiumModal,
   } = usePlayer();
 
   const [lyricsOpen, setLyricsOpen] = useState(false);
@@ -260,7 +261,9 @@ export default function NowPlayingScreen() {
       </View>
 
       {!canPlayFull ? (
-        <Text style={styles.previewHint}>Preview mode — Premium unlocks full playback</Text>
+        <Pressable onPress={() => setShowPremiumModal(true)} hitSlop={8}>
+          <Text style={styles.previewHint}>Preview mode — tap to unlock Premium</Text>
+        </Pressable>
       ) : null}
 
       {/* Like / speed / favorite */}

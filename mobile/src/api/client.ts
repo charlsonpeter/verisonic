@@ -156,7 +156,8 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     if (e instanceof Error && e.name === 'AbortError') {
       throw new ApiError(`Request timed out (${API_URL})`, 408);
     }
-    throw e;
+    const reason = e instanceof Error ? e.message : 'Network request failed';
+    throw new ApiError(`${reason} (${API_URL})`, 0);
   } finally {
     clearTimeout(timer);
   }
