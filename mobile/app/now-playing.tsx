@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Dimensions,
   Image,
@@ -9,7 +9,8 @@ import {
   Text,
   View,
 } from 'react-native';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import { runOnJS } from 'react-native-reanimated';
 import DraggableFlatList, {
   RenderItemParams,
   ScaleDecorator,
@@ -43,6 +44,13 @@ import {
 } from '@/utils/lrc';
 
 const COVER = Math.min(Dimensions.get('window').width - 64, 280);
+/** Resume karaoke auto-follow this long after the user stops dragging lyrics. */
+const LYRICS_FOLLOW_RESUME_MS = 2500;
+const LYRICS_TAP_SLOP_PX = 10;
+/** Horizontal travel required to skip track. */
+const SWIPE_TRACK_PX = 56;
+/** Second tap on cover within this window toggles play; otherwise open lyrics. */
+const COVER_DOUBLE_TAP_MS = 280;
 
 export default function NowPlayingScreen() {
   const router = useRouter();
@@ -88,6 +96,17 @@ export default function NowPlayingScreen() {
   const [infoTrack, setInfoTrack] = useState<Track | null>(null);
   const lyricsListRef = useRef<ScrollView>(null);
   const lineYRef = useRef<Record<number, number>>({});
+  const lyricsFollowPausedRef = useRef(false);
+  const lyricsFollowResumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lyricsTouchRef = useRef({ x: 0, y: 0 });
+  const lyricsDidDragRef = useRef(false);
+  const playNextRef = useRef(playNext);
+  const playPreviousRef = useRef(playPrevious);
+  playNextRef.current = playNext;
+  playPreviousRef.current = playPrevious;
+  const coverTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeLyricIdxRef = useRef(-1);
+  const lyricsOpenRef = useRef(false);
 
   const closeList = () => {
     setMenuTarget(null);
@@ -136,16 +155,84 @@ export default function NowPlayingScreen() {
   const activeLyricIdx = synced
     ? lineIndexForTime(parsedLyrics, positionMs / 1000)
     : -1;
+  activeLyricIdxRef.current = activeLyricIdx;
+  lyricsOpenRef.current = lyricsOpen;
   const isFav = currentTrack ? favoriteIds.has(currentTrack.id) : false;
   const reaction = currentTrack ? reactions[currentTrack.id] : undefined;
 
-  useEffect(() => {
-    if (!lyricsOpen || activeLyricIdx < 0) return;
-    const y = lineYRef.current[activeLyricIdx];
+  const clearLyricsFollowTimer = () => {
+    if (lyricsFollowResumeTimer.current) {
+      clearTimeout(lyricsFollowResumeTimer.current);
+      lyricsFollowResumeTimer.current = null;
+    }
+  };
+
+  const scrollLyricsToActive = () => {
+    const idx = activeLyricIdxRef.current;
+    if (!lyricsOpenRef.current || idx < 0) return;
+    const y = lineYRef.current[idx];
     if (typeof y === 'number') {
       lyricsListRef.current?.scrollTo({ y: Math.max(0, y - 120), animated: true });
     }
+  };
+
+  const pauseLyricsFollow = () => {
+    lyricsFollowPausedRef.current = true;
+    clearLyricsFollowTimer();
+  };
+
+  const scheduleLyricsFollowResume = () => {
+    clearLyricsFollowTimer();
+    lyricsFollowResumeTimer.current = setTimeout(() => {
+      lyricsFollowPausedRef.current = false;
+      lyricsFollowResumeTimer.current = null;
+      scrollLyricsToActive();
+    }, LYRICS_FOLLOW_RESUME_MS);
+  };
+
+  useEffect(() => {
+    return () => {
+      clearLyricsFollowTimer();
+      if (coverTapTimerRef.current) {
+        clearTimeout(coverTapTimerRef.current);
+        coverTapTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!lyricsOpen) {
+      lyricsFollowPausedRef.current = false;
+      lyricsDidDragRef.current = false;
+      clearLyricsFollowTimer();
+    }
+  }, [lyricsOpen]);
+
+  useEffect(() => {
+    if (!lyricsOpen || activeLyricIdx < 0 || lyricsFollowPausedRef.current) return;
+    scrollLyricsToActive();
   }, [activeLyricIdx, lyricsOpen]);
+
+  const skipNextBySwipe = useCallback(() => {
+    void playNextRef.current();
+  }, []);
+  const skipPrevBySwipe = useCallback(() => {
+    void playPreviousRef.current();
+  }, []);
+
+  const swipeTrack = useMemo(
+    () =>
+      Gesture.Pan()
+        .enabled(!isRadio)
+        .activeOffsetX([-24, 24])
+        .failOffsetY([-28, 28])
+        .onEnd((e) => {
+          if (Math.abs(e.translationX) < SWIPE_TRACK_PX) return;
+          if (e.translationX < 0) runOnJS(skipNextBySwipe)();
+          else runOnJS(skipPrevBySwipe)();
+        }),
+    [isRadio, skipNextBySwipe, skipPrevBySwipe],
+  );
 
   if (mode === 'idle' || (!currentTrack && !currentStation)) {
     return (
@@ -204,22 +291,57 @@ export default function NowPlayingScreen() {
         </Pressable>
       </View>
 
-      <View style={styles.center}>
+      <GestureHandlerRootView style={styles.center}>
+        <GestureDetector gesture={swipeTrack}>
+          <View style={styles.swipeArea}>
         {!lyricsOpen ? (
           <Pressable
             onPress={() => {
-              if (hasLyrics) setLyricsOpen(true);
+              if (coverTapTimerRef.current) {
+                clearTimeout(coverTapTimerRef.current);
+                coverTapTimerRef.current = null;
+                void togglePlay();
+                return;
+              }
+              coverTapTimerRef.current = setTimeout(() => {
+                coverTapTimerRef.current = null;
+                if (hasLyrics) setLyricsOpen(true);
+              }, COVER_DOUBLE_TAP_MS);
             }}
             style={styles.artWrap}
           >
             <Image source={{ uri: cover }} style={styles.art} />
           </Pressable>
         ) : (
-          <Pressable style={styles.lyricsPanel} onPress={() => setLyricsOpen(false)}>
+          <View style={styles.lyricsPanel}>
             <ScrollView
               ref={lyricsListRef}
+              style={styles.lyricsScroll}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
               contentContainerStyle={{ paddingVertical: synced ? 100 : 16 }}
+              onScrollBeginDrag={() => {
+                lyricsDidDragRef.current = true;
+                pauseLyricsFollow();
+              }}
+              onScrollEndDrag={scheduleLyricsFollowResume}
+              onMomentumScrollEnd={scheduleLyricsFollowResume}
+              onTouchStart={(e) => {
+                lyricsTouchRef.current = {
+                  x: e.nativeEvent.pageX,
+                  y: e.nativeEvent.pageY,
+                };
+                lyricsDidDragRef.current = false;
+              }}
+              onTouchEnd={(e) => {
+                if (lyricsDidDragRef.current) return;
+                const dx = Math.abs(e.nativeEvent.pageX - lyricsTouchRef.current.x);
+                const dy = Math.abs(e.nativeEvent.pageY - lyricsTouchRef.current.y);
+                if (dx < LYRICS_TAP_SLOP_PX && dy < LYRICS_TAP_SLOP_PX) {
+                  setLyricsOpen(false);
+                }
+              }}
             >
               {parsedLyrics.map((line, idx) => (
                 line.stanzaBreak ? (
@@ -244,9 +366,11 @@ export default function NowPlayingScreen() {
                 <Text style={styles.lyricLine}>No lyrics available.</Text>
               ) : null}
             </ScrollView>
-          </Pressable>
+          </View>
         )}
-      </View>
+          </View>
+        </GestureDetector>
+      </GestureHandlerRootView>
 
       <View style={styles.infoRow}>
         <View style={{ flex: 1, minWidth: 0 }}>
@@ -599,9 +723,13 @@ const styles = StyleSheet.create({
   },
   center: {
     flex: 1,
+    minHeight: 220,
+  },
+  swipeArea: {
+    flex: 1,
+    width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 220,
   },
   artWrap: {
     alignItems: 'center',
@@ -617,6 +745,9 @@ const styles = StyleSheet.create({
   lyricsPanel: {
     width: '100%',
     height: COVER + 40,
+  },
+  lyricsScroll: {
+    flex: 1,
   },
   lyricLine: {
     textAlign: 'center',
