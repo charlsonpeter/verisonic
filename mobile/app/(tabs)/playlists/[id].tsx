@@ -84,7 +84,7 @@ function menuLabelsForId(id: string | undefined): {
 export default function PlaylistDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { playTrack } = usePlayer();
+  const { playTrack, playQueueTracks } = usePlayer();
   const params = useLocalSearchParams<{ id: string; title?: string }>();
   const id = Array.isArray(params.id) ? params.id[0] : params.id;
   const paramTitle = Array.isArray(params.title) ? params.title[0] : params.title;
@@ -249,7 +249,7 @@ export default function PlaylistDetailScreen() {
               disabled={isActive}
               delayLongPress={220}
               onLongPress={drag}
-              onPress={() => void playTrack(item, tracks)}
+              onPress={() => void playTrack(item)}
               right={rowMenu(item, index)}
             />
           </ScaleDecorator>
@@ -265,7 +265,7 @@ export default function PlaylistDetailScreen() {
         <TrackRow
           track={item}
           index={index}
-          onPress={() => void playTrack(item, tracks)}
+          onPress={() => void playTrack(item)}
           right={rowMenu(item, index)}
         />
       )}
@@ -281,7 +281,7 @@ export default function PlaylistDetailScreen() {
         </Pressable>
         <View style={styles.topActions}>
           {!loading && tracks.length > 0 ? (
-            <Pressable onPress={() => void playTrack(tracks[0], tracks)} hitSlop={8}>
+            <Pressable onPress={() => void playQueueTracks(tracks)} hitSlop={8}>
               <Text style={styles.playAll}>Play all</Text>
             </Pressable>
           ) : null}

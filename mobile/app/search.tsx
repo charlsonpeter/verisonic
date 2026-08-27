@@ -90,7 +90,7 @@ export default function SearchScreen() {
           <TrackRow
             track={item}
             index={index}
-            onPress={() => void playTrack(item, results)}
+            onPress={() => void playTrack(item)}
             right={
               <View style={styles.rowActions}>
                 <FavoriteButton trackId={item.id} />

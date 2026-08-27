@@ -14,6 +14,7 @@ import {
   clearTrackReaction,
   endRadioListenSession,
   fetchFavorites,
+  fetchRelatedRadioTracks,
   fetchTrackReactions,
   heartbeatRadioListenSession,
   removeFavorite,
@@ -42,6 +43,10 @@ type PlayerMode = 'idle' | 'track' | 'radio';
 export type RepeatMode = 'none' | 'all' | 'one';
 
 const SPEED_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
+/** Prefetch related tracks when this many (or fewer) remain after the current index. */
+const AUTOPLAY_PREFETCH_REMAINING = 3;
+/** Related-track batch size for lazy queue growth. */
+const AUTOPLAY_BATCH_SIZE = 12;
 
 type PlayerContextValue = {
   mode: PlayerMode;
@@ -59,7 +64,10 @@ type PlayerContextValue = {
   playbackSpeed: number;
   favoriteIds: Set<number>;
   reactions: Record<number, ReactionValue>;
-  playTrack: (track: Track, queue?: Track[]) => Promise<void>;
+  playTrack: (track: Track) => Promise<void>;
+  playQueueTracks: (tracks: Track[]) => Promise<void>;
+  playQueueAt: (index: number) => Promise<void>;
+  addToQueue: (track: Track) => void;
   playRadio: (station: RadioStation) => Promise<void>;
   togglePlay: () => Promise<void>;
   seekTo: (ms: number) => Promise<void>;
@@ -84,15 +92,6 @@ type PlayerContextValue = {
 
 const PlayerContext = createContext<PlayerContextValue | undefined>(undefined);
 
-function shuffleArray<T>(items: T[]): T[] {
-  const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-}
-
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const { canPlayFull, user, token } = useAuth();
   const radioSessionRef = useRef<string | null>(null);
@@ -106,6 +105,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const canPlayFullRef = useRef(canPlayFull);
   const currentTrackRef = useRef<Track | null>(null);
   const previewPromptedRef = useRef(false);
+  const queueRef = useRef<Track[]>([]);
+  const queueIndexRef = useRef(0);
+  const autoplayRefillInFlightRef = useRef(false);
+  const autoplayLastFailedSeedRef = useRef<number | null>(null);
+  const maybePrefetchAutoplayRef = useRef<() => void>(() => undefined);
 
   const [mode, setMode] = useState<PlayerMode>('idle');
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
@@ -145,6 +149,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     currentTrackRef.current = currentTrack;
   }, [currentTrack]);
+  useEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
+  useEffect(() => {
+    queueIndexRef.current = queueIndex;
+  }, [queueIndex]);
 
   useEffect(() => {
     void ensureTrackPlayer().catch(() => undefined);
@@ -288,9 +298,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setMode('track');
       setCurrentStation(null);
       setCurrentTrack(track);
-      setQueue(q);
+      const nextQ = q.length ? q : [track];
+      queueRef.current = nextQ;
+      queueIndexRef.current = index;
+      setQueue(nextQ);
       setQueueIndex(index);
-      orderedQueueRef.current = q.length ? q : [track];
+      orderedQueueRef.current = nextQ;
 
       const meta = {
         title: track.title || 'Track',
@@ -322,15 +335,66 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   );
 
   const playTrack = useCallback(
-    async (track: Track, nextQueue?: Track[]) => {
-      const base = nextQueue?.length ? nextQueue : [track];
-      orderedQueueRef.current = base;
-      const working = isShuffleRef.current ? shuffleArray(base) : base;
-      const idx = working.findIndex((t) => t.id === track.id);
-      await playTrackAt(track, working, idx >= 0 ? idx : 0);
+    async (track: Track) => {
+      const q = queueRef.current;
+      const idx = queueIndexRef.current;
+      if (
+        modeRef.current === 'track' &&
+        idx >= 0 &&
+        idx < q.length &&
+        q[idx].id === track.id
+      ) {
+        const next = q.map((item, i) => (i === idx ? { ...item, ...track } : item));
+        await playTrackAt(track, next, idx);
+        return;
+      }
+      autoplayLastFailedSeedRef.current = null;
+      await playTrackAt(track, [track], 0);
     },
     [playTrackAt],
   );
+
+  const playQueueTracks = useCallback(
+    async (tracks: Track[]) => {
+      if (!tracks.length) return;
+      autoplayLastFailedSeedRef.current = null;
+      await playTrackAt(tracks[0], tracks, 0);
+    },
+    [playTrackAt],
+  );
+
+  const playQueueAt = useCallback(
+    async (index: number) => {
+      const q = queueRef.current;
+      if (index < 0 || index >= q.length) return;
+      if (
+        index === queueIndexRef.current &&
+        currentTrackRef.current?.id === q[index].id
+      ) {
+        const state = await TrackPlayer.getPlaybackState();
+        const playing = state.state === State.Playing || state.state === State.Buffering;
+        if (playing) await TrackPlayer.pause();
+        else await TrackPlayer.play();
+        return;
+      }
+      await playTrackAt(q[index], q, index);
+    },
+    [playTrackAt],
+  );
+
+  const addToQueue = useCallback((track: Track) => {
+    const prev = queueRef.current;
+    if (prev.some((t) => t.id === track.id)) return;
+    const next = [...prev, track];
+    queueRef.current = next;
+    orderedQueueRef.current = next;
+    setQueue(next);
+    if (prev.length === 0) {
+      queueIndexRef.current = 0;
+      setQueueIndex(0);
+      void playTrackAt(track, next, 0);
+    }
+  }, [playTrackAt]);
 
   const playRadio = useCallback(
     async (station: RadioStation, opts?: { autoplay?: boolean }) => {
@@ -338,9 +402,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       await endRadioSession();
       listenReportedRef.current = false;
       previewPromptedRef.current = false;
+      autoplayLastFailedSeedRef.current = null;
       setMode('radio');
       setCurrentTrack(null);
       setCurrentStation(station);
+      queueRef.current = [];
+      queueIndexRef.current = 0;
       setQueue([]);
       setQueueIndex(0);
       orderedQueueRef.current = [];
@@ -377,9 +444,77 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [canPlayFull, endRadioSession, loadUri, user],
   );
 
+  const refillQueueFromRadio = useCallback(async (seed: Track): Promise<Track[]> => {
+    if (autoplayRefillInFlightRef.current) return [];
+    if (modeRef.current === 'radio') return [];
+    if (seed.id >= 100000) return [];
+    if (autoplayLastFailedSeedRef.current === seed.id) return [];
+
+    autoplayRefillInFlightRef.current = true;
+    try {
+      const q = queueRef.current;
+      const current = currentTrackRef.current;
+      const exclude = new Set<number>([seed.id, ...q.map((t) => t.id)]);
+      if (current?.id != null && current.id < 100000) exclude.add(current.id);
+
+      const related = await fetchRelatedRadioTracks(seed.id, {
+        limit: AUTOPLAY_BATCH_SIZE,
+        excludeIds: Array.from(exclude),
+      });
+      if (!Array.isArray(related) || related.length === 0) {
+        autoplayLastFailedSeedRef.current = seed.id;
+        return [];
+      }
+
+      const prev = queueRef.current;
+      const seen = new Set(prev.map((t) => t.id));
+      if (current?.id != null) seen.add(current.id);
+      const toAppend = related.filter((t) => !seen.has(t.id) && !exclude.has(t.id));
+      if (toAppend.length === 0) {
+        autoplayLastFailedSeedRef.current = seed.id;
+        return [];
+      }
+
+      const nextQueue = [...prev, ...toAppend];
+      queueRef.current = nextQueue;
+      orderedQueueRef.current = nextQueue;
+      setQueue(nextQueue);
+      autoplayLastFailedSeedRef.current = null;
+      return toAppend;
+    } catch {
+      autoplayLastFailedSeedRef.current = seed.id;
+      return [];
+    } finally {
+      autoplayRefillInFlightRef.current = false;
+    }
+  }, []);
+
+  const maybePrefetchAutoplay = useCallback(() => {
+    if (autoplayRefillInFlightRef.current) return;
+    if (modeRef.current === 'radio') return;
+    if (repeatModeRef.current === 'all') return;
+
+    const q = queueRef.current;
+    const index = queueIndexRef.current;
+    const current = currentTrackRef.current;
+    if (!current || current.id >= 100000) return;
+
+    let remaining = 0;
+    if (q.length === 0) remaining = 0;
+    else if (index < 0) remaining = q.length;
+    else remaining = Math.max(0, q.length - 1 - index);
+
+    if (remaining > AUTOPLAY_PREFETCH_REMAINING) return;
+
+    const seed = q.length > 0 ? q[q.length - 1] : current;
+    if (autoplayLastFailedSeedRef.current === seed.id) return;
+    void refillQueueFromRadio(seed);
+  }, [refillQueueFromRadio]);
+  maybePrefetchAutoplayRef.current = maybePrefetchAutoplay;
+
   const playNext = useCallback(
     async (fromNaturalEnd = false) => {
-      if (mode !== 'track' || queue.length === 0) return;
+      if (modeRef.current !== 'track') return;
 
       if (fromNaturalEnd && repeatModeRef.current === 'one') {
         await TrackPlayer.seekTo(0);
@@ -387,16 +522,58 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      const atEnd = queueIndex >= queue.length - 1;
-      if (atEnd && repeatModeRef.current === 'none' && fromNaturalEnd) {
-        await TrackPlayer.pause();
+      const q = queueRef.current;
+      const index = queueIndexRef.current;
+
+      if (q.length === 0) {
+        const current = currentTrackRef.current;
+        if (repeatModeRef.current === 'all' && current) {
+          await playTrackAt(current, [current], 0);
+          return;
+        }
+        if (current) {
+          const appended = await refillQueueFromRadio(current);
+          if (appended.length === 0) {
+            if (fromNaturalEnd) await TrackPlayer.pause();
+            return;
+          }
+          const nextQ = queueRef.current;
+          await playTrackAt(nextQ[0], nextQ, 0);
+        }
         return;
       }
 
-      const next = atEnd ? 0 : queueIndex + 1;
-      await playTrackAt(queue[next], queue, next);
+      if (isShuffleRef.current) {
+        const nextIndex = Math.floor(Math.random() * q.length);
+        await playTrackAt(q[nextIndex], q, nextIndex);
+        return;
+      }
+
+      if (index + 1 < q.length) {
+        await playTrackAt(q[index + 1], q, index + 1);
+        return;
+      }
+
+      if (repeatModeRef.current === 'all') {
+        await playTrackAt(q[0], q, 0);
+        return;
+      }
+
+      const current = currentTrackRef.current;
+      if (current) {
+        const appended = await refillQueueFromRadio(current);
+        if (appended.length === 0) {
+          if (fromNaturalEnd) await TrackPlayer.pause();
+          return;
+        }
+        const nextQ = queueRef.current;
+        const playIndex = Math.min(index + 1, nextQ.length - 1);
+        if (playIndex >= 0 && playIndex < nextQ.length) {
+          await playTrackAt(nextQ[playIndex], nextQ, playIndex);
+        }
+      }
     },
-    [mode, playTrackAt, queue, queueIndex],
+    [playTrackAt, refillQueueFromRadio],
   );
 
   const playNextRef = useRef(playNext);
@@ -408,14 +585,20 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   playRadioRef.current = playRadio;
 
   const playPrevious = useCallback(async () => {
-    if (mode !== 'track' || queue.length === 0) return;
+    if (modeRef.current !== 'track') return;
+    const q = queueRef.current;
+    if (q.length === 0) return;
     if (positionMs > 3000) {
       await TrackPlayer.seekTo(0);
       return;
     }
-    const prev = (queueIndex - 1 + queue.length) % queue.length;
-    await playTrackAt(queue[prev], queue, prev);
-  }, [mode, playTrackAt, positionMs, queue, queueIndex]);
+    const index = queueIndexRef.current;
+    let prevIndex = index - 1;
+    if (prevIndex < 0) {
+      prevIndex = repeatModeRef.current === 'all' ? q.length - 1 : 0;
+    }
+    await playTrackAt(q[prevIndex], q, prevIndex);
+  }, [playTrackAt, positionMs]);
 
   const playPreviousRef = useRef(playPrevious);
   playPreviousRef.current = playPrevious;
@@ -624,16 +807,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setIsShuffle((prev) => {
       const next = !prev;
       isShuffleRef.current = next;
-      if (mode !== 'track' || orderedQueueRef.current.length === 0) return next;
-      const currentId = currentTrack?.id;
-      const base = orderedQueueRef.current;
-      const working = next ? shuffleArray(base) : base;
-      setQueue(working);
-      const idx = working.findIndex((t) => t.id === currentId);
-      setQueueIndex(idx >= 0 ? idx : 0);
       return next;
     });
-  }, [currentTrack?.id, mode]);
+  }, []);
 
   const cycleRepeat = useCallback(() => {
     setRepeatMode((prev) => {
@@ -708,6 +884,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   );
 
   useEffect(() => {
+    maybePrefetchAutoplayRef.current();
+  }, [currentTrack?.id, queueIndex, queue.length, mode, repeatMode]);
+
+  useEffect(() => {
     if (mode !== 'radio' || !radioSessionRef.current || !radioStationIdRef.current) return;
     const stationId = radioStationIdRef.current;
     const timer = setInterval(() => {
@@ -743,6 +923,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       favoriteIds,
       reactions,
       playTrack,
+      playQueueTracks,
+      playQueueAt,
+      addToQueue,
       playRadio,
       togglePlay,
       seekTo,
@@ -780,6 +963,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       favoriteIds,
       reactions,
       playTrack,
+      playQueueTracks,
+      playQueueAt,
+      addToQueue,
       playRadio,
       togglePlay,
       seekTo,

@@ -96,7 +96,7 @@ export default function HomeScreen() {
                     <TrackTile
                       key={track.id}
                       track={track}
-                      onPress={() => void playTrack(track, recent)}
+                      onPress={() => void playTrack(track)}
                     />
                   ))}
                 </View>
@@ -117,7 +117,7 @@ export default function HomeScreen() {
                     <TrackTile
                       key={track.id}
                       track={track}
-                      onPress={() => void playTrack(track, trending)}
+                      onPress={() => void playTrack(track)}
                     />
                   ))}
                 </View>
@@ -130,7 +130,7 @@ export default function HomeScreen() {
           <View style={styles.sectionHead}>
             <SectionTitle icon="list">Quick play</SectionTitle>
             {trending.length > 0 ? (
-              <Pressable onPress={() => void playTrack(trending[0], trending)}>
+              <Pressable onPress={() => void playTrack(trending[0])}>
                 <Text style={styles.playAll}>Play all</Text>
               </Pressable>
             ) : null}
@@ -143,7 +143,7 @@ export default function HomeScreen() {
                 key={`list-${item.id}`}
                 track={item}
                 index={index}
-                onPress={() => void playTrack(item, trending)}
+                onPress={() => void playTrack(item)}
                 right={
                   <View style={styles.rowActions}>
                     <FavoriteButton trackId={item.id} />

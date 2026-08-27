@@ -53,6 +53,18 @@ export async function fetchTrending(limit = 24): Promise<Track[]> {
   return apiRequest(`/discovery/trending?limit=${limit}`, { auth: false });
 }
 
+/** Related tracks for Now Playing autoplay (same as web `/discovery/tracks/:id/radio`). */
+export async function fetchRelatedRadioTracks(
+  seedId: number,
+  opts?: { limit?: number; excludeIds?: number[] },
+): Promise<Track[]> {
+  const params = new URLSearchParams({ limit: String(opts?.limit ?? 12) });
+  if (opts?.excludeIds?.length) {
+    params.set('exclude_ids', opts.excludeIds.join(','));
+  }
+  return apiRequest(`/discovery/tracks/${seedId}/radio?${params}`);
+}
+
 export async function fetchStudios(): Promise<Array<{ id: number; stage_name: string; cover_art_url?: string }>> {
   return apiRequest('/discovery/studios', { auth: false });
 }

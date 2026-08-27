@@ -65,7 +65,7 @@ export default function NowPlayingScreen() {
     playNext,
     playPrevious,
     seekTo,
-    playTrack,
+    playQueueAt,
     toggleShuffle,
     cycleRepeat,
     bumpSpeed,
@@ -472,7 +472,7 @@ export default function NowPlayingScreen() {
                           isActive && styles.listRowDragging,
                         ]}
                         onPress={() => {
-                          void playTrack(item, queue);
+                          void playQueueAt(index);
                         }}
                       >
                         <View style={styles.listCoverWrap}>

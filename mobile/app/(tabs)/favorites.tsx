@@ -10,7 +10,7 @@ import type { Track } from '@/types/models';
 import { colors, fonts, spacing } from '@/theme/tokens';
 
 export default function FavoritesScreen() {
-  const { playTrack, refreshLibraryState } = usePlayer();
+  const { playTrack, playQueueTracks, refreshLibraryState } = usePlayer();
   const [favorites, setFavorites] = useState<Track[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -46,7 +46,7 @@ export default function FavoritesScreen() {
     <Screen style={{ paddingBottom: 140 }}>
       {favorites.length > 0 ? (
         <View style={styles.top}>
-          <Pressable onPress={() => void playTrack(favorites[0], favorites)}>
+          <Pressable onPress={() => void playQueueTracks(favorites)}>
             <Text style={styles.playAll}>Play all</Text>
           </Pressable>
         </View>
@@ -69,7 +69,7 @@ export default function FavoritesScreen() {
           <TrackRow
             track={item}
             index={index}
-            onPress={() => void playTrack(item, favorites)}
+            onPress={() => void playTrack(item)}
             right={
               <View style={styles.rowActions}>
                 <FavoriteButton trackId={item.id} />
